@@ -34,8 +34,25 @@ export class I18nHoverProvider implements vscode.HoverProvider {
     async provideHover(
         document: vscode.TextDocument,
         position: vscode.Position,
+        token: vscode.CancellationToken,
     ): Promise<vscode.Hover | undefined> {
         try {
+            const config = vscode.workspace.getConfiguration('ai-assistant');
+            const delayMs = config.get<number>('i18n.hoverDelayMs') ?? 250;
+
+            if (delayMs > 0) {
+                await new Promise<void>((resolve) => {
+                    const handle = setTimeout(() => {
+                        clearTimeout(handle);
+                        resolve();
+                    }, delayMs);
+                });
+
+                if (token.isCancellationRequested) {
+                    return undefined;
+                }
+            }
+
             await this.i18nIndex.ensureInitialized();
             
             const keyInfo = extractKeyAtPosition(document, position);

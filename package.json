@@ -168,6 +168,11 @@
           "default": "@/i18n",
           "description": "Module path used when inserting `import { t } from '...'` for React i18n helpers."
         },
+        "ai-assistant.i18n.hoverDelayMs": {
+          "type": "number",
+          "default": 250,
+          "description": "Delay in milliseconds before showing i18n hover tooltips. Increase to reduce interference while navigating with keyboard/mouse. Set to 0 to disable the delay."
+        },
         "ai-assistant.openaiApiKey": {
           "type": "string",
           "default": "",
