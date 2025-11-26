@@ -170,7 +170,7 @@
         },
         "ai-assistant.i18n.hoverDelayMs": {
           "type": "number",
-          "default": 250,
+          "default": 2000,
           "description": "Delay in milliseconds before showing i18n hover tooltips. Increase to reduce interference while navigating with keyboard/mouse. Set to 0 to disable the delay."
         },
         "ai-assistant.openaiApiKey": {
