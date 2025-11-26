@@ -96,6 +96,9 @@ export class ConvertSelectionCommand {
         }
 
         const kind = kindPick.label;
+
+        // Ensure index is warmed so we can reuse known translations
+        await this.i18nIndex.ensureInitialized();
         // Single-candidate flow: preserve existing behavior with key confirmation
         if (!hasMultipleCandidates) {
             const single = candidates[0];
@@ -113,16 +116,34 @@ export class ConvertSelectionCommand {
 
             // Get AI translations
             const targetLocales = locales.filter((l) => l !== defaultLocale);
-            const translations = await this.translationService.translateToLocales(
+
+            // Reuse known translations for the same base text where possible
+            const reuseTranslations = this.i18nIndex.findTranslationsForBaseText(
                 single.text,
                 defaultLocale,
-                targetLocales,
-                kind,
             );
+            const localesNeedingAi = targetLocales.filter((l) => !reuseTranslations.has(l));
+
+            const translations = localesNeedingAi.length
+                ? await this.translationService.translateToLocales(
+                      single.text,
+                      defaultLocale,
+                      localesNeedingAi,
+                      kind,
+                  )
+                : new Map<string, string>();
 
             for (const locale of locales) {
-                const value =
-                    locale === defaultLocale ? single.text : translations.get(locale) ?? single.text;
+                let value: string;
+                if (locale === defaultLocale) {
+                    value = single.text;
+                } else if (reuseTranslations.has(locale)) {
+                    value = reuseTranslations.get(locale)!;
+                } else if (translations.has(locale)) {
+                    value = translations.get(locale)!;
+                } else {
+                    value = single.text;
+                }
                 await upsertTranslationKey(folder, locale, finalKey, value);
             }
 
@@ -136,6 +157,7 @@ export class ConvertSelectionCommand {
                 vscode.window.showInformationMessage(
                     `AI i18n: Created key ${finalKey} for selection.`,
                 );
+                await this.runSyncIfConfigured(folder);
                 return;
             }
 
@@ -145,6 +167,7 @@ export class ConvertSelectionCommand {
                 vscode.window.showInformationMessage(
                     `AI i18n: Created key ${finalKey} for selection.`,
                 );
+                await this.runSyncIfConfigured(folder);
                 return;
             }
 
@@ -168,6 +191,7 @@ export class ConvertSelectionCommand {
             vscode.window.showInformationMessage(
                 `AI i18n: Created key ${finalKey} for selection.`,
             );
+            await this.runSyncIfConfigured(folder);
             return;
         }
 
@@ -218,16 +242,34 @@ export class ConvertSelectionCommand {
             const key = `${namespace}.${kind}.${slug}`;
 
             const targetLocales = locales.filter((l) => l !== defaultLocale);
-            const translations = await this.translationService.translateToLocales(
+
+            // Reuse known translations for this segment text where possible
+            const reuseTranslations = this.i18nIndex.findTranslationsForBaseText(
                 segment.text,
                 defaultLocale,
-                targetLocales,
-                kind,
             );
+            const localesNeedingAi = targetLocales.filter((l) => !reuseTranslations.has(l));
+
+            const translations = localesNeedingAi.length
+                ? await this.translationService.translateToLocales(
+                      segment.text,
+                      defaultLocale,
+                      localesNeedingAi,
+                      kind,
+                  )
+                : new Map<string, string>();
 
             for (const locale of locales) {
-                const value =
-                    locale === defaultLocale ? segment.text : translations.get(locale) ?? segment.text;
+                let value: string;
+                if (locale === defaultLocale) {
+                    value = segment.text;
+                } else if (reuseTranslations.has(locale)) {
+                    value = reuseTranslations.get(locale)!;
+                } else if (translations.has(locale)) {
+                    value = translations.get(locale)!;
+                } else {
+                    value = segment.text;
+                }
                 await upsertTranslationKey(folder, locale, key, value);
             }
 
@@ -245,6 +287,7 @@ export class ConvertSelectionCommand {
         vscode.window.showInformationMessage(
             `AI i18n: Applied translations to ${segments.length} selected text segment(s).`,
         );
+        await this.runSyncIfConfigured(folder);
     }
 
     /**
@@ -343,5 +386,29 @@ export class ConvertSelectionCommand {
      */
     private isTranslatableText(text: string): boolean {
         return isTranslatableTextShared(text);
+    }
+
+    /**
+     * Optionally run the i18n sync script after applying translations so
+     * non-default locales are kept in sync and can reuse known translations.
+     */
+    private async runSyncIfConfigured(folder: vscode.WorkspaceFolder): Promise<void> {
+        try {
+            const cfg = vscode.workspace.getConfiguration('ai-assistant');
+            const autoSync = cfg.get<boolean>('i18n.autoSync');
+            if (autoSync === false) {
+                return;
+            }
+
+            const projectConfig = await this.projectConfigService.readConfig(folder);
+            const hasSyncScript = !!projectConfig?.scripts?.['i18n:sync'];
+            if (!hasSyncScript) {
+                return;
+            }
+
+            await vscode.commands.executeCommand('ai-assistant.i18n.runSyncScript');
+        } catch (err) {
+            console.error('AI i18n: Failed to run i18n:sync after applying translations:', err);
+        }
     }
 }

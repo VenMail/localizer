@@ -176,6 +176,48 @@ export class I18nIndex {
     getAllKeys(): string[] {
         return Array.from(this.keyMap.keys());
     }
+
+    /**
+     * Find known translations for a given base-locale text across all keys.
+     * This is used to auto-reuse translations when the same UI string appears
+     * again (e.g. "Hide Password" / "Show Password").
+     */
+    findTranslationsForBaseText(baseText: string, defaultLocaleOverride?: string): Map<string, string> {
+        const result = new Map<string, string>();
+        if (!baseText) {
+            return result;
+        }
+
+        const baseLocale = defaultLocaleOverride || this.defaultLocale;
+
+        for (const record of this.keyMap.values()) {
+            const baseValue = record.locales.get(baseLocale);
+            if (baseValue !== baseText) {
+                continue;
+            }
+
+            for (const [locale, value] of record.locales.entries()) {
+                if (locale === baseLocale) {
+                    continue;
+                }
+                if (typeof value !== 'string' || !value.trim()) {
+                    continue;
+                }
+
+                const existing = result.get(locale);
+                if (!existing) {
+                    result.set(locale, value);
+                } else if (existing === value) {
+                    // Same value seen again – fine, keep it.
+                } else {
+                    // Conflicting translations for the same base text. To avoid
+                    // surprising overwrites, keep the first one we saw.
+                }
+            }
+        }
+
+        return result;
+    }
 }
 
 export function extractKeyAtPosition(

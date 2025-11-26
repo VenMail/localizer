@@ -4,6 +4,10 @@
   "description": "AI-assisted localization for React, Vue/Nuxt, and Laravel projects. Extract strings, manage locale JSON, and scaffold translation providers and hooks automatically.",
   "version": "0.0.1",
   "publisher": "venmail",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VenMail/localizer.git"
+  },
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -189,6 +193,11 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically run rewrite script after extraction to replace hard-coded strings with translation keys."
+        },
+        "ai-assistant.i18n.autoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run the i18n:sync script after applying translations so locale JSON files stay in sync and can reuse known translations where possible."
         }
       }
     }

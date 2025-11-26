@@ -4,9 +4,9 @@ import { I18nIndex, extractKeyAtPosition, escapeMarkdown } from '../core/i18nInd
 import { detectFrameworkProfile } from '../frameworks/detection';
 
 /**
- * Language selector for all supported file types
+ * Language selector for source files using i18n keys
  */
-export const I18N_SELECTOR: vscode.DocumentSelector = [
+export const I18N_CODE_SELECTOR: vscode.DocumentSelector = [
     { language: 'javascript', scheme: 'file' },
     { language: 'typescript', scheme: 'file' },
     { language: 'javascriptreact', scheme: 'file' },
@@ -14,6 +14,14 @@ export const I18N_SELECTOR: vscode.DocumentSelector = [
     { language: 'vue', scheme: 'file' },
     { language: 'blade', scheme: 'file' },
     { language: 'php', scheme: 'file' },
+];
+
+/**
+ * Language selector for locale JSON files
+ */
+export const I18N_JSON_SELECTOR: vscode.DocumentSelector = [
+    { language: 'json', scheme: 'file' },
+    { language: 'jsonc', scheme: 'file' },
 ];
 
 /**
@@ -281,6 +289,12 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
     ): Promise<vscode.CompletionItem[]> {
         try {
             await this.i18nIndex.ensureInitialized();
+            const langId = document.languageId;
+
+            if (langId === 'json' || langId === 'jsonc') {
+                // Provide IntelliSense for known translations inside locale JSON files
+                return this.provideJsonTranslationCompletions(document, position);
+            }
 
             const keyInfo = extractKeyAtPosition(document, position);
             const existingPrefix = keyInfo ? keyInfo.key : '';
@@ -347,6 +361,103 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
             return [];
         }
     }
+
+    /**
+     * Provide completion items for locale JSON files based on known
+     * translations for the current locale.
+     */
+    private async provideJsonTranslationCompletions(
+        document: vscode.TextDocument,
+        position: vscode.Position,
+    ): Promise<vscode.CompletionItem[]> {
+        const fsPath = document.uri.fsPath;
+        const normalized = fsPath.replace(/\\/g, '/');
+
+        // Heuristic: only run on likely locale JSON paths
+        if (
+            !normalized.includes('/i18n/') &&
+            !normalized.includes('/locales/') &&
+            !normalized.includes('/resources/js/i18n/')
+        ) {
+            return [];
+        }
+
+        // Infer locale from path (similar to I18nIndex.inferLocaleFromPath)
+        const parts = normalized.split('/').filter(Boolean);
+        let locale: string | null = null;
+        const autoIndex = parts.lastIndexOf('auto');
+        if (autoIndex >= 0 && autoIndex + 1 < parts.length) {
+            const raw = parts[autoIndex + 1];
+            locale = raw.replace(/\.json$/i, '');
+        } else {
+            const fileName = parts[parts.length - 1];
+            const match = fileName.match(/^([A-Za-z0-9_-]+)\.json$/);
+            if (match) {
+                locale = match[1];
+            }
+        }
+
+        if (!locale) {
+            return [];
+        }
+
+        const line = document.lineAt(position.line).text;
+        if (!line) {
+            return [];
+        }
+
+        const before = line.slice(0, position.character);
+        const lastQuote = before.lastIndexOf('"');
+        const lastColon = before.lastIndexOf(':');
+
+        // Only provide value completions when cursor is inside a JSON string
+        // after the colon (i.e. the value side of a key/value pair).
+        if (lastQuote === -1 || lastColon === -1 || lastQuote < lastColon) {
+            return [];
+        }
+
+        const existingPrefix = before.slice(lastQuote + 1);
+        const prefixLower = existingPrefix.toLowerCase();
+
+        const items: vscode.CompletionItem[] = [];
+        const seen = new Set<string>();
+        const allKeys = this.i18nIndex.getAllKeys();
+
+        for (const key of allKeys) {
+            const record = this.i18nIndex.getRecord(key);
+            if (!record) continue;
+
+            const rawValue = record.locales.get(locale);
+            if (typeof rawValue !== 'string') continue;
+            const value = rawValue.trim();
+            if (!value) continue;
+
+            if (existingPrefix) {
+                const valueLower = value.toLowerCase();
+                if (!valueLower.startsWith(prefixLower)) {
+                    continue;
+                }
+            }
+
+            if (seen.has(value)) {
+                continue;
+            }
+            seen.add(value);
+
+            const item = new vscode.CompletionItem(value, vscode.CompletionItemKind.Text);
+            const insertText = existingPrefix ? value.slice(existingPrefix.length) : value;
+            item.insertText = insertText;
+            item.detail = `Known ${locale} translation from key ${key}`;
+
+            items.push(item);
+
+            if (items.length >= 100) {
+                break;
+            }
+        }
+
+        return items;
+    }
 }
 
 /**
@@ -361,14 +472,21 @@ export function registerI18nProviders(
     const completionProvider = new I18nCompletionProvider(i18nIndex);
 
     context.subscriptions.push(
-        vscode.languages.registerHoverProvider(I18N_SELECTOR, hoverProvider),
-        vscode.languages.registerDefinitionProvider(I18N_SELECTOR, definitionProvider),
+        vscode.languages.registerHoverProvider(I18N_CODE_SELECTOR, hoverProvider),
+        vscode.languages.registerDefinitionProvider(I18N_CODE_SELECTOR, definitionProvider),
+        // Completions for code files (keys)
         vscode.languages.registerCompletionItemProvider(
-            I18N_SELECTOR,
+            I18N_CODE_SELECTOR,
             completionProvider,
             '.', // Trigger on dot
             '"', // Trigger on quote
             "'", // Trigger on single quote
+        ),
+        // Completions for locale JSON files (known translations)
+        vscode.languages.registerCompletionItemProvider(
+            I18N_JSON_SELECTOR,
+            completionProvider,
+            '"',
         ),
     );
 }
