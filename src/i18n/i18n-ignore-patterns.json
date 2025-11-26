@@ -1,0 +1,11 @@
+{
+  "exact": [
+    "AI",
+    "S3",
+    "Venmail",
+    "Cloudflare R2",
+    "123 Main Street, City, State 12345"
+  ],
+  "exactInsensitive": [],
+  "contains": []
+}

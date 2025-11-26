@@ -1,0 +1,237 @@
+{
+  "name": "ai-assistant",
+  "displayName": "Localizer – AI i18n for React, Vue & Laravel",
+  "description": "AI-assisted localization for React, Vue/Nuxt, and Laravel projects. Extract strings, manage locale JSON, and scaffold translation providers and hooks automatically.",
+  "version": "0.0.1",
+  "publisher": "venmail",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:ai-assistant.setOpenAiApiKeySecret",
+    "onCommand:ai-assistant.i18n.rescan",
+    "onCommand:ai-assistant.i18n.configureProject",
+    "onCommand:ai-assistant.i18n.openRootApp",
+    "onCommand:ai-assistant.i18n.copyLanguageSwitcher",
+    "onCommand:ai-assistant.i18n.convertSelectionToKey",
+    "onCommand:ai-assistant.i18n.runExtractScript",
+    "onCommand:ai-assistant.i18n.runRewriteScript",
+    "onCommand:ai-assistant.i18n.runSyncScript",
+    "onCommand:ai-assistant.i18n.runFixUntranslatedScript",
+    "onCommand:ai-assistant.i18n.runRewriteBladeScript",
+    "onCommand:ai-assistant.i18n.openUntranslatedReport",
+    "onCommand:ai-assistant.i18n.applyUntranslatedAiFixes",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescriptreact",
+    "onLanguage:python",
+    "onLanguage:java",
+    "onLanguage:go",
+    "onLanguage:rust",
+    "onLanguage:vue",
+    "onLanguage:blade",
+    "onLanguage:php"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      
+      {
+        "command": "ai-assistant.setOpenAiApiKeySecret",
+        "title": "AI i18n: Set OpenAI API Key (Secure)"
+      },
+      {
+        "command": "ai-assistant.i18n.rescan",
+        "title": "AI i18n: Rescan Translations"
+      },
+      {
+        "command": "ai-assistant.i18n.configureProject",
+        "title": "AI i18n: Configure Project i18n"
+      },
+      {
+        "command": "ai-assistant.i18n.openRootApp",
+        "title": "AI i18n: Open Root App Entry"
+      },
+      {
+        "command": "ai-assistant.i18n.copyLanguageSwitcher",
+        "title": "AI i18n: Copy React Language Switcher Component"
+      },
+      {
+        "command": "ai-assistant.i18n.convertSelectionToKey",
+        "title": "AI i18n: Apply translations to selection"
+      },
+      {
+        "command": "ai-assistant.i18n.runExtractScript",
+        "title": "AI i18n: Run Extract Script"
+      },
+      {
+        "command": "ai-assistant.i18n.runRewriteScript",
+        "title": "AI i18n: Run Rewrite Script"
+      },
+      {
+        "command": "ai-assistant.i18n.runSyncScript",
+        "title": "AI i18n: Run Sync Script"
+      },
+      {
+        "command": "ai-assistant.i18n.runFixUntranslatedScript",
+        "title": "AI i18n: Run Fix Untranslated Script"
+      },
+      {
+        "command": "ai-assistant.i18n.runRewriteBladeScript",
+        "title": "AI i18n: Run Blade Rewrite Script"
+      },
+      {
+        "command": "ai-assistant.i18n.openUntranslatedReport",
+        "title": "AI i18n: Open Untranslated Report"
+      },
+      {
+        "command": "ai-assistant.i18n.applyUntranslatedAiFixes",
+        "title": "AI i18n: Apply AI Fixes from Untranslated Report"
+      },
+      {
+        "command": "ai-assistant.i18n.showStatus",
+        "title": "AI i18n: Show Status & Settings"
+      }
+    ],
+    "keybindings": [],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ai-assistant.i18n.convertSelectionToKey",
+          "group": "ai@1",
+          "when": "editorHasSelection && (editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue)"
+        },
+        {
+          "command": "ai-assistant.i18n.runExtractScript",
+          "group": "ai@2",
+          "when": "editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue || editorLangId == php || editorLangId == blade"
+        },
+        {
+          "command": "ai-assistant.i18n.runRewriteScript",
+          "group": "ai@3",
+          "when": "editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue"
+        },
+        {
+          "command": "ai-assistant.i18n.runRewriteBladeScript",
+          "group": "ai@3",
+          "when": "editorLangId == blade || editorLangId == php"
+        },
+        {
+          "command": "ai-assistant.i18n.showStatus",
+          "group": "ai@9"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Localizer",
+      "properties": {
+        "ai-assistant.i18n.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable React i18n IntelliSense (hover, go to definition, completions for translation keys)."
+        },
+        "ai-assistant.i18n.defaultLocale": {
+          "type": "string",
+          "default": "en",
+          "description": "Default locale used for hover/definition and when multiple locales are present."
+        },
+        "ai-assistant.i18n.localeGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "resources/js/i18n/auto/**/*.json",
+            "src/i18n/**/*.json",
+            "src/locales/**/*.json",
+            "locales/**/*.json",
+            "i18n/**/*.json"
+          ],
+          "description": "Glob patterns (relative to each workspace folder) used to discover locale JSON files."
+        },
+        "ai-assistant.i18n.autoTranslate": {
+          "type": "boolean",
+          "default": false,
+          "description": "When converting selections to keys, use AI to suggest translations for non-default locales."
+        },
+        "ai-assistant.i18n.tImportPath": {
+          "type": "string",
+          "default": "@/i18n",
+          "description": "Module path used when inserting `import { t } from '...'` for React i18n helpers."
+        },
+        "ai-assistant.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key used for AI-powered translations. Store this in your user or workspace settings; do not commit it to source control."
+        },
+        "ai-assistant.openaiModel": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "OpenAI model ID to use for AI translations (for example, gpt-4o-mini)."
+        },
+        
+        "ai-assistant.i18n.autoMonitor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically monitor files for translation-eligible content and trigger extraction/rewrite when files are committed to git."
+        },
+        "ai-assistant.i18n.autoExtract": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run extraction script when new translatable content is detected and committed."
+        },
+        "ai-assistant.i18n.autoRewrite": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run rewrite script after extraction to replace hard-coded strings with translation keys."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "localization",
+    "i18n",
+    "l10n",
+    "translation",
+    "react",
+    "nextjs",
+    "inertia",
+    "vue",
+    "nuxt",
+    "laravel",
+    "blade",
+    "vite",
+    "typescript",
+    "javascript"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^16.11.7",
+    "@types/vscode": "^1.60.0",
+    "@typescript-eslint/eslint-plugin": "^5.42.0",
+    "@typescript-eslint/parser": "^5.42.0",
+    "eslint": "^8.26.0",
+    "typescript": "^4.8.4",
+    "@vscode/vsce": "^3.7.1"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "node-fetch": "^2.7.0"
+  }
+}
