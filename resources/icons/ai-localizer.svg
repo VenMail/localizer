@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI Localizer robot and globe icon">
+  <defs>
+    <!-- VenMail-like warm coral background -->
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#ff6b5d"/>
+      <stop offset="50%" stop-color="#ff5a54"/>
+      <stop offset="100%" stop-color="#ff4743"/>
+    </linearGradient>
+    <!-- Soft top highlight for a premium glossy feel -->
+    <radialGradient id="bgHighlight" cx="0.3" cy="0" r="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Robot face metal shading -->
+    <linearGradient id="robotFace" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#262626"/>
+      <stop offset="100%" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="robotEdge" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.95"/>
+    </linearGradient>
+    <!-- Globe accent in a soft coral / off-white palette -->
+    <linearGradient id="accent" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fff0ea"/>
+      <stop offset="100%" stop-color="#ffc1b0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square with VenMail-style hex shadow -->
+  <rect x="6" y="6" rx="24" ry="24" width="116" height="116" fill="url(#bg)"/>
+  <!-- Outer hex shadow echoing VenMail logo -->
+  <path d="M64 12 L112 40 V88 L64 116 L16 88 V40 Z" fill="#000000" fill-opacity="0.25"/>
+  <!-- Inner hex block for depth -->
+  <path d="M64 20 L104 44 V84 L64 108 L24 84 V44 Z" fill="#000000" fill-opacity="0.8"/>
+  <!-- Top glossy highlight over the coral base -->
+  <path d="M6 6 H122 V56 L64 92 6 56 Z" fill="url(#bgHighlight)" opacity="0.9"/>
+
+  <!-- Robot head -->
+  <g transform="translate(18,24)">
+    <!-- Outer robot shell with stronger shadow -->
+    <rect x="9" y="17" rx="16" ry="16" width="66" height="54" fill="url(#robotEdge)" opacity="0.9"/>
+    <!-- Inner face panel with metal gradient -->
+    <rect x="12" y="20" rx="14" ry="14" width="60" height="48" fill="url(#robotFace)"/>
+    <!-- Soft top rim highlight -->
+    <rect x="18" y="24" width="48" height="6" rx="3" fill="#ffffff" opacity="0.12"/>
+    <!-- Antenna with warm coral tip -->
+    <rect x="38" y="4" width="4" height="12" rx="2" fill="#ffb3a7"/>
+    <circle cx="40" cy="4" r="4" fill="#ffe6df" stroke="#ff9c8a" stroke-width="1.2"/>
+    <!-- Eyes with inner glow -->
+    <circle cx="28" cy="40" r="6" fill="#ffffff"/>
+    <circle cx="52" cy="40" r="6" fill="#ffffff"/>
+    <circle cx="28" cy="40" r="3" fill="#ff9c8a" opacity="0.8"/>
+    <circle cx="52" cy="40" r="3" fill="#ff9c8a" opacity="0.8"/>
+    <!-- Mouth (equal sign to suggest simplicity) -->
+    <rect x="26" y="54" width="28" height="4" rx="2" fill="#ff8f7f" opacity="0.95"/>
+    <rect x="26" y="52" width="28" height="2" rx="1" fill="#ffffff" opacity="0.25"/>
+  </g>
+
+  <!-- Globe (i18n) overlay -->
+  <g transform="translate(66,62)">
+    <circle cx="26" cy="26" r="26" fill="url(#accent)"/>
+    <circle cx="26" cy="26" r="24" fill="none" stroke="#000000" stroke-opacity="0.25" stroke-width="2"/>
+    <!-- Meridians -->
+    <path d="M26 2 C15 2 10 14 10 26 C10 38 15 50 26 50 C37 50 42 38 42 26 C42 14 37 2 26 2 Z" fill="none" stroke="#000000" stroke-opacity="0.35" stroke-width="2"/>
+    <path d="M26 2 C37 2 42 14 42 26 C42 38 37 50 26 50" fill="none" stroke="#000000" stroke-opacity="0.35" stroke-width="2"/>
+    <!-- Parallels -->
+    <path d="M2 26 H50" stroke="#000000" stroke-opacity="0.35" stroke-width="2"/>
+    <path d="M6 16 C26 20 26 20 46 16" stroke="#000000" stroke-opacity="0.35" stroke-width="2" fill="none"/>
+    <path d="M6 36 C26 32 26 32 46 36" stroke="#000000" stroke-opacity="0.35" stroke-width="2" fill="none"/>
+    <!-- Subtle shadow on the lower hemisphere for depth -->
+    <path d="M2 28 C10 38 18 44 26 46 C34 44 42 40 50 32 C44 44 36 52 26 52 C16 52 8 46 2 36 Z" fill="#000000" fill-opacity="0.18"/>
+  </g>
+
+  <!-- Sparkles for "easy/assistant" cue -->
+  <g fill="#ffe6df">
+    <path d="M26 22 l2 4 4 2 -4 2 -2 4 -2 -4 -4 -2 4 -2z" opacity="0.7"/>
+    <path d="M54 16 l1.5 3 3 1.5 -3 1.5 -1.5 3 -1.5 -3 -3 -1.5 3 -1.5z" opacity="0.6"/>
+  </g>
+</svg>
