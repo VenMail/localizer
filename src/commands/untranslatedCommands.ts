@@ -142,4 +142,79 @@ export class UntranslatedCommands {
             vscode.window.showErrorMessage(`AI i18n: Failed to apply AI fixes. ${err}`);
         }
     }
+
+    async applyQuickFix(
+        documentUri: vscode.Uri,
+        key: string,
+        locales: string[],
+    ): Promise<void> {
+        try {
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+            const record = this.i18nIndex.getRecord(key);
+            if (!record) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: No translation record found for key ${key}.`,
+                );
+                return;
+            }
+
+            const defaultLocale = record.defaultLocale;
+            const defaultValue = record.locales.get(defaultLocale);
+            if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Default locale value not found for key ${key}.`,
+                );
+                return;
+            }
+
+            const targetLocales = locales.filter((l) => l && l !== defaultLocale);
+            if (!targetLocales.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No target locales to translate for this key.',
+                );
+                return;
+            }
+
+            const translations = await this.translationService.translateToLocales(
+                defaultValue,
+                defaultLocale,
+                targetLocales,
+                'text',
+                true,
+            );
+
+            if (!translations || translations.size === 0) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No translations were generated for this quick fix (check API key and settings).',
+                );
+                return;
+            }
+
+            for (const [locale, newValue] of translations.entries()) {
+                await setTranslationValue(folder, locale, key, newValue);
+            }
+
+            await this.i18nIndex.ensureInitialized(true);
+            await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Applied AI translations for ${key} in ${translations.size} locale(s).`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to apply quick fix for untranslated key:', err);
+            vscode.window.showErrorMessage(
+                'AI i18n: Failed to apply AI quick fix for untranslated key.',
+            );
+        }
+    }
 }

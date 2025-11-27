@@ -10,14 +10,19 @@ import { FileSystemService } from './services/fileSystemService';
 
 export function activate(context: vscode.ExtensionContext) {
     try {
+        const output = vscode.window.createOutputChannel('AI i18n');
+        output.appendLine('[activate] Activating AI i18n extension...');
+
         const i18nIndex = new I18nIndex();
         void i18nIndex.ensureInitialized().catch((err) => {
             console.error('AI i18n: Failed to build translation index:', err);
+            const details = err instanceof Error ? err.stack || err.message : String(err);
+            output.appendLine(`[activate] Failed to build translation index: ${details}`);
         });
 
         // Initialize status bar
         const statusBar = new I18nStatusBar();
-        context.subscriptions.push(statusBar);
+        context.subscriptions.push(statusBar, output);
 
         // Initialize auto-monitor for detecting new translatable content
         const autoMonitor = new AutoMonitor();
@@ -42,10 +47,12 @@ export function activate(context: vscode.ExtensionContext) {
             projectConfigService,
             fileSystemService,
             statusBar,
+            output,
         );
         const disposables = registry.registerAll();
         context.subscriptions.push(...disposables);
 
+        output.appendLine('[activate] AI i18n extension activated successfully');
         console.log('AI i18n extension activated successfully');
     } catch (error) {
         console.error('Failed to activate AI i18n extension:', error);

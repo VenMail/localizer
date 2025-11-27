@@ -16,6 +16,7 @@ export class I18nIndex {
     private keyMap = new Map<string, TranslationRecord>();
     private defaultLocale = 'en';
     private initializing: Promise<void> | null = null;
+    private fileToKeys = new Map<string, { locale: string; keys: string[] }>();
 
     async ensureInitialized(force = false): Promise<void> {
         if (!force && this.keyMap.size > 0) {
@@ -31,6 +32,7 @@ export class I18nIndex {
 
     private async buildIndex(): Promise<void> {
         this.keyMap.clear();
+        this.fileToKeys.clear();
 
         const config = vscode.workspace.getConfiguration('ai-assistant');
         this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
@@ -126,6 +128,42 @@ export class I18nIndex {
         });
     }
 
+    private registerTranslation(
+        locale: string,
+        uri: vscode.Uri,
+        key: string,
+        value: string,
+    ): void {
+        let record = this.keyMap.get(key);
+        if (!record) {
+            record = {
+                key,
+                locales: new Map<string, string>(),
+                defaultLocale: this.defaultLocale,
+                locations: [],
+            };
+            this.keyMap.set(key, record);
+        }
+        record.locales.set(locale, value);
+        if (
+            !record.locations.some(
+                (l) => l.locale === locale && l.uri.toString() === uri.toString(),
+            )
+        ) {
+            record.locations.push({ locale, uri });
+        }
+
+        const fileKey = uri.toString();
+        let entry = this.fileToKeys.get(fileKey);
+        if (!entry) {
+            entry = { locale, keys: [] };
+            this.fileToKeys.set(fileKey, entry);
+        }
+        if (!entry.keys.includes(key)) {
+            entry.keys.push(key);
+        }
+    }
+
     private inferLocaleFromPath(uri: vscode.Uri): string | null {
         const parts = uri.fsPath.split(path.sep).filter(Boolean);
         const autoIndex = parts.lastIndexOf('auto');
@@ -149,20 +187,7 @@ export class I18nIndex {
         for (const [key, value] of Object.entries(recordNode)) {
             const nextKey = prefix ? `${prefix}.${key}` : key;
             if (typeof value === 'string') {
-                let record = this.keyMap.get(nextKey);
-                if (!record) {
-                    record = {
-                        key: nextKey,
-                        locales: new Map<string, string>(),
-                        defaultLocale: this.defaultLocale,
-                        locations: [],
-                    };
-                    this.keyMap.set(nextKey, record);
-                }
-                record.locales.set(locale, value);
-                if (!record.locations.some((l) => l.locale === locale && l.uri.toString() === uri.toString())) {
-                    record.locations.push({ locale, uri });
-                }
+                this.registerTranslation(locale, uri, nextKey, value);
             } else if (value && typeof value === 'object') {
                 this.walkJson(nextKey, value, locale, uri);
             }
@@ -175,6 +200,73 @@ export class I18nIndex {
 
     getAllKeys(): string[] {
         return Array.from(this.keyMap.keys());
+    }
+
+    getKeysForFile(uri: vscode.Uri): { locale: string; keys: string[] } | null {
+        const entry = this.fileToKeys.get(uri.toString());
+        return entry || null;
+    }
+
+    async updateFile(uri: vscode.Uri): Promise<void> {
+        const config = vscode.workspace.getConfiguration('ai-assistant');
+        this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
+
+        const fileKey = uri.toString();
+        const existing = this.fileToKeys.get(fileKey);
+        if (existing) {
+            for (const key of existing.keys) {
+                const record = this.keyMap.get(key);
+                if (!record) {
+                    continue;
+                }
+                record.locations = record.locations.filter(
+                    (loc) => loc.uri.toString() !== fileKey,
+                );
+                record.locales.delete(existing.locale);
+                if (record.locales.size === 0) {
+                    this.keyMap.delete(key);
+                }
+            }
+            this.fileToKeys.delete(fileKey);
+        }
+
+        let stat: vscode.FileStat;
+        try {
+            stat = await vscode.workspace.fs.stat(uri);
+        } catch {
+            // File was deleted; contributions have already been removed.
+            return;
+        }
+
+        if (typeof stat?.size === 'number' && stat.size > MAX_LOCALE_FILE_SIZE_BYTES) {
+            return;
+        }
+
+        const decoder = new TextDecoder('utf-8');
+        let text: string | null = null;
+        try {
+            const data = await vscode.workspace.fs.readFile(uri);
+            text = decoder.decode(data);
+        } catch (err) {
+            console.error(`Failed to read locale file ${uri.fsPath}:`, err);
+            return;
+        }
+        if (!text) return;
+
+        let json: unknown;
+        try {
+            json = JSON.parse(text);
+        } catch (err) {
+            console.error(`Failed to parse JSON in ${uri.fsPath}:`, err);
+            return;
+        }
+
+        const locale = this.inferLocaleFromPath(uri);
+        if (!locale) {
+            return;
+        }
+
+        this.walkJson('', json, locale, uri);
     }
 
     /**

@@ -38,7 +38,7 @@ export class I18nHoverProvider implements vscode.HoverProvider {
     ): Promise<vscode.Hover | undefined> {
         try {
             const config = vscode.workspace.getConfiguration('ai-assistant');
-            const delayMs = config.get<number>('i18n.hoverDelayMs') ?? 250;
+            const delayMs = config.get<number>('i18n.hoverDelayMs') ?? 1900;
 
             if (delayMs > 0) {
                 await new Promise<void>((resolve) => {
@@ -91,8 +91,17 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                 const localeLabel = isDefault ? `${locale} (default)` : locale;
                 md.appendMarkdown(`- **${localeLabel}**: ${escapeMarkdown(value)}\n`);
             }
-            
-            md.isTrusted = false;
+
+            const args = {
+                uri: document.uri.toString(),
+                position: { line: range.start.line, character: range.start.character },
+            };
+            const encoded = encodeURIComponent(JSON.stringify(args));
+            md.appendMarkdown(
+                `\n[Go to translation file](command:ai-assistant.i18n.gotoTranslationFromHover?${encoded})\n`,
+            );
+
+            md.isTrusted = true;
             return new vscode.Hover(md, keyInfo.range);
         } catch (err) {
             console.error('Hover provider error:', err);
@@ -477,6 +486,95 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
     }
 }
 
+class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
+    public static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
+
+    provideCodeActions(
+        document: vscode.TextDocument,
+        range: vscode.Range,
+        context: vscode.CodeActionContext,
+    ): vscode.ProviderResult<(vscode.CodeAction | vscode.Command)[]> {
+        const diagnostics = context.diagnostics.filter((d) => d.code === 'ai-i18n.untranslated');
+        if (!diagnostics.length) {
+            return [];
+        }
+
+        const actions: vscode.CodeAction[] = [];
+
+        for (const diagnostic of diagnostics) {
+            if (!diagnostic.range.intersection(range)) {
+                continue;
+            }
+
+            const parsed = this.parseDiagnosticMessage(String(diagnostic.message || ''));
+            if (!parsed) {
+                continue;
+            }
+
+            const { key, locales } = parsed;
+            if (!key || !locales.length) {
+                continue;
+            }
+
+            const uniqueLocales = Array.from(new Set(locales));
+            const localeLabel = uniqueLocales.join(', ');
+            const title = `AI i18n: AI-translate ${localeLabel} for ${key}`;
+
+            const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+            action.diagnostics = [diagnostic];
+            action.command = {
+                title,
+                command: 'ai-assistant.i18n.applyUntranslatedQuickFix',
+                arguments: [document.uri, key, uniqueLocales],
+            };
+            actions.push(action);
+        }
+
+        return actions;
+    }
+
+    private parseDiagnosticMessage(message: string): { key: string; locales: string[] } | null {
+        if (!message) {
+            return null;
+        }
+
+        const clean = message.replace(/^AI i18n:\s*/, '');
+
+        const missingMatch = clean.match(
+            /^Missing translation for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/,
+        );
+        if (missingMatch) {
+            const key = missingMatch[1].trim();
+            const locale = missingMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        const untranslatedMatch = clean.match(
+            /^Untranslated \(same as default\) value for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/,
+        );
+        if (untranslatedMatch) {
+            const key = untranslatedMatch[1].trim();
+            const locale = untranslatedMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        const selectionMatch = clean.match(/^Missing translations for\s+(.+?)\s+in locales:\s+(.+)$/);
+        if (selectionMatch) {
+            const key = selectionMatch[1].trim();
+            const localesRaw = selectionMatch[2]
+                .split(',')
+                .map((p) => p.trim())
+                .filter(Boolean);
+            if (!key || !localesRaw.length) {
+                return null;
+            }
+            return { key, locales: localesRaw };
+        }
+
+        return null;
+    }
+}
+
 /**
  * Register all i18n IntelliSense providers
  */
@@ -487,6 +585,7 @@ export function registerI18nProviders(
     const hoverProvider = new I18nHoverProvider(i18nIndex);
     const definitionProvider = new I18nDefinitionProvider(i18nIndex);
     const completionProvider = new I18nCompletionProvider(i18nIndex);
+    const codeActionProvider = new I18nUntranslatedCodeActionProvider();
 
     context.subscriptions.push(
         vscode.languages.registerHoverProvider(I18N_CODE_SELECTOR, hoverProvider),
@@ -504,6 +603,20 @@ export function registerI18nProviders(
             I18N_JSON_SELECTOR,
             completionProvider,
             '"',
+        ),
+        vscode.languages.registerCodeActionsProvider(
+            I18N_CODE_SELECTOR,
+            codeActionProvider,
+            {
+                providedCodeActionKinds: I18nUntranslatedCodeActionProvider.providedCodeActionKinds,
+            },
+        ),
+        vscode.languages.registerCodeActionsProvider(
+            I18N_JSON_SELECTOR,
+            codeActionProvider,
+            {
+                providedCodeActionKinds: I18nUntranslatedCodeActionProvider.providedCodeActionKinds,
+            },
         ),
     );
 }

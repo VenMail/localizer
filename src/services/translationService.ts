@@ -39,6 +39,7 @@ export class TranslationService {
         defaultLocale: string,
         targetLocales: string[],
         context: string = 'text',
+        force: boolean = false,
     ): Promise<Map<string, string>> {
         const result = new Map<string, string>();
         
@@ -48,8 +49,8 @@ export class TranslationService {
 
         const config = vscode.workspace.getConfiguration('ai-assistant');
         const autoTranslate = config.get<boolean>('i18n.autoTranslate');
-        
-        if (!autoTranslate) {
+
+        if (!autoTranslate && !force) {
             return result;
         }
 

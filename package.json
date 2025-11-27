@@ -39,7 +39,9 @@
     "onLanguage:rust",
     "onLanguage:vue",
     "onLanguage:blade",
-    "onLanguage:php"
+    "onLanguage:php",
+    "onLanguage:json",
+    "onLanguage:jsonc"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -96,6 +98,14 @@
       {
         "command": "ai-assistant.i18n.applyUntranslatedAiFixes",
         "title": "AI i18n: Apply AI Fixes from Untranslated Report"
+      },
+      {
+        "command": "ai-assistant.i18n.applyUntranslatedQuickFix",
+        "title": "AI i18n: Apply AI Quick Fix for Untranslated Key"
+      },
+      {
+        "command": "ai-assistant.i18n.gotoTranslationFromHover",
+        "title": "AI i18n: Go to Translation from Hover"
       },
       {
         "command": "ai-assistant.i18n.showStatus",
@@ -203,6 +213,38 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically run the i18n:sync script after applying translations so locale JSON files stay in sync and can reuse known translations where possible."
+        },
+        "ai-assistant.i18n.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Problems panel diagnostics for missing or untranslated locale strings."
+        },
+        "ai-assistant.i18n.diagnostics.missingLocaleSeverity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "hint"
+          ],
+          "default": "warning",
+          "description": "Severity level used when a locale is missing a translation for a key."
+        },
+        "ai-assistant.i18n.diagnostics.untranslatedSameAsDefaultEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect locales where the translation value is identical to the default locale (likely untranslated)."
+        },
+        "ai-assistant.i18n.diagnostics.untranslatedSameAsDefaultSeverity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "hint"
+          ],
+          "default": "warning",
+          "description": "Severity level used when a locale value is identical to the default locale value."
         }
       }
     }

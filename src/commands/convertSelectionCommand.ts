@@ -15,6 +15,7 @@ export class ConvertSelectionCommand {
         private i18nIndex: I18nIndex,
         private translationService: TranslationService,
         private projectConfigService: ProjectConfigService,
+        private untranslatedDiagnostics: vscode.DiagnosticCollection,
     ) {}
 
     async execute(): Promise<void> {
@@ -164,6 +165,7 @@ export class ConvertSelectionCommand {
                   )
                 : new Map<string, string>();
 
+            const missingLocalesSingle: string[] = [];
             for (const locale of locales) {
                 let value: string;
                 if (locale === defaultLocale) {
@@ -174,8 +176,13 @@ export class ConvertSelectionCommand {
                     value = translations.get(locale)!;
                 } else {
                     value = sourceText;
+                    missingLocalesSingle.push(locale);
                 }
                 await upsertTranslationKey(folder, locale, finalKey, value);
+            }
+
+            if (missingLocalesSingle.length) {
+                this.reportUntranslatedLocales(document, single.range, finalKey, missingLocalesSingle);
             }
 
             await this.i18nIndex.ensureInitialized(true);
@@ -320,6 +327,7 @@ export class ConvertSelectionCommand {
                   )
                 : new Map<string, string>();
 
+            const missingLocalesMulti: string[] = [];
             for (const locale of locales) {
                 let value: string;
                 if (locale === defaultLocale) {
@@ -330,8 +338,13 @@ export class ConvertSelectionCommand {
                     value = translations.get(locale)!;
                 } else {
                     value = sourceText;
+                    missingLocalesMulti.push(locale);
                 }
                 await upsertTranslationKey(folder, locale, key, value);
+            }
+
+            if (missingLocalesMulti.length) {
+                this.reportUntranslatedLocales(document, segment.range, key, missingLocalesMulti);
             }
 
             if (isBladeLike) {
@@ -556,6 +569,46 @@ export class ConvertSelectionCommand {
         }
 
         return candidates;
+    }
+
+    private reportUntranslatedLocales(
+        document: vscode.TextDocument,
+        range: vscode.Range,
+        key: string,
+        missingLocales: string[],
+    ): void {
+        if (!missingLocales.length) {
+            return;
+        }
+
+        const existing = this.untranslatedDiagnostics.get(document.uri) || [];
+        const message = `AI i18n: Missing translations for ${key} in locales: ${missingLocales.join(", ")}`;
+
+        const cfg = vscode.workspace.getConfiguration('ai-assistant');
+        const setting = cfg.get<string>('i18n.diagnostics.missingLocaleSeverity') || 'warning';
+        const severity = this.mapSeverityFromSetting(setting);
+
+        const diagnostic = new vscode.Diagnostic(
+            range,
+            message,
+            severity,
+        );
+        diagnostic.code = 'ai-i18n.untranslated';
+        this.untranslatedDiagnostics.set(document.uri, existing.concat(diagnostic));
+    }
+
+    private mapSeverityFromSetting(value: string | undefined): vscode.DiagnosticSeverity {
+        switch ((value || '').toLowerCase()) {
+            case 'error':
+                return vscode.DiagnosticSeverity.Error;
+            case 'info':
+                return vscode.DiagnosticSeverity.Information;
+            case 'hint':
+                return vscode.DiagnosticSeverity.Hint;
+            case 'warning':
+            default:
+                return vscode.DiagnosticSeverity.Warning;
+        }
     }
 
     private analyzeTemplateLiteral(rawLiteral: string):

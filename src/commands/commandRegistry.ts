@@ -4,11 +4,14 @@ import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
 import { FileSystemService } from '../services/fileSystemService';
 import { I18nStatusBar } from '../core/statusBar';
+import { DiagnosticAnalyzer, getDiagnosticConfig } from '../services/diagnosticAnalyzer';
 
 /**
  * Registry for all extension commands
  */
 export class CommandRegistry {
+    private diagnosticAnalyzer: DiagnosticAnalyzer;
+
     constructor(
         private context: vscode.ExtensionContext,
         private i18nIndex: I18nIndex,
@@ -16,7 +19,14 @@ export class CommandRegistry {
         private projectConfigService: ProjectConfigService,
         private fileSystemService: FileSystemService,
         private statusBar: I18nStatusBar,
-    ) {}
+        private log: vscode.OutputChannel,
+    ) {
+        this.diagnosticAnalyzer = new DiagnosticAnalyzer(
+            i18nIndex,
+            projectConfigService,
+            log,
+        );
+    }
 
     /**
      * Register all commands
@@ -25,6 +35,7 @@ export class CommandRegistry {
         const disposables: vscode.Disposable[] = [];
 
         try {
+            this.log.appendLine('[CommandRegistry] Registering commands and diagnostics listeners...');
             // Import command handlers
             const { ConfigureProjectCommand } = require('./configureProjectCommand');
             const { ConvertSelectionCommand } = require('./convertSelectionCommand');
@@ -33,12 +44,16 @@ export class CommandRegistry {
             const { UntranslatedCommands } = require('./untranslatedCommands');
             const { ComponentCommands } = require('./componentCommands');
 
+            const untranslatedDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-untranslated');
+            disposables.push(untranslatedDiagnostics);
+
         // Rescan command
         disposables.push(
             vscode.commands.registerCommand('ai-assistant.i18n.rescan', async () => {
                 await this.i18nIndex.ensureInitialized(true);
                 const count = this.i18nIndex.getAllKeys().length;
                 vscode.window.showInformationMessage(`AI i18n: Indexed ${count} translation keys.`);
+                await this.refreshAllDiagnostics(untranslatedDiagnostics);
             }),
         );
 
@@ -60,6 +75,7 @@ export class CommandRegistry {
             this.i18nIndex,
             this.translationService,
             this.projectConfigService,
+            untranslatedDiagnostics,
         );
         disposables.push(
             vscode.commands.registerCommand('ai-assistant.i18n.convertSelectionToKey', () =>
@@ -107,6 +123,49 @@ export class CommandRegistry {
             vscode.commands.registerCommand('ai-assistant.i18n.applyUntranslatedAiFixes', () =>
                 untranslatedCmds.applyAiFixes(),
             ),
+            vscode.commands.registerCommand(
+                'ai-assistant.i18n.applyUntranslatedQuickFix',
+                (documentUri: vscode.Uri, key: string, locales: string[]) =>
+                    untranslatedCmds.applyQuickFix(documentUri, key, locales),
+            ),
+            vscode.commands.registerCommand(
+                'ai-assistant.i18n.gotoTranslationFromHover',
+                async (args: { uri: string; position: { line: number; character: number } }) => {
+                    try {
+                        if (!args || !args.uri || !args.position) {
+                            return;
+                        }
+                        const uri = vscode.Uri.parse(args.uri);
+                        const position = new vscode.Position(
+                            args.position.line,
+                            args.position.character,
+                        );
+                        const locations =
+                            (await vscode.commands.executeCommand(
+                                'vscode.executeDefinitionProvider',
+                                uri,
+                                position,
+                            )) || [];
+                        const first = Array.isArray(locations) && locations.length > 0
+                            ? (locations[0] as vscode.Location)
+                            : undefined;
+                        if (!first) {
+                            return;
+                        }
+                        const doc = await vscode.workspace.openTextDocument(first.uri);
+                        const editor = await vscode.window.showTextDocument(doc, {
+                            preview: false,
+                        });
+                        editor.selection = new vscode.Selection(first.range.start, first.range.start);
+                        editor.revealRange(
+                            first.range,
+                            vscode.TextEditorRevealType.InCenterIfOutsideViewport,
+                        );
+                    } catch (err) {
+                        console.error('AI i18n: Failed to go to translation from hover:', err);
+                    }
+                },
+            ),
         );
 
         // Component commands
@@ -138,12 +197,109 @@ export class CommandRegistry {
             }),
         );
 
+        const folders = vscode.workspace.workspaceFolders || [];
+        const globalCfg = vscode.workspace.getConfiguration('ai-assistant');
+        const localeGlobs =
+            globalCfg.get<string[]>('i18n.localeGlobs') || [
+                'resources/js/i18n/auto/**/*.json',
+                'src/i18n/**/*.json',
+                'src/locales/**/*.json',
+                'locales/**/*.json',
+                'i18n/**/*.json',
+            ];
+
+        for (const folder of folders) {
+            for (const glob of localeGlobs) {
+                const pattern = new vscode.RelativePattern(folder, glob);
+                const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+                const handle = async (uri: vscode.Uri) => {
+                    this.log.appendLine(
+                        `[Watch] Locale file change detected: ${uri.fsPath}`,
+                    );
+                    await this.i18nIndex.updateFile(uri);
+                    await this.refreshFileDiagnostics(untranslatedDiagnostics, uri);
+                };
+                watcher.onDidChange(handle, undefined, disposables);
+                watcher.onDidCreate(handle, undefined, disposables);
+                watcher.onDidDelete(handle, undefined, disposables);
+                disposables.push(watcher);
+            }
+        }
+
+        void this.refreshAllDiagnostics(untranslatedDiagnostics);
+
         } catch (error) {
             console.error('Failed to register commands:', error);
+            const details =
+                error instanceof Error ? error.stack || error.message : String(error);
+            this.log.appendLine(`[CommandRegistry] Failed to register commands: ${details}`);
             vscode.window.showErrorMessage(`AI i18n: Failed to register commands. ${error}`);
             throw error;
         }
 
         return disposables;
+    }
+
+    /**
+     * Refresh diagnostics for a single file (incremental update).
+     */
+    private async refreshFileDiagnostics(
+        collection: vscode.DiagnosticCollection,
+        uri: vscode.Uri,
+    ): Promise<void> {
+        const config = getDiagnosticConfig();
+        if (!config.enabled) {
+            collection.delete(uri);
+            return;
+        }
+
+        const folders = vscode.workspace.workspaceFolders || [];
+        await this.diagnosticAnalyzer.loadStyleReport(folders);
+
+        const diagnostics = await this.diagnosticAnalyzer.analyzeFile(uri, config);
+        collection.set(uri, diagnostics);
+    }
+
+    /**
+     * Refresh diagnostics for all locale files (full refresh).
+     */
+    private async refreshAllDiagnostics(
+        collection: vscode.DiagnosticCollection,
+    ): Promise<void> {
+        await this.i18nIndex.ensureInitialized();
+
+        const config = getDiagnosticConfig();
+        if (!config.enabled) {
+            collection.clear();
+            this.log.appendLine('[Diagnostics] Diagnostics disabled; clearing.');
+            return;
+        }
+
+        const allKeys = this.i18nIndex.getAllKeys();
+        if (!allKeys.length) {
+            collection.clear();
+            this.log.appendLine(
+                '[Diagnostics] No translation keys found in index; clearing diagnostics.',
+            );
+            return;
+        }
+
+        this.log.appendLine(
+            `[Diagnostics] Found ${allKeys.length} translation key(s) in index.`,
+        );
+
+        const folders = vscode.workspace.workspaceFolders || [];
+        await this.diagnosticAnalyzer.loadStyleReport(folders);
+
+        const diagnosticMap = await this.diagnosticAnalyzer.analyzeAll(config);
+
+        collection.clear();
+        for (const [uriString, diagnostics] of diagnosticMap) {
+            collection.set(vscode.Uri.parse(uriString), diagnostics);
+        }
+
+        this.log.appendLine(
+            `[Diagnostics] Updated diagnostics for ${diagnosticMap.size} locale file(s).`,
+        );
     }
 }
