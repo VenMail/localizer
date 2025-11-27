@@ -29,7 +29,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(autoMonitor);
 
         // Update status bar based on configuration
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         statusBar.setMonitoring(config.get<boolean>('i18n.autoMonitor', true));
 
         // Register IntelliSense providers for all supported file types

@@ -49,7 +49,7 @@ export class CommandRegistry {
 
         // Rescan command
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.i18n.rescan', async () => {
+            vscode.commands.registerCommand('ai-localizer.i18n.rescan', async () => {
                 await this.i18nIndex.ensureInitialized(true);
                 const count = this.i18nIndex.getAllKeys().length;
                 vscode.window.showInformationMessage(`AI i18n: Indexed ${count} translation keys.`);
@@ -64,7 +64,7 @@ export class CommandRegistry {
             this.fileSystemService,
         );
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.i18n.configureProject', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.configureProject', () =>
                 configureCmd.execute(),
             ),
         );
@@ -78,7 +78,7 @@ export class CommandRegistry {
             untranslatedDiagnostics,
         );
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.i18n.convertSelectionToKey', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.convertSelectionToKey', () =>
                 convertCmd.execute(),
             ),
         );
@@ -86,7 +86,7 @@ export class CommandRegistry {
         // Status command
         const statusCmd = new StatusCommand(this.statusBar, this.projectConfigService);
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.i18n.showStatus', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.showStatus', () =>
                 statusCmd.execute(),
             ),
         );
@@ -94,19 +94,19 @@ export class CommandRegistry {
         // Script commands
         const scriptCmds = new ScriptCommands();
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.i18n.runExtractScript', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.runExtractScript', () =>
                 scriptCmds.runExtract(),
             ),
-            vscode.commands.registerCommand('ai-assistant.i18n.runRewriteScript', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.runRewriteScript', () =>
                 scriptCmds.runRewrite(),
             ),
-            vscode.commands.registerCommand('ai-assistant.i18n.runSyncScript', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.runSyncScript', () =>
                 scriptCmds.runSync(),
             ),
-            vscode.commands.registerCommand('ai-assistant.i18n.runFixUntranslatedScript', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.runFixUntranslatedScript', () =>
                 scriptCmds.runFixUntranslated(),
             ),
-            vscode.commands.registerCommand('ai-assistant.i18n.runRewriteBladeScript', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.runRewriteBladeScript', () =>
                 scriptCmds.runRewriteBlade(),
             ),
         );
@@ -117,35 +117,35 @@ export class CommandRegistry {
             this.translationService,
         );
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.i18n.openUntranslatedReport', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.openUntranslatedReport', () =>
                 untranslatedCmds.openReport(),
             ),
             vscode.commands.registerCommand(
-                'ai-assistant.i18n.refreshFileDiagnostics',
+                'ai-localizer.i18n.refreshFileDiagnostics',
                 async (uri: vscode.Uri, extraKeys?: string[]) => {
                     if (!uri) return;
                     await this.refreshFileDiagnostics(untranslatedDiagnostics, uri, extraKeys);
                 },
             ),
-            vscode.commands.registerCommand('ai-assistant.i18n.applyUntranslatedAiFixes', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.applyUntranslatedAiFixes', () =>
                 untranslatedCmds.applyAiFixes(),
             ),
             vscode.commands.registerCommand(
-                'ai-assistant.i18n.applyUntranslatedQuickFix',
+                'ai-localizer.i18n.applyUntranslatedQuickFix',
                 (documentUri: vscode.Uri, key: string, locales: string[]) =>
                     untranslatedCmds.applyQuickFix(documentUri, key, locales),
             ),
             vscode.commands.registerCommand(
-                'ai-assistant.i18n.applyStyleSuggestionQuickFix',
+                'ai-localizer.i18n.applyStyleSuggestionQuickFix',
                 (documentUri: vscode.Uri, key: string, locale: string, suggested: string) =>
                     untranslatedCmds.applyStyleSuggestionQuickFix(documentUri, key, locale, suggested),
             ),
             vscode.commands.registerCommand(
-                'ai-assistant.i18n.applyAllStyleSuggestionsInFile',
+                'ai-localizer.i18n.applyAllStyleSuggestionsInFile',
                 (documentUri?: vscode.Uri) => untranslatedCmds.applyAllStyleSuggestionsInFile(documentUri),
             ),
             vscode.commands.registerCommand(
-                'ai-assistant.i18n.gotoTranslationFromHover',
+                'ai-localizer.i18n.gotoTranslationFromHover',
                 async (args: { uri: string; position: { line: number; character: number } }) => {
                     try {
                         if (!args || !args.uri || !args.position) {
@@ -187,17 +187,17 @@ export class CommandRegistry {
         // Component commands
         const componentCmds = new ComponentCommands(this.context, this.fileSystemService);
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.i18n.openRootApp', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.openRootApp', () =>
                 componentCmds.openRootApp(),
             ),
-            vscode.commands.registerCommand('ai-assistant.i18n.copyLanguageSwitcher', () =>
+            vscode.commands.registerCommand('ai-localizer.i18n.copyLanguageSwitcher', () =>
                 componentCmds.copyLanguageSwitcher(),
             ),
         );
 
         // API Key command
         disposables.push(
-            vscode.commands.registerCommand('ai-assistant.setOpenAiApiKeySecret', async () => {
+            vscode.commands.registerCommand('ai-localizer.setOpenAiApiKeySecret', async () => {
                 const existing = (await this.context.secrets.get('openaiApiKey')) || '';
                 const input = await vscode.window.showInputBox({
                     prompt: 'Enter your OpenAI API key to store securely',
@@ -214,7 +214,7 @@ export class CommandRegistry {
         );
 
         const folders = vscode.workspace.workspaceFolders || [];
-        const globalCfg = vscode.workspace.getConfiguration('ai-assistant');
+        const globalCfg = vscode.workspace.getConfiguration('ai-localizer');
         const localeGlobs =
             globalCfg.get<string[]>('i18n.localeGlobs') || [
                 'resources/js/i18n/auto/**/*.json',

@@ -346,7 +346,7 @@ export class DiagnosticAnalyzer {
         // protocol-like tokens and well-known abbreviations (configurable)
         const lower = normalized.toLowerCase();
         try {
-            const cfg = vscode.workspace.getConfiguration('ai-assistant');
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
             const csv = cfg.get<string>('i18n.heuristics.abbreviationsCsv') || 'webdav, imap, smtp, pop3, ftp, sftp';
             const abbrs = csv
                 .split(',')
@@ -448,6 +448,23 @@ export class DiagnosticAnalyzer {
         const styleKey = `${key}::${locale}`;
         const styleInfo = this.styleIssuesByLocaleKey.get(styleKey);
         if (styleInfo) {
+            const normalizedValue = String(value || '').replace(/\s+/g, ' ').trim();
+            const normalizedCurrent =
+                typeof styleInfo.current === 'string'
+                    ? styleInfo.current.replace(/\s+/g, ' ').trim()
+                    : '';
+            const normalizedSuggested =
+                typeof styleInfo.suggested === 'string'
+                    ? styleInfo.suggested.replace(/\s+/g, ' ').trim()
+                    : '';
+
+            if (
+                (normalizedCurrent && normalizedValue !== normalizedCurrent) ||
+                (!normalizedCurrent && normalizedSuggested && normalizedValue === normalizedSuggested)
+            ) {
+                return issues;
+            }
+
             const parts: string[] = [];
             if (typeof styleInfo.current === 'string') {
                 parts.push(`current: ${styleInfo.current}`);
@@ -570,7 +587,7 @@ export interface DiagnosticConfig {
 }
 
 export function getDiagnosticConfig(): DiagnosticConfig {
-    const cfg = vscode.workspace.getConfiguration('ai-assistant');
+    const cfg = vscode.workspace.getConfiguration('ai-localizer');
     const enabled = cfg.get<boolean>('i18n.diagnostics.enabled') ?? true;
     const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
 

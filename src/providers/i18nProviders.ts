@@ -37,7 +37,7 @@ export class I18nHoverProvider implements vscode.HoverProvider {
         token: vscode.CancellationToken,
     ): Promise<vscode.Hover | undefined> {
         try {
-            const config = vscode.workspace.getConfiguration('ai-assistant');
+            const config = vscode.workspace.getConfiguration('ai-localizer');
             const delayMs = config.get<number>('i18n.hoverDelayMs') ?? 1900;
 
             if (delayMs > 0) {
@@ -98,7 +98,7 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             };
             const encoded = encodeURIComponent(JSON.stringify(args));
             md.appendMarkdown(
-                `\n[Go to translation file](command:ai-assistant.i18n.gotoTranslationFromHover?${encoded})\n`,
+                `\n[Go to translation file](command:ai-localizer.i18n.gotoTranslationFromHover?${encoded})\n`,
             );
 
             md.isTrusted = true;
@@ -175,9 +175,9 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
                     'Configure i18n',
                 );
                 if (choice === 'Rescan Translations') {
-                    await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+                    await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
                 } else if (choice === 'Configure i18n') {
-                    await vscode.commands.executeCommand('ai-assistant.i18n.configureProject');
+                    await vscode.commands.executeCommand('ai-localizer.i18n.configureProject');
                 }
                 return undefined;
             }
@@ -519,7 +519,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 action.diagnostics = [diagnostic];
                 action.command = {
                     title,
-                    command: 'ai-assistant.i18n.applyUntranslatedQuickFix',
+                    command: 'ai-localizer.i18n.applyUntranslatedQuickFix',
                     arguments: [document.uri, key, uniqueLocales],
                 };
                 actions.push(action);
@@ -533,7 +533,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 action.diagnostics = [diagnostic];
                 action.command = {
                     title,
-                    command: 'ai-assistant.i18n.applyStyleSuggestionQuickFix',
+                    command: 'ai-localizer.i18n.applyStyleSuggestionQuickFix',
                     arguments: [document.uri, key, locale, suggested],
                 };
                 actions.push(action);

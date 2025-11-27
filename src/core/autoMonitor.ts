@@ -78,7 +78,7 @@ export class AutoMonitor {
     }
 
     private async handleFileSave(document: vscode.TextDocument): Promise<void> {
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoMonitorEnabled = config.get<boolean>('i18n.autoMonitor', true);
         
         if (!autoMonitorEnabled) {
@@ -122,7 +122,7 @@ export class AutoMonitor {
     }
 
     private async handleGitStateChange(repo: any): Promise<void> {
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoMonitorEnabled = config.get<boolean>('i18n.autoMonitor', true);
         
         if (!autoMonitorEnabled) {
@@ -247,7 +247,7 @@ export class AutoMonitor {
                     'Configure Now'
                 ).then(choice => {
                     if (choice === 'Configure Now') {
-                        vscode.commands.executeCommand('ai-assistant.i18n.configureProject');
+                        vscode.commands.executeCommand('ai-localizer.i18n.configureProject');
                     }
                 });
                 state.pendingFiles.clear();
@@ -255,7 +255,7 @@ export class AutoMonitor {
             }
 
             // Auto-run extraction and rewrite
-            const config = vscode.workspace.getConfiguration('ai-assistant');
+            const config = vscode.workspace.getConfiguration('ai-localizer');
             const autoExtract = config.get<boolean>('i18n.autoExtract', true);
             const autoRewrite = config.get<boolean>('i18n.autoRewrite', true);
 

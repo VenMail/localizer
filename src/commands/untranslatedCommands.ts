@@ -249,11 +249,11 @@ export class UntranslatedCommands {
                     'Dismiss',
                 );
                 if (choice === 'Open OpenAI API Key Settings') {
-                    await vscode.commands.executeCommand('ai-assistant.setOpenAiApiKeySecret');
+                    await vscode.commands.executeCommand('ai-localizer.setOpenAiApiKeySecret');
                 }
                 // No AI translations, but placeholders were applied already; reindex and rescan
                 await this.i18nIndex.ensureInitialized(true);
-                await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
                 return;
             }
 
@@ -262,7 +262,7 @@ export class UntranslatedCommands {
             }
 
             await this.i18nIndex.ensureInitialized(true);
-            await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+            await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
 
             vscode.window.showInformationMessage(
                 `AI i18n: Applied AI translations for ${key} in ${translations.size} locale(s).`,
@@ -301,7 +301,7 @@ export class UntranslatedCommands {
             // Incrementally update index for just this file
             await this.i18nIndex.updateFile(documentUri);
             // Refresh diagnostics only for this file, focusing on the changed key
-            await vscode.commands.executeCommand('ai-assistant.i18n.refreshFileDiagnostics', documentUri, [key]);
+            await vscode.commands.executeCommand('ai-localizer.i18n.refreshFileDiagnostics', documentUri, [key]);
 
             vscode.window.showInformationMessage(
                 `AI i18n: Applied style suggestion for ${key} in ${locale}.`,
@@ -378,7 +378,7 @@ export class UntranslatedCommands {
             await this.setMultipleInFile(targetUri, updatesMap);
             // Incremental reindex and diagnostics refresh for this file only
             await this.i18nIndex.updateFile(targetUri);
-            await vscode.commands.executeCommand('ai-assistant.i18n.refreshFileDiagnostics', targetUri, Array.from(updatesMap.keys()));
+            await vscode.commands.executeCommand('ai-localizer.i18n.refreshFileDiagnostics', targetUri, Array.from(updatesMap.keys()));
 
             vscode.window.showInformationMessage(
                 `AI i18n: Applied ${unique.length} style suggestion(s) for this file.`,

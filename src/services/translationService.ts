@@ -19,7 +19,7 @@ export class TranslationService {
         if (secret) {
             return secret;
         }
-        const cfg = vscode.workspace.getConfiguration('ai-assistant');
+        const cfg = vscode.workspace.getConfiguration('ai-localizer');
         const fromConfig = (cfg.get<string>('openaiApiKey') || '').trim();
         return fromConfig;
     }
@@ -47,7 +47,7 @@ export class TranslationService {
             return result;
         }
 
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoTranslate = config.get<boolean>('i18n.autoTranslate');
 
         if (!autoTranslate && !force) {
@@ -116,7 +116,7 @@ export class TranslationService {
             throw new Error('OpenAI API key is not configured');
         }
 
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const model = config.get<string>('openaiModel') || 'gpt-4o-mini';
         const client = new OpenAI({ apiKey });
 
@@ -181,7 +181,7 @@ export class TranslationService {
             throw new Error('OpenAI API key is not configured');
         }
 
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const model = config.get<string>('openaiModel') || 'gpt-4o-mini';
         const client = new OpenAI({ apiKey });
 

@@ -75,7 +75,7 @@ export class ConvertSelectionCommand {
         }
 
         // Get locales
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
         
         const projectConfig = await this.projectConfigService.readConfig(folder);
@@ -584,7 +584,7 @@ export class ConvertSelectionCommand {
         const existing = this.untranslatedDiagnostics.get(document.uri) || [];
         const message = `AI i18n: Missing translations for ${key} in locales: ${missingLocales.join(", ")}`;
 
-        const cfg = vscode.workspace.getConfiguration('ai-assistant');
+        const cfg = vscode.workspace.getConfiguration('ai-localizer');
         const setting = cfg.get<string>('i18n.diagnostics.missingLocaleSeverity') || 'warning';
         const severity = this.mapSeverityFromSetting(setting);
 
@@ -718,7 +718,7 @@ export class ConvertSelectionCommand {
      */
     private async runSyncIfConfigured(folder: vscode.WorkspaceFolder): Promise<void> {
         try {
-            const cfg = vscode.workspace.getConfiguration('ai-assistant');
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
             const autoSync = cfg.get<boolean>('i18n.autoSync');
             if (autoSync === false) {
                 return;
@@ -730,7 +730,7 @@ export class ConvertSelectionCommand {
                 return;
             }
 
-            await vscode.commands.executeCommand('ai-assistant.i18n.runSyncScript');
+            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
         } catch (err) {
             console.error('AI i18n: Failed to run i18n:sync after applying translations:', err);
         }

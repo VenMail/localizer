@@ -1,8 +1,8 @@
 {
-  "name": "ai-assistant",
+  "name": "ai-localizer",
   "displayName": "Localizer – AI i18n for React, Vue & Laravel",
   "description": "AI-assisted localization for React, Vue/Nuxt, and Laravel projects. Extract strings, manage locale JSON, and scaffold translation providers and hooks automatically.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "venmail",
   "repository": {
     "type": "git",
@@ -15,22 +15,23 @@
     "Programming Languages",
     "Other"
   ],
+  "icon": "resources/icons/ai-localizer-128.png",
   "activationEvents": [
-    "onCommand:ai-assistant.setOpenAiApiKeySecret",
-    "onCommand:ai-assistant.i18n.rescan",
-    "onCommand:ai-assistant.i18n.configureProject",
-    "onCommand:ai-assistant.i18n.openRootApp",
-    "onCommand:ai-assistant.i18n.copyLanguageSwitcher",
-    "onCommand:ai-assistant.i18n.convertSelectionToKey",
-    "onCommand:ai-assistant.i18n.runExtractScript",
-    "onCommand:ai-assistant.i18n.runRewriteScript",
-    "onCommand:ai-assistant.i18n.runSyncScript",
-    "onCommand:ai-assistant.i18n.runFixUntranslatedScript",
-    "onCommand:ai-assistant.i18n.runRewriteBladeScript",
-    "onCommand:ai-assistant.i18n.openUntranslatedReport",
-    "onCommand:ai-assistant.i18n.applyUntranslatedAiFixes",
-    "onCommand:ai-assistant.i18n.applyStyleSuggestionQuickFix",
-    "onCommand:ai-assistant.i18n.applyAllStyleSuggestionsInFile",
+    "onCommand:ai-localizer.setOpenAiApiKeySecret",
+    "onCommand:ai-localizer.i18n.rescan",
+    "onCommand:ai-localizer.i18n.configureProject",
+    "onCommand:ai-localizer.i18n.openRootApp",
+    "onCommand:ai-localizer.i18n.copyLanguageSwitcher",
+    "onCommand:ai-localizer.i18n.convertSelectionToKey",
+    "onCommand:ai-localizer.i18n.runExtractScript",
+    "onCommand:ai-localizer.i18n.runRewriteScript",
+    "onCommand:ai-localizer.i18n.runSyncScript",
+    "onCommand:ai-localizer.i18n.runFixUntranslatedScript",
+    "onCommand:ai-localizer.i18n.runRewriteBladeScript",
+    "onCommand:ai-localizer.i18n.openUntranslatedReport",
+    "onCommand:ai-localizer.i18n.applyUntranslatedAiFixes",
+    "onCommand:ai-localizer.i18n.applyStyleSuggestionQuickFix",
+    "onCommand:ai-localizer.i18n.applyAllStyleSuggestionsInFile",
     "onLanguage:javascript",
     "onLanguage:typescript",
     "onLanguage:javascriptreact",
@@ -50,75 +51,75 @@
     "commands": [
       
       {
-        "command": "ai-assistant.setOpenAiApiKeySecret",
+        "command": "ai-localizer.setOpenAiApiKeySecret",
         "title": "AI i18n: Set OpenAI API Key (Secure)"
       },
       {
-        "command": "ai-assistant.i18n.rescan",
+        "command": "ai-localizer.i18n.rescan",
         "title": "AI i18n: Rescan Translations"
       },
       {
-        "command": "ai-assistant.i18n.configureProject",
+        "command": "ai-localizer.i18n.configureProject",
         "title": "AI i18n: Configure Project i18n"
       },
       {
-        "command": "ai-assistant.i18n.openRootApp",
+        "command": "ai-localizer.i18n.openRootApp",
         "title": "AI i18n: Open Root App Entry"
       },
       {
-        "command": "ai-assistant.i18n.copyLanguageSwitcher",
+        "command": "ai-localizer.i18n.copyLanguageSwitcher",
         "title": "AI i18n: Copy React Language Switcher Component"
       },
       {
-        "command": "ai-assistant.i18n.convertSelectionToKey",
+        "command": "ai-localizer.i18n.convertSelectionToKey",
         "title": "AI i18n: Apply translations to selection"
       },
       {
-        "command": "ai-assistant.i18n.runExtractScript",
+        "command": "ai-localizer.i18n.runExtractScript",
         "title": "AI i18n: Run Extract Script"
       },
       {
-        "command": "ai-assistant.i18n.runRewriteScript",
+        "command": "ai-localizer.i18n.runRewriteScript",
         "title": "AI i18n: Run Rewrite Script"
       },
       {
-        "command": "ai-assistant.i18n.runSyncScript",
+        "command": "ai-localizer.i18n.runSyncScript",
         "title": "AI i18n: Run Sync Script"
       },
       {
-        "command": "ai-assistant.i18n.runFixUntranslatedScript",
+        "command": "ai-localizer.i18n.runFixUntranslatedScript",
         "title": "AI i18n: Run Fix Untranslated Script"
       },
       {
-        "command": "ai-assistant.i18n.runRewriteBladeScript",
+        "command": "ai-localizer.i18n.runRewriteBladeScript",
         "title": "AI i18n: Run Blade Rewrite Script"
       },
       {
-        "command": "ai-assistant.i18n.openUntranslatedReport",
+        "command": "ai-localizer.i18n.openUntranslatedReport",
         "title": "AI i18n: Open Untranslated Report"
       },
       {
-        "command": "ai-assistant.i18n.applyUntranslatedAiFixes",
+        "command": "ai-localizer.i18n.applyUntranslatedAiFixes",
         "title": "AI i18n: Apply AI Fixes from Untranslated Report"
       },
       {
-        "command": "ai-assistant.i18n.applyUntranslatedQuickFix",
+        "command": "ai-localizer.i18n.applyUntranslatedQuickFix",
         "title": "AI i18n: Apply AI Quick Fix for Untranslated Key"
       },
       {
-        "command": "ai-assistant.i18n.applyStyleSuggestionQuickFix",
+        "command": "ai-localizer.i18n.applyStyleSuggestionQuickFix",
         "title": "AI i18n: Apply Suggested Style for Key"
       },
       {
-        "command": "ai-assistant.i18n.applyAllStyleSuggestionsInFile",
+        "command": "ai-localizer.i18n.applyAllStyleSuggestionsInFile",
         "title": "AI i18n: Apply All Style Suggestions in Current File"
       },
       {
-        "command": "ai-assistant.i18n.gotoTranslationFromHover",
+        "command": "ai-localizer.i18n.gotoTranslationFromHover",
         "title": "AI i18n: Go to Translation from Hover"
       },
       {
-        "command": "ai-assistant.i18n.showStatus",
+        "command": "ai-localizer.i18n.showStatus",
         "title": "AI i18n: Show Status & Settings"
       }
     ],
@@ -126,32 +127,32 @@
     "menus": {
       "editor/context": [
         {
-          "command": "ai-assistant.i18n.convertSelectionToKey",
+          "command": "ai-localizer.i18n.convertSelectionToKey",
           "group": "ai@1",
           "when": "editorHasSelection && (editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue)"
         },
         {
-          "command": "ai-assistant.i18n.runExtractScript",
+          "command": "ai-localizer.i18n.runExtractScript",
           "group": "ai@2",
           "when": "editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue || editorLangId == php || editorLangId == blade"
         },
         {
-          "command": "ai-assistant.i18n.runRewriteScript",
+          "command": "ai-localizer.i18n.runRewriteScript",
           "group": "ai@3",
           "when": "editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue"
         },
         {
-          "command": "ai-assistant.i18n.runRewriteBladeScript",
+          "command": "ai-localizer.i18n.runRewriteBladeScript",
           "group": "ai@3",
           "when": "editorLangId == blade || editorLangId == php"
         },
         {
-          "command": "ai-assistant.i18n.showStatus",
+          "command": "ai-localizer.i18n.showStatus",
           "group": "ai@9"
         }
         ,
         {
-          "command": "ai-assistant.i18n.applyAllStyleSuggestionsInFile",
+          "command": "ai-localizer.i18n.applyAllStyleSuggestionsInFile",
           "group": "ai@4",
           "when": "editorLangId == json || editorLangId == jsonc"
         }
@@ -160,17 +161,17 @@
     "configuration": {
       "title": "Localizer",
       "properties": {
-        "ai-assistant.i18n.enabled": {
+        "ai-localizer.i18n.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Enable React i18n IntelliSense (hover, go to definition, completions for translation keys)."
         },
-        "ai-assistant.i18n.defaultLocale": {
+        "ai-localizer.i18n.defaultLocale": {
           "type": "string",
           "default": "en",
           "description": "Default locale used for hover/definition and when multiple locales are present."
         },
-        "ai-assistant.i18n.localeGlobs": {
+        "ai-localizer.i18n.localeGlobs": {
           "type": "array",
           "items": {
             "type": "string"
@@ -184,58 +185,58 @@
           ],
           "description": "Glob patterns (relative to each workspace folder) used to discover locale JSON files."
         },
-        "ai-assistant.i18n.autoTranslate": {
+        "ai-localizer.i18n.autoTranslate": {
           "type": "boolean",
           "default": false,
           "description": "When converting selections to keys, use AI to suggest translations for non-default locales."
         },
-        "ai-assistant.i18n.tImportPath": {
+        "ai-localizer.i18n.tImportPath": {
           "type": "string",
           "default": "@/i18n",
           "description": "Module path used when inserting `import { t } from '...'` for React i18n helpers."
         },
-        "ai-assistant.i18n.hoverDelayMs": {
+        "ai-localizer.i18n.hoverDelayMs": {
           "type": "number",
           "default": 2000,
           "description": "Delay in milliseconds before showing i18n hover tooltips. Increase to reduce interference while navigating with keyboard/mouse. Set to 0 to disable the delay."
         },
-        "ai-assistant.openaiApiKey": {
+        "ai-localizer.openaiApiKey": {
           "type": "string",
           "default": "",
           "description": "OpenAI API key used for AI-powered translations. Store this in your user or workspace settings; do not commit it to source control."
         },
-        "ai-assistant.openaiModel": {
+        "ai-localizer.openaiModel": {
           "type": "string",
           "default": "gpt-4o-mini",
           "description": "OpenAI model ID to use for AI translations (for example, gpt-4o-mini)."
         },
         
-        "ai-assistant.i18n.autoMonitor": {
+        "ai-localizer.i18n.autoMonitor": {
           "type": "boolean",
           "default": true,
           "description": "Automatically monitor files for translation-eligible content and trigger extraction/rewrite when files are committed to git."
         },
-        "ai-assistant.i18n.autoExtract": {
+        "ai-localizer.i18n.autoExtract": {
           "type": "boolean",
           "default": true,
           "description": "Automatically run extraction script when new translatable content is detected and committed."
         },
-        "ai-assistant.i18n.autoRewrite": {
+        "ai-localizer.i18n.autoRewrite": {
           "type": "boolean",
           "default": true,
           "description": "Automatically run rewrite script after extraction to replace hard-coded strings with translation keys."
         },
-        "ai-assistant.i18n.autoSync": {
+        "ai-localizer.i18n.autoSync": {
           "type": "boolean",
           "default": true,
           "description": "Automatically run the i18n:sync script after applying translations so locale JSON files stay in sync and can reuse known translations where possible."
         },
-        "ai-assistant.i18n.diagnostics.enabled": {
+        "ai-localizer.i18n.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Enable Problems panel diagnostics for missing or untranslated locale strings."
         },
-        "ai-assistant.i18n.diagnostics.missingLocaleSeverity": {
+        "ai-localizer.i18n.diagnostics.missingLocaleSeverity": {
           "type": "string",
           "enum": [
             "error",
@@ -246,12 +247,12 @@
           "default": "warning",
           "description": "Severity level used when a locale is missing a translation for a key."
         },
-        "ai-assistant.i18n.diagnostics.untranslatedSameAsDefaultEnabled": {
+        "ai-localizer.i18n.diagnostics.untranslatedSameAsDefaultEnabled": {
           "type": "boolean",
           "default": true,
           "description": "Detect locales where the translation value is identical to the default locale (likely untranslated)."
         },
-        "ai-assistant.i18n.diagnostics.untranslatedSameAsDefaultSeverity": {
+        "ai-localizer.i18n.diagnostics.untranslatedSameAsDefaultSeverity": {
           "type": "string",
           "enum": [
             "error",
@@ -262,7 +263,7 @@
           "default": "warning",
           "description": "Severity level used when a locale value is identical to the default locale value."
         },
-        "ai-assistant.i18n.heuristics.abbreviationsCsv": {
+        "ai-localizer.i18n.heuristics.abbreviationsCsv": {
           "type": "string",
           "default": "webdav, imap, smtp, pop3, ftp, sftp",
           "description": "Comma-separated list of well-known protocol or technical abbreviations that should be considered non-translatable when matching exact tokens (used to filter 'untranslated (same as default)' warnings)."
@@ -277,6 +278,8 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "package": "vsce package",
+    "build:icon": "npx --yes svgexport resources/icons/ai-localizer.svg resources/icons/ai-localizer-128.png 128:128",
+    "build:icons": "npm run build:icon && npx --yes svgexport resources/icons/ai-localizer.svg resources/icons/ai-localizer-256.png 256:256",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

@@ -9,7 +9,7 @@ export class StatusCommand {
     constructor(private statusBar: I18nStatusBar, private projectConfigService: ProjectConfigService) {}
 
     async execute(): Promise<void> {
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoMonitor = config.get<boolean>('i18n.autoMonitor', true);
         const autoExtract = config.get<boolean>('i18n.autoExtract', true);
         const autoRewrite = config.get<boolean>('i18n.autoRewrite', true);
@@ -120,22 +120,22 @@ export class StatusCommand {
                 );
                 break;
             case 'configure':
-                await vscode.commands.executeCommand('ai-assistant.i18n.configureProject');
+                await vscode.commands.executeCommand('ai-localizer.i18n.configureProject');
                 break;
             case 'rescan':
-                await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
                 break;
             case 'runExtract':
-                await vscode.commands.executeCommand('ai-assistant.i18n.runExtractScript');
+                await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');
                 break;
             case 'runRewrite':
-                await vscode.commands.executeCommand('ai-assistant.i18n.runRewriteScript');
+                await vscode.commands.executeCommand('ai-localizer.i18n.runRewriteScript');
                 break;
             case 'runRewriteBlade':
-                await vscode.commands.executeCommand('ai-assistant.i18n.runRewriteBladeScript');
+                await vscode.commands.executeCommand('ai-localizer.i18n.runRewriteBladeScript');
                 break;
             case 'convertSelection':
-                await vscode.commands.executeCommand('ai-assistant.i18n.convertSelectionToKey');
+                await vscode.commands.executeCommand('ai-localizer.i18n.convertSelectionToKey');
                 break;
         }
     }

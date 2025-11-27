@@ -10,7 +10,7 @@ export class I18nStatusBar {
             vscode.StatusBarAlignment.Right,
             100
         );
-        this.statusBarItem.command = 'ai-assistant.i18n.showStatus';
+        this.statusBarItem.command = 'ai-localizer.i18n.showStatus';
         this.updateDisplay();
     }
 

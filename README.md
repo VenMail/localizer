@@ -74,7 +74,7 @@ This opens a prompt where you can ask questions about your code.
 ### Enable i18n IntelliSense
 
 By default, the extension indexes translation JSON files matching
-`ai-assistant.i18n.localeGlobs` and provides hover/definition/completions for
+`ai-localizer.i18n.localeGlobs` and provides hover/definition/completions for
 keys in the following languages:
 
 - `javascript`, `typescript`, `javascriptreact`, `typescriptreact`
@@ -83,13 +83,13 @@ keys in the following languages:
 
 You can rescan keys at any time via the command:
 
-- **AI i18n: Rescan Translations** (`ai-assistant.i18n.rescan`)
+- **AI i18n: Rescan Translations** (`ai-localizer.i18n.rescan`)
 
 ### Configure a project for i18n scripts
 
 Run the command:
 
-- **AI i18n: Configure Project i18n** (`ai-assistant.i18n.configureProject`)
+- **AI i18n: Configure Project i18n** (`ai-localizer.i18n.configureProject`)
 
 This will:
 
@@ -164,37 +164,37 @@ an example `LanguageSwitcher` and React i18n runtime/hooks.
 
 ## Settings
 
-The extension reads these settings under `ai-assistant`:
+The extension reads these settings under `ai-localizer`:
 
 ### AI Translation Settings
-- `ai-assistant.openaiApiKey` – OpenAI API key used for AI-powered translations.
-- `ai-assistant.openaiModel` – model ID (e.g. `gpt-4o-mini`).
-- `ai-assistant.i18n.autoTranslate` – when `true`, automatically calls OpenAI
+- `ai-localizer.openaiApiKey` – OpenAI API key used for AI-powered translations.
+- `ai-localizer.openaiModel` – model ID (e.g. `gpt-4o-mini`).
+- `ai-localizer.i18n.autoTranslate` – when `true`, automatically calls OpenAI
   to suggest translations for non-default locales when converting a selection
   to a key.
 
 ### Auto-Monitoring Settings (NEW!)
-- `ai-assistant.i18n.autoMonitor` – Enable automatic monitoring of files for translatable content (default: `true`).
-- `ai-assistant.i18n.autoExtract` – Automatically run extraction when new content is detected and committed (default: `true`).
-- `ai-assistant.i18n.autoRewrite` – Automatically run rewrite after extraction (default: `true`).
+- `ai-localizer.i18n.autoMonitor` – Enable automatic monitoring of files for translatable content (default: `true`).
+- `ai-localizer.i18n.autoExtract` – Automatically run extraction when new content is detected and committed (default: `true`).
+- `ai-localizer.i18n.autoRewrite` – Automatically run rewrite after extraction (default: `true`).
 
 ### Other Settings
-- `ai-assistant.i18n.defaultLocale` – Default locale (default: `en`).
-- `ai-assistant.i18n.localeGlobs` – Glob patterns for locale JSON files.
-- `ai-assistant.i18n.tImportPath` – Import path for translation helper (default: `@/i18n`).
+- `ai-localizer.i18n.defaultLocale` – Default locale (default: `en`).
+- `ai-localizer.i18n.localeGlobs` – Glob patterns for locale JSON files.
+- `ai-localizer.i18n.tImportPath` – Import path for translation helper (default: `@/i18n`).
 
 Example (user or workspace settings):
 
 ```jsonc
 {
-  "ai-assistant.openaiApiKey": "sk-...",
-  "ai-assistant.openaiModel": "gpt-4o-mini",
-  "ai-assistant.i18n.autoTranslate": true,
-  "ai-assistant.i18n.autoMonitor": true,
-  "ai-assistant.i18n.autoExtract": true,
-  "ai-assistant.i18n.autoRewrite": true,
-  "ai-assistant.i18n.defaultLocale": "en",
-  "ai-assistant.i18n.localeGlobs": [
+  "ai-localizer.openaiApiKey": "sk-...",
+  "ai-localizer.openaiModel": "gpt-4o-mini",
+  "ai-localizer.i18n.autoTranslate": true,
+  "ai-localizer.i18n.autoMonitor": true,
+  "ai-localizer.i18n.autoExtract": true,
+  "ai-localizer.i18n.autoRewrite": true,
+  "ai-localizer.i18n.defaultLocale": "en",
+  "ai-localizer.i18n.localeGlobs": [
     "resources/js/i18n/auto/**/*.json",
     "src/i18n/**/*.json"
   ]

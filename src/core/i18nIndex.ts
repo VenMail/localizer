@@ -34,7 +34,7 @@ export class I18nIndex {
         this.keyMap.clear();
         this.fileToKeys.clear();
 
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
         const enabled = config.get<boolean>('i18n.enabled');
         if (enabled === false) {
@@ -221,7 +221,7 @@ export class I18nIndex {
     }
 
     async updateFile(uri: vscode.Uri): Promise<void> {
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
 
         const fileKey = uri.toString();

@@ -40,7 +40,7 @@ export class AskAICommand {
         }
 
         // Try to forward to host AI chat
-        const config = vscode.workspace.getConfiguration('ai-assistant');
+        const config = vscode.workspace.getConfiguration('ai-localizer');
         const forwardCommand = (config.get<string>('askAI.forwardToCommand') || '').trim();
         
         if (forwardCommand) {
@@ -65,7 +65,7 @@ export class AskAICommand {
             const apiKey = await this.translationService.getApiKey();
             if (!apiKey) {
                 vscode.window.showInformationMessage(
-                    'Localizer: Configure ai-assistant.openaiApiKey in Settings to use Ask AI.',
+                    'Localizer: Configure ai-localizer.openaiApiKey in Settings to use Ask AI.',
                 );
                 return;
             }

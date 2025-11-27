@@ -19,7 +19,7 @@ This document is for contributors and maintainers working on the
 
    ```bash
    git clone <repo-url>
-   cd vscode-ai-assistant
+   cd vscode-ai-localizer
    npm install
    ```
 
@@ -37,7 +37,7 @@ This document is for contributors and maintainers working on the
 
 ## Running the Extension in VS Code
 
-1. Open the `vscode-ai-assistant` folder in VS Code.
+1. Open the `vscode-ai-localizer` folder in VS Code.
 2. Run **Debug: Start Debugging** (or press `F5`).
 3. A new **Extension Development Host** window will open with the extension loaded.
 4. In that window:
@@ -53,7 +53,7 @@ This document is for contributors and maintainers working on the
 You can build a `.vsix` package for installing the extension into
 VS Code or AI-first IDEs that support VS Code extensions (e.g. Windsurf, Cursor).
 
-From the `vscode-ai-assistant` directory:
+From the `vscode-ai-localizer` directory:
 
 ```bash
 npm install
@@ -61,7 +61,7 @@ npm run compile
 npm run package
 ```
 
-This generates a file like `ai-assistant-0.0.1.vsix` in the project root.
+This generates a file like `ai-localizer-0.0.1.vsix` in the project root.
 
 ### Installing the VSIX
 
@@ -69,7 +69,7 @@ In any VS Code–compatible editor:
 
 1. Open the Command Palette.
 2. Run **Extensions: Install from VSIX...**.
-3. Select the generated `ai-assistant-0.0.1.vsix` file.
+3. Select the generated `ai-localizer-0.0.1.vsix` file.
 4. Reload the window when prompted.
 
 ---
