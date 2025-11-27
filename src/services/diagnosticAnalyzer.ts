@@ -351,12 +351,16 @@ export class DiagnosticAnalyzer {
         let stripped = trimmed
             .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
             .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
-        stripped = stripped.replace(/[()\[\]{}.,:;'"!?\-_]/g, ' ');
+        stripped = stripped.replace(/[()\[\]{},.:;'"!?\-_]/g, ' ');
         stripped = stripped.replace(/\s+/g, ' ').trim();
         if (!stripped) {
             return true;
         }
         if (!/[A-Za-z]/.test(stripped)) {
+            return true;
+        }
+        const letters = stripped.replace(/[^A-Za-z]/g, '');
+        if (letters.length <= 1 && stripped.length <= 3) {
             return true;
         }
         return false;
@@ -369,37 +373,65 @@ export class DiagnosticAnalyzer {
             return true;
         }
         if (!normalized) return false;
+
+        // Bare domains/subdomains like "WordPress.com"
         if (!/\s/.test(normalized) && normalized.includes('.') && /^[A-Za-z0-9.-]+$/.test(normalized)) {
             return true;
         }
+
+        // UUID-like strings
         if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
             return true;
         }
+
+        // Complex CSS/utility token (single token with :, [], etc.)
         if (!/\s/.test(normalized) && /[:\[\]]/.test(normalized) && /^[A-Za-z0-9:._\-\[\]]+$/.test(normalized)) {
             return true;
         }
+
+        // Obvious JS-ish code with common keywords
         if (/[{};]/.test(normalized) && /\b(const|let|var|function|return|if|else|for|while|class|async|await)\b/.test(normalized)) {
             return true;
         }
-        // obvious URLs
-        if (/^https?:\/\//i.test(normalized) || /^www\./i.test(normalized)) return true;
-        // example tokens
-        if (/\bexample\b/i.test(normalized)) return true;
-        // filesystem-like paths
-        if (/^\\\\[^\s]+/.test(normalized) || /^\/[\w/.-]+$/.test(normalized) || /^[A-Za-z]:[\\/][^\s]*$/.test(normalized)) return true;
-        // single character
-        if (normalized.length === 1) return true;
-        // emails on example/acme
-        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
-            const lower = normalized.toLowerCase();
-            if (lower.includes('example.') || lower.includes('acme.')) return true;
+
+        // Domain + optional port and qualifier, e.g. "imap.gmail.com:993 (SSL)"
+        if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:\d+)?(\s*\([A-Za-z0-9\s]+\))?$/.test(normalized)) {
+            return true;
         }
+
+        // Analytics / object-literal style code snippets (e.g. gtag(... { 'send_to': ... }); )
+        if (
+            normalized.includes('gtag(') ||
+            (/[{}]/.test(normalized) && /['"][^'"]+['"]\s*:/.test(normalized))
+        ) {
+            return true;
+        }
+
+        // Obvious URLs
+        if (/^https?:\/\//i.test(normalized) || /^www\./i.test(normalized)) return true;
+
+        // Example tokens
+        if (/\bexample\b/i.test(normalized)) return true;
+
+        // Filesystem-like paths
+        if (/^\\\\[^\s]+/.test(normalized) || /^\/[\w/.-]+$/.test(normalized) || /^[A-Za-z]:[\\/][^\s]*$/.test(normalized)) return true;
+
+        // Single character
+        if (normalized.length === 1) return true;
+
+        // Emails on example/acme
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+            const lowerEmail = normalized.toLowerCase();
+            if (lowerEmail.includes('example.') || lowerEmail.includes('acme.')) return true;
+        }
+
         // id-like tokens (mixed alnum, no spaces)
         const noSpace = !/\s/.test(normalized);
         const hasLetter = /[A-Za-z]/.test(normalized);
         const hasDigit = /\d/.test(normalized);
         if (noSpace && hasLetter && hasDigit && normalized.length >= 6 && normalized.length <= 64) return true;
-        // protocol-like tokens and well-known abbreviations (configurable)
+
+        // Protocol-like tokens and well-known abbreviations (configurable)
         const lower = normalized.toLowerCase();
         try {
             const cfg = vscode.workspace.getConfiguration('ai-localizer');
@@ -412,9 +444,11 @@ export class DiagnosticAnalyzer {
         } catch {
             // ignore config read errors
         }
-        // all-caps short codes
+
+        // All-caps short codes
         const alphaNum = normalized.replace(/[^A-Za-z0-9]/g, '');
         if (alphaNum && alphaNum.length <= 4 && alphaNum.toUpperCase() === alphaNum) return true;
+
         return false;
     }
 
@@ -460,26 +494,6 @@ export class DiagnosticAnalyzer {
         return sameCount >= requiredSame;
     }
 
-    /**
-     * Clear cached diagnostics for a file.
-     */
-    clearFile(uri: vscode.Uri): void {
-        const fileKey = uri.toString();
-        this.diagnosticsByFile.delete(fileKey);
-        this.fileTextCache.delete(fileKey);
-    }
-
-    /**
-     * Clear all cached diagnostics.
-     */
-    clearAll(): void {
-        this.diagnosticsByFile.clear();
-        this.fileTextCache.clear();
-    }
-
-    /**
-     * Analyze a single key for a specific locale and return issues.
-     */
     private analyzeKeyForLocale(
         key: string,
         locale: string,

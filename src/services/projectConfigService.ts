@@ -112,6 +112,8 @@ export class ProjectConfigService {
             'i18n:sync': 'node ./scripts/sync-i18n.js',
             'i18n:fix-untranslated': 'node ./scripts/fix-untranslated.js',
             'i18n:rewrite-blade': 'node ./scripts/rewrite-i18n-blade.js',
+            'i18n:cleanup-unused': 'node ./scripts/cleanup-i18n-unused.js',
+            'i18n:restore-invalid': 'node ./scripts/restore-i18n-invalid.js',
         };
 
         await this.updateConfig(folder, { scripts });

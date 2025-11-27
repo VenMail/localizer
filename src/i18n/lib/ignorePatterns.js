@@ -63,6 +63,16 @@ function loadIgnorePatterns(projectRoot) {
   }
 }
 
+function getIgnorePatterns(projectRoot) {
+  if (projectRoot) {
+    return loadIgnorePatterns(projectRoot);
+  }
+  if (cachedPatterns !== null) {
+    return cachedPatterns;
+  }
+  return loadIgnorePatterns(process.cwd());
+}
+
 /**
  * Check if attribute should be ignored
  */
@@ -84,6 +94,8 @@ function isPlaceholderOnlyText(text) {
   stripped = stripped.replace(/\s+/g, ' ').trim();
   if (!stripped) return true;
   if (!/[A-Za-z]/.test(stripped)) return true;
+  const letters = stripped.replace(/[^A-Za-z]/g, '');
+  if (letters.length <= 1 && stripped.length <= 3) return true;
   return false;
 }
 
@@ -152,6 +164,7 @@ function shouldTranslateText(text, patterns) {
 
 module.exports = {
   loadIgnorePatterns,
+  getIgnorePatterns,
   shouldIgnoreAttribute,
   isNonTranslatableText,
   shouldTranslateText,

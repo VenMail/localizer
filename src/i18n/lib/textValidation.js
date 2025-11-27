@@ -224,13 +224,47 @@ function isTranslatableText(text) {
     return false;
   }
 
+  // Normalize whitespace for subsequent heuristics
+  const normalized = trimmed.replace(/\s+/g, ' ');
+
+  // Domain + optional port and qualifier, e.g. "imap.gmail.com:993 (SSL)"
+  if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:\d+)?(\s*\([A-Za-z0-9\s]+\))?$/.test(normalized)) {
+    return false;
+  }
+
+  // Strings that are overwhelmingly CSS/utility classes plus placeholders
+  const words = normalized.split(/\s+/);
+  const nonPlaceholderWords = words.filter((w) => !/^\{[^}]+\}$/.test(w));
+  if (nonPlaceholderWords.length > 0) {
+    const cssishWords = nonPlaceholderWords.filter(
+      (w) => /[-:]/.test(w) && /^[A-Za-z0-9:._\-\[\]]+$/.test(w),
+    );
+
+    // If almost all non-placeholder words look like CSS/utility tokens, treat as non-translatable
+    if (
+      cssishWords.length >= 2 &&
+      cssishWords.length >= nonPlaceholderWords.length - 1
+    ) {
+      return false;
+    }
+
+    // Slug/utility patterns like "w-full {value1}" (single hyphenated token plus placeholders)
+    if (
+      nonPlaceholderWords.length === 1 &&
+      cssishWords.length === 1 &&
+      nonPlaceholderWords[0].includes('-')
+    ) {
+      return false;
+    }
+  }
+
   // Apply English phonetic pattern validation
-  if (!containsEnglishWords(trimmed)) {
+  if (!containsEnglishWords(normalized)) {
     return false;
   }
 
   // Prefer strings with multiple words or sentence structure
-  const wordCount = trimmed.split(/\s+/).length;
+  const wordCount = words.length;
   if (wordCount === 1) {
     // Single word: must be capitalized or have mixed case to be considered translatable
     const firstChar = trimmed[0];
@@ -241,7 +275,6 @@ function isTranslatableText(text) {
 
   // If it has spaces, ensure it's not just a list of CSS classes or technical tokens
   if (wordCount > 1) {
-    const words = trimmed.split(/\s+/);
     // If all words contain hyphens, likely CSS classes
     if (words.every(w => w.includes('-'))) {
       return false;

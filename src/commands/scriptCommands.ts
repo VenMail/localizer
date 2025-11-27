@@ -23,4 +23,12 @@ export class ScriptCommands {
     async runRewriteBlade(): Promise<void> {
         await runI18nScript('i18n:rewrite-blade');
     }
+
+    async runCleanupUnused(): Promise<void> {
+        await runI18nScript('i18n:cleanup-unused');
+    }
+
+    async runRestoreInvalid(): Promise<void> {
+        await runI18nScript('i18n:restore-invalid');
+    }
 }

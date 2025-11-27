@@ -109,6 +109,12 @@ export class CommandRegistry {
             vscode.commands.registerCommand('ai-localizer.i18n.runRewriteBladeScript', () =>
                 scriptCmds.runRewriteBlade(),
             ),
+            vscode.commands.registerCommand('ai-localizer.i18n.runCleanupUnusedScript', () =>
+                scriptCmds.runCleanupUnused(),
+            ),
+            vscode.commands.registerCommand('ai-localizer.i18n.runRestoreInvalidScript', () =>
+                scriptCmds.runRestoreInvalid(),
+            ),
         );
 
         // Untranslated commands

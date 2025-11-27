@@ -15,6 +15,21 @@ const ignorePatternsPath = path.resolve(projectRoot, 'scripts', 'i18n-ignore-pat
 // Initialize ignore patterns from shared utility
 getIgnorePatterns(projectRoot);
 
+function isPlaceholderOnlyText(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return false;
+  let stripped = trimmed
+    .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
+    .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
+  stripped = stripped.replace(/[\(\)\[\]\{\},.:;'"!?!\-_]/g, ' ');
+  stripped = stripped.replace(/\s+/g, ' ').trim();
+  if (!stripped) return true;
+  if (!/[A-Za-z]/.test(stripped)) return true;
+  const letters = stripped.replace(/[^A-Za-z]/g, '');
+  if (letters.length <= 1 && stripped.length <= 3) return true;
+  return false;
+}
+
 function addExactIgnorePattern(value) {
   if (!value) return;
   const normalized = String(value).replace(/\s+/g, ' ').trim();
@@ -150,6 +165,10 @@ function isNonTranslatableExample(text) {
       }
     }
   }
+  if (isPlaceholderOnlyText(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
   if (!/\s/.test(normalized) && normalized.includes('.') && /^[A-Za-z0-9.-]+$/.test(normalized)) {
     addExactIgnorePattern(normalized);
     return true;
@@ -163,6 +182,46 @@ function isNonTranslatableExample(text) {
     return true;
   }
   if (/[{};]/.test(normalized) && /\b(const|let|var|function|return|if|else|for|while|class|async|await)\b/.test(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
+  // Domain + optional port and qualifier, e.g. "imap.gmail.com:993 (SSL)"
+  if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:\d+)?(\s*\([A-Za-z0-9\s]+\))?$/.test(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
+  // Strings that are overwhelmingly CSS/utility classes plus placeholders
+  {
+    const words = normalized.split(/\s+/);
+    const nonPlaceholderWords = words.filter((w) => !/^\{[^}]+\}$/.test(w));
+    if (nonPlaceholderWords.length > 0) {
+      const cssishWords = nonPlaceholderWords.filter(
+        (w) => /[-:]/.test(w) && /^[A-Za-z0-9:._\-\[\]]+$/.test(w),
+      );
+
+      if (
+        cssishWords.length >= 2 &&
+        cssishWords.length >= nonPlaceholderWords.length - 1
+      ) {
+        addExactIgnorePattern(normalized);
+        return true;
+      }
+
+      if (
+        nonPlaceholderWords.length === 1 &&
+        cssishWords.length === 1 &&
+        nonPlaceholderWords[0].includes('-')
+      ) {
+        addExactIgnorePattern(normalized);
+        return true;
+      }
+    }
+  }
+  // Analytics / object-literal style code snippets (e.g. gtag(... { 'send_to': ... }); )
+  if (
+    normalized.includes('gtag(') ||
+    (/[{}]/.test(normalized) && /['"][^'"]+['"]\s*:/.test(normalized))
+  ) {
     addExactIgnorePattern(normalized);
     return true;
   }

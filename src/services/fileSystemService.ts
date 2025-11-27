@@ -42,6 +42,8 @@ export class FileSystemService {
             'sync-i18n.js',
             'fix-untranslated.js',
             'rewrite-i18n-blade.js',
+            'cleanup-i18n-unused.js',
+            'restore-i18n-invalid.js',
         ];
 
         // Map oxc script names to standard names in target project

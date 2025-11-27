@@ -28,9 +28,12 @@
     "onCommand:ai-localizer.i18n.runSyncScript",
     "onCommand:ai-localizer.i18n.runFixUntranslatedScript",
     "onCommand:ai-localizer.i18n.runRewriteBladeScript",
+    "onCommand:ai-localizer.i18n.runCleanupUnusedScript",
+    "onCommand:ai-localizer.i18n.runRestoreInvalidScript",
     "onCommand:ai-localizer.i18n.generateAutoIgnore",
     "onCommand:ai-localizer.i18n.openUntranslatedReport",
     "onCommand:ai-localizer.i18n.applyUntranslatedAiFixes",
+    "onCommand:ai-localizer.i18n.applyUntranslatedQuickFix",
     "onCommand:ai-localizer.i18n.applyStyleSuggestionQuickFix",
     "onCommand:ai-localizer.i18n.applyAllStyleSuggestionsInFile",
     "onLanguage:javascript",
@@ -94,6 +97,14 @@
       {
         "command": "ai-localizer.i18n.runRewriteBladeScript",
         "title": "AI i18n: Run Blade Rewrite Script"
+      },
+      {
+        "command": "ai-localizer.i18n.runCleanupUnusedScript",
+        "title": "AI i18n: Cleanup Unused Locale Keys"
+      },
+      {
+        "command": "ai-localizer.i18n.runRestoreInvalidScript",
+        "title": "AI i18n: Restore Invalid Extracted Keys"
       },
       {
         "command": "ai-localizer.i18n.generateAutoIgnore",
