@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { TextDecoder } from 'util';
-import { I18nIndex } from '../core/i18nIndex';
+import { I18nIndex, TranslationRecord } from '../core/i18nIndex';
 import { ProjectConfigService } from './projectConfigService';
 
 /**
@@ -102,6 +102,12 @@ export class DiagnosticAnalyzer {
             const defaultValue = hasDefaultValue ? (defaultValueRaw as string) : '';
             const defaultPlaceholders = hasDefaultValue ? this.extractPlaceholders(defaultValue) : new Set<string>();
 
+            const isConstantLikeAcrossLocales = this.isProbablyConstantAcrossLocales(
+                record,
+                defaultLocaleForKey,
+                defaultValue,
+            );
+
 
             this.log.appendLine(
                 `[DiagnosticAnalyzer] Checking key '${key}' (default='${defaultLocaleForKey}') in file '${uri.fsPath}' (fileLocale='${fileLocale}')`,
@@ -155,6 +161,7 @@ export class DiagnosticAnalyzer {
                     defaultValue,
                     defaultPlaceholders,
                     config,
+                    isConstantLikeAcrossLocales,
                 );
 
                 for (const issue of issues) {
@@ -297,6 +304,21 @@ export class DiagnosticAnalyzer {
             } catch {
                 // ignore missing/invalid files
             }
+            try {
+                const autoUri = vscode.Uri.joinPath(
+                    folder.uri,
+                    'scripts',
+                    '.i18n-auto-ignore.json',
+                );
+                const data = await vscode.workspace.fs.readFile(autoUri);
+                const raw = this.decoder.decode(data);
+                const json = JSON.parse(raw);
+                if (Array.isArray(json?.exact)) merged.exact!.push(...json.exact);
+                if (Array.isArray(json?.exactInsensitive)) merged.exactInsensitive!.push(...json.exactInsensitive);
+                if (Array.isArray(json?.contains)) merged.contains!.push(...json.contains);
+            } catch {
+                // ignore missing/invalid auto-ignore files
+            }
         }
         this.ignorePatterns = merged;
     }
@@ -321,10 +343,44 @@ export class DiagnosticAnalyzer {
         return false;
     }
 
+    private isPlaceholderOnlyText(text: string): boolean {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) {
+            return false;
+        }
+        let stripped = trimmed
+            .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
+            .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
+        stripped = stripped.replace(/[()\[\]{}.,:;'"!?\-_]/g, ' ');
+        stripped = stripped.replace(/\s+/g, ' ').trim();
+        if (!stripped) {
+            return true;
+        }
+        if (!/[A-Za-z]/.test(stripped)) {
+            return true;
+        }
+        return false;
+    }
+
     // Lightweight heuristics inspired by fix-untranslated.js isNonTranslatableExample
     private isProbablyNonTranslatable(text: string): boolean {
         const normalized = String(text || '').trim().replace(/\s+/g, ' ');
+        if (this.isPlaceholderOnlyText(normalized)) {
+            return true;
+        }
         if (!normalized) return false;
+        if (!/\s/.test(normalized) && normalized.includes('.') && /^[A-Za-z0-9.-]+$/.test(normalized)) {
+            return true;
+        }
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
+            return true;
+        }
+        if (!/\s/.test(normalized) && /[:\[\]]/.test(normalized) && /^[A-Za-z0-9:._\-\[\]]+$/.test(normalized)) {
+            return true;
+        }
+        if (/[{};]/.test(normalized) && /\b(const|let|var|function|return|if|else|for|while|class|async|await)\b/.test(normalized)) {
+            return true;
+        }
         // obvious URLs
         if (/^https?:\/\//i.test(normalized) || /^www\./i.test(normalized)) return true;
         // example tokens
@@ -362,6 +418,48 @@ export class DiagnosticAnalyzer {
         return false;
     }
 
+    private isProbablyConstantAcrossLocales(
+        record: TranslationRecord,
+        defaultLocale: string,
+        defaultValue: string,
+    ): boolean {
+        const base = String(defaultValue || '').trim();
+        if (!base) {
+            return false;
+        }
+
+        const normalized = base.replace(/\s+/g, ' ');
+        const words = normalized.split(/\s+/).filter(Boolean);
+        const wordCount = words.length;
+
+        // Only consider relatively short, token-like strings as candidates
+        const isTokenLike =
+            wordCount <= 3 &&
+            normalized.length <= 24 &&
+            !/[.!?]/.test(normalized);
+
+        if (!isTokenLike) {
+            return false;
+        }
+
+        let sameCount = 0;
+        const nonDefaultLocales = Array.from(record.locales.keys()).filter(
+            (l) => l !== defaultLocale,
+        );
+        for (const locale of nonDefaultLocales) {
+            const value = record.locales.get(locale);
+            if (typeof value !== 'string') {
+                continue;
+            }
+            if (value.trim() === base) {
+                sameCount += 1;
+            }
+        }
+
+        const requiredSame = nonDefaultLocales.length <= 1 ? 1 : 2;
+        return sameCount >= requiredSame;
+    }
+
     /**
      * Clear cached diagnostics for a file.
      */
@@ -389,6 +487,7 @@ export class DiagnosticAnalyzer {
         defaultValue: string,
         defaultPlaceholders: Set<string>,
         config: DiagnosticConfig,
+        isConstantLikeAcrossLocales: boolean,
     ): Array<{ message: string; severity: vscode.DiagnosticSeverity; code: string }> {
         const issues: Array<{ message: string; severity: vscode.DiagnosticSeverity; code: string }> = [];
 
@@ -404,7 +503,10 @@ export class DiagnosticAnalyzer {
 
         // Check for untranslated (same as default) and apply ignore patterns/heuristics
         if (config.untranslatedEnabled && value === defaultValue) {
-            const ignore = this.isIgnoredText(defaultValue) || this.isProbablyNonTranslatable(defaultValue);
+            const ignore =
+                isConstantLikeAcrossLocales ||
+                this.isIgnoredText(defaultValue) ||
+                this.isProbablyNonTranslatable(defaultValue);
             if (!ignore) {
                 issues.push({
                     message: `AI i18n: Untranslated (same as default) value for key ${key} in locale ${locale}`,

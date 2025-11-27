@@ -149,6 +149,18 @@ function isTranslatableText(text) {
 
   const trimmed = text.trim();
   
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+    return false;
+  }
+
+  if (!/\s/.test(trimmed) && /[:\[\]]/.test(trimmed) && /^[A-Za-z0-9:._\-\[\]]+$/.test(trimmed)) {
+    return false;
+  }
+
+  if (/[{};]/.test(trimmed) && /\b(const|let|var|function|return|if|else|for|while|class|async|await)\b/.test(trimmed)) {
+    return false;
+  }
+
   // Must have at least one letter
   if (!/[A-Za-z]/.test(trimmed)) {
     return false;

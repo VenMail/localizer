@@ -250,6 +250,7 @@ export class I18nIndex {
             stat = await vscode.workspace.fs.stat(uri);
         } catch {
             // File was deleted; contributions have already been removed.
+            this.fileToKeys.delete(fileKey);
             return;
         }
 

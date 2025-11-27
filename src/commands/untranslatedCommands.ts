@@ -275,6 +275,167 @@ export class UntranslatedCommands {
         }
     }
 
+    async generateAutoIgnore(): Promise<void> {
+        try {
+            const active = vscode.window.activeTextEditor;
+            let folder = active
+                ? vscode.workspace.getWorkspaceFolder(active.document.uri) ?? undefined
+                : undefined;
+
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+
+            const allKeys = this.i18nIndex.getAllKeys();
+            if (!allKeys.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No translation keys found to analyze for auto-ignore.',
+                );
+                return;
+            }
+
+            const candidates = new Set<string>();
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const globalDefaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+
+            for (const key of allKeys) {
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) {
+                    continue;
+                }
+                const defaultLocale = record.defaultLocale || globalDefaultLocale;
+                const baseValue = record.locales.get(defaultLocale);
+                if (typeof baseValue !== 'string') {
+                    continue;
+                }
+                const base = baseValue.trim();
+                if (!base) {
+                    continue;
+                }
+
+                const normalized = base.replace(/\s+/g, ' ');
+                const words = normalized.split(/\s+/).filter(Boolean);
+                const wordCount = words.length;
+                const isTokenLike =
+                    wordCount <= 3 &&
+                    normalized.length <= 24 &&
+                    !/[.!?]/.test(normalized);
+
+                if (!isTokenLike) {
+                    continue;
+                }
+
+                const nonDefaultLocales = Array.from(record.locales.keys()).filter(
+                    (l) => l !== defaultLocale,
+                );
+                if (!nonDefaultLocales.length) {
+                    continue;
+                }
+
+                let sameCount = 0;
+                for (const locale of nonDefaultLocales) {
+                    const v = record.locales.get(locale);
+                    if (typeof v === 'string' && v.trim() === base) {
+                        sameCount += 1;
+                    }
+                }
+
+                const requiredSame = nonDefaultLocales.length <= 1 ? 1 : 2;
+                if (sameCount < requiredSame) {
+                    continue;
+                }
+
+                candidates.add(normalized);
+            }
+
+            if (!candidates.size) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No constant-like values found to add to auto-ignore.',
+                );
+                return;
+            }
+
+            const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+            const autoUri = vscode.Uri.joinPath(scriptsDir, '.i18n-auto-ignore.json');
+            const decoder = new TextDecoder('utf-8');
+            const encoder = new TextEncoder();
+
+            let existing: any = {};
+            try {
+                const data = await vscode.workspace.fs.readFile(autoUri);
+                const raw = decoder.decode(data);
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    existing = parsed;
+                }
+            } catch {
+            }
+
+            const existingExact = new Set<string>(
+                Array.isArray(existing.exact) ? existing.exact.map((v: any) => String(v)) : [],
+            );
+            const newValues: string[] = [];
+            for (const value of candidates) {
+                if (!existingExact.has(value)) {
+                    existingExact.add(value);
+                    newValues.push(value);
+                }
+            }
+
+            if (!newValues.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No new auto-ignore patterns to add (all are already present).',
+                );
+                return;
+            }
+
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: 'Apply',
+                        description: `Add ${newValues.length} auto-ignore pattern(s) to scripts/.i18n-auto-ignore.json`,
+                    },
+                    { label: 'Cancel', description: 'Do not change auto-ignore patterns' },
+                ],
+                { placeHolder: 'Generate AI i18n auto-ignore patterns from constant-like values?' },
+            );
+
+            if (!choice || choice.label !== 'Apply') {
+                return;
+            }
+
+            existing.exact = Array.from(existingExact).sort();
+            if (!Array.isArray(existing.exactInsensitive)) {
+                existing.exactInsensitive = Array.isArray(existing.exactInsensitive)
+                    ? existing.exactInsensitive
+                    : [];
+            }
+            if (!Array.isArray(existing.contains)) {
+                existing.contains = Array.isArray(existing.contains) ? existing.contains : [];
+            }
+
+            const payload = `${JSON.stringify(existing, null, 2)}\n`;
+            await vscode.workspace.fs.createDirectory(scriptsDir);
+            await vscode.workspace.fs.writeFile(autoUri, encoder.encode(payload));
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Updated scripts/.i18n-auto-ignore.json with ${newValues.length} pattern(s).`,
+            );
+
+            await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+        } catch (err) {
+            console.error('AI i18n: Failed to generate auto-ignore patterns:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to generate auto-ignore patterns.');
+        }
+    }
+
     private parseStyleDiagnostic(message: string): { key: string; locale: string; suggested: string } | null {
         if (!message) return null;
         const clean = String(message).replace(/^AI i18n:\s*/, '');

@@ -135,6 +135,9 @@ export class CommandRegistry {
                 (documentUri: vscode.Uri, key: string, locales: string[]) =>
                     untranslatedCmds.applyQuickFix(documentUri, key, locales),
             ),
+            vscode.commands.registerCommand('ai-localizer.i18n.generateAutoIgnore', () =>
+                untranslatedCmds.generateAutoIgnore(),
+            ),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.applyStyleSuggestionQuickFix',
                 (documentUri: vscode.Uri, key: string, locale: string, suggested: string) =>

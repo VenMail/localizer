@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder, TextEncoder } from 'util';
+import { isPackageInstalled, installPackages } from '../core/workspace';
 
 /**
  * Service for file system operations related to i18n
@@ -10,7 +11,12 @@ export class FileSystemService {
     private encoder = new TextEncoder();
 
     /**
-     * Copy i18n scripts to project
+     * Required dependencies for i18n scripts
+     */
+    private static readonly REQUIRED_DEPS = ['oxc-parser', 'magic-string'];
+
+    /**
+     * Copy i18n scripts to project and install required dependencies
      */
     async copyScriptsToProject(
         context: vscode.ExtensionContext,
@@ -25,17 +31,30 @@ export class FileSystemService {
             throw new Error('Failed to create scripts directory');
         }
 
+        // Create scripts/package.json with "type": "commonjs" to ensure CJS compatibility
+        // This makes scripts work regardless of whether the project uses ESM or CJS
+        await this.createScriptsPackageJson(targetDir);
+
+        // Use oxc-based scripts (faster, no Babel dependency)
         const scriptNames = [
-            'extract-i18n.js',
-            'replace-i18n.js',
+            'oxc-extract-i18n.js',
+            'oxc-replace-i18n.js',
             'sync-i18n.js',
             'fix-untranslated.js',
             'rewrite-i18n-blade.js',
         ];
 
+        // Map oxc script names to standard names in target project
+        const scriptNameMap: Record<string, string> = {
+            'oxc-extract-i18n.js': 'extract-i18n.js',
+            'oxc-replace-i18n.js': 'replace-i18n.js',
+        };
+
         for (const name of scriptNames) {
             const src = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n', name);
-            const dest = vscode.Uri.joinPath(targetDir, name);
+            // Use mapped name if available (oxc scripts -> standard names)
+            const destName = scriptNameMap[name] || name;
+            const dest = vscode.Uri.joinPath(targetDir, destName);
             
             try {
                 const data = await vscode.workspace.fs.readFile(src);
@@ -43,7 +62,7 @@ export class FileSystemService {
             } catch (err) {
                 console.error(`AI i18n: Failed to copy i18n script ${name}:`, err);
                 vscode.window.showWarningMessage(
-                    `AI i18n: Failed to copy script ${name}. You may need to copy it manually.`,
+                    `AI i18n: Failed to copy script ${destName}. You may need to copy it manually.`,
                 );
             }
         }
@@ -75,6 +94,7 @@ export class FileSystemService {
             'stringUtils.js',
             'ignorePatterns.js',
             'translationStore.js',
+            'textValidation.js',
         ];
 
         for (const name of libFiles) {
@@ -90,6 +110,67 @@ export class FileSystemService {
                     `AI i18n: Failed to copy lib utility ${name}. You may need to copy it manually.`,
                 );
             }
+        }
+
+        // Install required dependencies
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectRoot));
+        if (folder) {
+            await this.ensureRequiredDependencies(folder);
+        }
+    }
+
+    /**
+     * Create scripts/package.json with "type": "commonjs"
+     * This ensures scripts always run as CommonJS regardless of project's module type
+     */
+    private async createScriptsPackageJson(scriptsDir: vscode.Uri): Promise<void> {
+        const scriptsPackageJson = vscode.Uri.joinPath(scriptsDir, 'package.json');
+        const content = {
+            "name": "ai-localizer-scripts",
+            "private": true,
+            "type": "commonjs",
+            "description": "AI Localizer i18n scripts - this file ensures scripts run as CommonJS"
+        };
+        
+        try {
+            await this.writeJsonFile(scriptsPackageJson, content);
+        } catch (err) {
+            console.error('AI i18n: Failed to create scripts/package.json:', err);
+        }
+    }
+
+    /**
+     * Ensure required dependencies are installed in the project
+     */
+    async ensureRequiredDependencies(folder: vscode.WorkspaceFolder): Promise<void> {
+        const missingDeps: string[] = [];
+
+        for (const dep of FileSystemService.REQUIRED_DEPS) {
+            const installed = await isPackageInstalled(folder, dep);
+            if (!installed) {
+                missingDeps.push(dep);
+            }
+        }
+
+        if (missingDeps.length === 0) {
+            return;
+        }
+
+        const choice = await vscode.window.showInformationMessage(
+            `AI i18n requires the following packages: ${missingDeps.join(', ')}. Install them now?`,
+            'Install',
+            'Skip',
+        );
+
+        if (choice === 'Install') {
+            await installPackages(folder, missingDeps, true);
+            vscode.window.showInformationMessage(
+                'AI i18n: Installing dependencies. Please wait for the installation to complete before running scripts.',
+            );
+        } else {
+            vscode.window.showWarningMessage(
+                `AI i18n: Scripts may not work without ${missingDeps.join(', ')}. You can install them manually.`,
+            );
         }
     }
 

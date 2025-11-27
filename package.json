@@ -2,7 +2,7 @@
   "name": "ai-localizer",
   "displayName": "Localizer – AI i18n for React, Vue & Laravel",
   "description": "AI-assisted localization for React, Vue/Nuxt, and Laravel projects. Extract strings, manage locale JSON, and scaffold translation providers and hooks automatically.",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "publisher": "venmail",
   "repository": {
     "type": "git",
@@ -28,6 +28,7 @@
     "onCommand:ai-localizer.i18n.runSyncScript",
     "onCommand:ai-localizer.i18n.runFixUntranslatedScript",
     "onCommand:ai-localizer.i18n.runRewriteBladeScript",
+    "onCommand:ai-localizer.i18n.generateAutoIgnore",
     "onCommand:ai-localizer.i18n.openUntranslatedReport",
     "onCommand:ai-localizer.i18n.applyUntranslatedAiFixes",
     "onCommand:ai-localizer.i18n.applyStyleSuggestionQuickFix",
@@ -93,6 +94,10 @@
       {
         "command": "ai-localizer.i18n.runRewriteBladeScript",
         "title": "AI i18n: Run Blade Rewrite Script"
+      },
+      {
+        "command": "ai-localizer.i18n.generateAutoIgnore",
+        "title": "AI i18n: Generate Auto Ignore Patterns"
       },
       {
         "command": "ai-localizer.i18n.openUntranslatedReport",

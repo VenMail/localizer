@@ -20,15 +20,40 @@ function loadIgnorePatterns(projectRoot) {
   }
 
   try {
-    if (!existsSync(patternsPath)) {
-      cachedPatterns = {};
-      cachedPatternsPath = patternsPath;
-      return cachedPatterns;
+    let patterns = {};
+    if (existsSync(patternsPath)) {
+      const raw = readFileSync(patternsPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      patterns = parsed && typeof parsed === 'object' ? parsed : {};
     }
-    
-    const raw = readFileSync(patternsPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    cachedPatterns = parsed && typeof parsed === 'object' ? parsed : {};
+
+    const autoPath = path.resolve(projectRoot, 'scripts', '.i18n-auto-ignore.json');
+    if (existsSync(autoPath)) {
+      try {
+        const rawAuto = readFileSync(autoPath, 'utf8');
+        const parsedAuto = JSON.parse(rawAuto);
+        if (parsedAuto && typeof parsedAuto === 'object') {
+          if (Array.isArray(parsedAuto.exact)) {
+            patterns.exact = (Array.isArray(patterns.exact) ? patterns.exact : []).concat(
+              parsedAuto.exact,
+            );
+          }
+          if (Array.isArray(parsedAuto.exactInsensitive)) {
+            patterns.exactInsensitive = (
+              Array.isArray(patterns.exactInsensitive) ? patterns.exactInsensitive : []
+            ).concat(parsedAuto.exactInsensitive);
+          }
+          if (Array.isArray(parsedAuto.contains)) {
+            patterns.contains = (Array.isArray(patterns.contains) ? patterns.contains : []).concat(
+              parsedAuto.contains,
+            );
+          }
+        }
+      } catch {
+      }
+    }
+
+    cachedPatterns = patterns;
     cachedPatternsPath = patternsPath;
     return cachedPatterns;
   } catch {
@@ -49,6 +74,19 @@ function shouldIgnoreAttribute(attrName, patterns) {
   return patterns.ignoreAttributes.some((name) => String(name || '').toLowerCase() === lower);
 }
 
+function isPlaceholderOnlyText(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return false;
+  let stripped = trimmed
+    .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
+    .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
+  stripped = stripped.replace(/[\(\)\[\]\{\},.:;'"!?!\-_]/g, ' ');
+  stripped = stripped.replace(/\s+/g, ' ').trim();
+  if (!stripped) return true;
+  if (!/[A-Za-z]/.test(stripped)) return true;
+  return false;
+}
+
 /**
  * Check if text is non-translatable
  * Combines pattern-based ignores with linguistic validation
@@ -58,6 +96,10 @@ function isNonTranslatableText(text, patterns) {
   if (!trimmed) return true;
   
   const normalized = trimmed.replace(/\s+/g, ' ');
+
+  if (isPlaceholderOnlyText(normalized)) {
+    return true;
+  }
 
   // Check exact matches
   if (patterns && Array.isArray(patterns.exact) && patterns.exact.includes(normalized)) {

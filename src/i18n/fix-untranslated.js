@@ -150,6 +150,22 @@ function isNonTranslatableExample(text) {
       }
     }
   }
+  if (!/\s/.test(normalized) && normalized.includes('.') && /^[A-Za-z0-9.-]+$/.test(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
+  if (!/\s/.test(normalized) && /[:\[\]]/.test(normalized) && /^[A-Za-z0-9:._\-\[\]]+$/.test(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
+  if (/[{};]/.test(normalized) && /\b(const|let|var|function|return|if|else|for|while|class|async|await)\b/.test(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
   // Strings that clearly look like examples (example.com, example-bucket, etc.)
   if (/\bexample\b/i.test(normalized)) {
     addExactIgnorePattern(normalized);
