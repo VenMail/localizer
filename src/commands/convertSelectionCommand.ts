@@ -31,6 +31,7 @@ export class ConvertSelectionCommand {
         const isJsLike = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'].includes(langId);
         const isVueLike = langId === 'vue';
         const isBladeLike = langId === 'blade' || langId === 'php';
+        const isJsSource = isJsLike && !isVueLike && !isBladeLike;
 
         if (!isJsLike && !isVueLike && !isBladeLike) {
             vscode.window.showInformationMessage(
@@ -56,6 +57,12 @@ export class ConvertSelectionCommand {
 
         // Detect one or more candidate string segments inside the selection
         const candidates = this.findCandidateStrings(document, selection, langId);
+        if (!candidates.length) {
+            vscode.window.showInformationMessage(
+                'AI i18n: No translatable strings detected in the current selection.',
+            );
+            return;
+        }
         const hasMultipleCandidates = candidates.length > 1;
 
         // Get workspace folder
@@ -102,7 +109,31 @@ export class ConvertSelectionCommand {
         // Single-candidate flow: preserve existing behavior with key confirmation
         if (!hasMultipleCandidates) {
             const single = candidates[0];
-            const slug = slugifyForKey(single.text);
+
+            // For JS source files, support advanced template literal handling by
+            // turning template interpolations into {placeholders} and passing
+            // an object argument with the original expressions.
+            let sourceText = single.text;
+            let templateInfo:
+                | { baseText: string; placeholders: Array<{ name: string; expression: string }> }
+                | null = null;
+
+            if (isJsSource) {
+                const rawLiteral = document.getText(single.range);
+                if (
+                    rawLiteral &&
+                    rawLiteral.startsWith('`') &&
+                    rawLiteral.endsWith('`') &&
+                    rawLiteral.includes('${')
+                ) {
+                    templateInfo = this.analyzeTemplateLiteral(rawLiteral);
+                    if (templateInfo && templateInfo.baseText.trim().length > 0) {
+                        sourceText = templateInfo.baseText;
+                    }
+                }
+            }
+
+            const slug = slugifyForKey(sourceText);
             const defaultKey = `${namespace}.${kind}.${slug}`;
 
             const finalKey = await vscode.window.showInputBox({
@@ -119,14 +150,14 @@ export class ConvertSelectionCommand {
 
             // Reuse known translations for the same base text where possible
             const reuseTranslations = this.i18nIndex.findTranslationsForBaseText(
-                single.text,
+                sourceText,
                 defaultLocale,
             );
             const localesNeedingAi = targetLocales.filter((l) => !reuseTranslations.has(l));
 
             const translations = localesNeedingAi.length
                 ? await this.translationService.translateToLocales(
-                      single.text,
+                      sourceText,
                       defaultLocale,
                       localesNeedingAi,
                       kind,
@@ -136,13 +167,13 @@ export class ConvertSelectionCommand {
             for (const locale of locales) {
                 let value: string;
                 if (locale === defaultLocale) {
-                    value = single.text;
+                    value = sourceText;
                 } else if (reuseTranslations.has(locale)) {
                     value = reuseTranslations.get(locale)!;
                 } else if (translations.has(locale)) {
                     value = translations.get(locale)!;
                 } else {
-                    value = single.text;
+                    value = sourceText;
                 }
                 await upsertTranslationKey(folder, locale, finalKey, value);
             }
@@ -186,7 +217,17 @@ export class ConvertSelectionCommand {
                 editSingle.insert(document.uri, insertPos, importLine);
             }
 
-            editSingle.replace(document.uri, single.range, `t('${finalKey}')`);
+            let replacement = `t('${finalKey}')`;
+            if (isJsSource && templateInfo && templateInfo.placeholders.length > 0) {
+                const argsObject = templateInfo.placeholders
+                    .map((p) => `${p.name}: ${p.expression}`)
+                    .join(', ');
+                if (argsObject.length > 0) {
+                    replacement = `t('${finalKey}', { ${argsObject} })`;
+                }
+            }
+
+            editSingle.replace(document.uri, single.range, replacement);
             await vscode.workspace.applyEdit(editSingle);
             vscode.window.showInformationMessage(
                 `AI i18n: Created key ${finalKey} for selection.`,
@@ -238,21 +279,41 @@ export class ConvertSelectionCommand {
         }
 
         for (const segment of segments) {
-            const slug = slugifyForKey(segment.text);
+            let sourceText = segment.text;
+            let templateInfo:
+                | { baseText: string; placeholders: Array<{ name: string; expression: string }> }
+                | null = null;
+
+            if (isJsSource) {
+                const rawLiteral = document.getText(segment.range);
+                if (
+                    rawLiteral &&
+                    rawLiteral.startsWith('`') &&
+                    rawLiteral.endsWith('`') &&
+                    rawLiteral.includes('${')
+                ) {
+                    templateInfo = this.analyzeTemplateLiteral(rawLiteral);
+                    if (templateInfo && templateInfo.baseText.trim().length > 0) {
+                        sourceText = templateInfo.baseText;
+                    }
+                }
+            }
+
+            const slug = slugifyForKey(sourceText);
             const key = `${namespace}.${kind}.${slug}`;
 
             const targetLocales = locales.filter((l) => l !== defaultLocale);
 
             // Reuse known translations for this segment text where possible
             const reuseTranslations = this.i18nIndex.findTranslationsForBaseText(
-                segment.text,
+                sourceText,
                 defaultLocale,
             );
             const localesNeedingAi = targetLocales.filter((l) => !reuseTranslations.has(l));
 
             const translations = localesNeedingAi.length
                 ? await this.translationService.translateToLocales(
-                      segment.text,
+                      sourceText,
                       defaultLocale,
                       localesNeedingAi,
                       kind,
@@ -262,13 +323,13 @@ export class ConvertSelectionCommand {
             for (const locale of locales) {
                 let value: string;
                 if (locale === defaultLocale) {
-                    value = segment.text;
+                    value = sourceText;
                 } else if (reuseTranslations.has(locale)) {
                     value = reuseTranslations.get(locale)!;
                 } else if (translations.has(locale)) {
                     value = translations.get(locale)!;
                 } else {
-                    value = segment.text;
+                    value = sourceText;
                 }
                 await upsertTranslationKey(folder, locale, key, value);
             }
@@ -278,7 +339,16 @@ export class ConvertSelectionCommand {
             } else if (isVueLike) {
                 edit.replace(document.uri, segment.range, `{{$t('${key}')}}`);
             } else {
-                edit.replace(document.uri, segment.range, `t('${key}')`);
+                let replacement = `t('${key}')`;
+                if (isJsSource && templateInfo && templateInfo.placeholders.length > 0) {
+                    const argsObject = templateInfo.placeholders
+                        .map((p) => `${p.name}: ${p.expression}`)
+                        .join(', ');
+                    if (argsObject.length > 0) {
+                        replacement = `t('${key}', { ${argsObject} })`;
+                    }
+                }
+                edit.replace(document.uri, segment.range, replacement);
             }
         }
 
@@ -344,10 +414,44 @@ export class ConvertSelectionCommand {
 
         const jsLikeLangs = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact', 'vue'];
         const isJsLike = jsLikeLangs.includes(langId);
+        const isBladeLike = langId === 'blade' || langId === 'php';
 
         if (isJsLike) {
-            // Match string literals within the selection
-            const stringRegex = /(['"])([^'"\n]+?)\1/g;
+            // First, try to extract string from object property value pattern
+            // e.g., "description: `some text`" or "title: 'some text'"
+            const propertyValueMatch = selectionText.match(/^\s*(?:[\w$]+|['"][^'"]+['"])\s*:\s*(['"`])([\s\S]+?)\1\s*,?\s*$/s);
+            if (propertyValueMatch) {
+                const quote = propertyValueMatch[1];
+                const value = propertyValueMatch[2];
+                
+                // Find the position of the string value (not the whole property)
+                const quoteIndex = selectionText.indexOf(quote, selectionText.indexOf(':'));
+                if (quoteIndex !== -1) {
+                    const valueStartOffset = baseOffset + quoteIndex;
+                    const valueEndOffset = valueStartOffset + quote.length + value.length + quote.length;
+                    const startPos = document.positionAt(valueStartOffset);
+                    const endPos = document.positionAt(valueEndOffset);
+                    const range = new vscode.Range(startPos, endPos);
+
+                    if (quote === '`') {
+                        const staticParts = this.extractStaticPartsFromTemplate(value);
+                        const combined = staticParts.map((p) => p.text).join(' ');
+                        if (this.isTranslatableText(combined)) {
+                            candidates.push({ range, text: combined.trim() });
+                        }
+                    } else if (this.isTranslatableText(value)) {
+                        candidates.push({ range, text: value.trim() });
+                    }
+                }
+                
+                if (candidates.length > 0) {
+                    return candidates;
+                }
+            }
+
+            // Match regular string literals (single and double quotes)
+            // Supports escaped characters and inner quotes of the other type
+            const stringRegex = /(['"])((?:\\.|(?!\1)[\s\S])+?)\1/g;
             let match: RegExpExecArray | null;
             // eslint-disable-next-line no-cond-assign
             while ((match = stringRegex.exec(selectionText)) !== null) {
@@ -366,18 +470,185 @@ export class ConvertSelectionCommand {
                 const range = new vscode.Range(startPos, endPos);
                 candidates.push({ range, text: inner.trim() });
             }
+
+            // Template literals (backticks) outside of simple object properties
+            const templateRegex = /`([^`]+)`/g;
+            // eslint-disable-next-line no-cond-assign
+            while ((match = templateRegex.exec(selectionText)) !== null) {
+                const full = match[0];
+                const inner = match[1];
+
+                const staticParts = this.extractStaticPartsFromTemplate(inner);
+                const combined = staticParts.map((p) => p.text).join(' ');
+                if (!this.isTranslatableText(combined)) {
+                    continue;
+                }
+
+                const startOffset = baseOffset + match.index;
+                const endOffset = startOffset + full.length;
+                const startPos = document.positionAt(startOffset);
+                const endPos = document.positionAt(endOffset);
+                const range = new vscode.Range(startPos, endPos);
+                candidates.push({ range, text: combined.trim() });
+            }
+        }
+
+        if (isBladeLike) {
+            const arrayItemMatch = selectionText.match(/^\s*(['"])([^'"]+)\1\s*=>\s*(['"])([\s\S]+?)\3\s*,?\s*$/s);
+            if (arrayItemMatch) {
+                const valueQuote = arrayItemMatch[3];
+                const value = arrayItemMatch[4];
+
+                const arrowIndex = selectionText.indexOf('=>');
+                const valueQuoteIndex = arrowIndex >= 0 ? selectionText.indexOf(valueQuote, arrowIndex) : -1;
+                if (valueQuoteIndex !== -1) {
+                    const valueStartOffset = baseOffset + valueQuoteIndex;
+                    const valueEndOffset = valueStartOffset + valueQuote.length + value.length + valueQuote.length;
+                    const startPos = document.positionAt(valueStartOffset);
+                    const endPos = document.positionAt(valueEndOffset);
+                    const range = new vscode.Range(startPos, endPos);
+
+                    if (this.isTranslatableText(value)) {
+                        candidates.push({ range, text: value.trim() });
+                    }
+                }
+
+                if (candidates.length > 0) {
+                    return candidates;
+                }
+            }
+
+            const bladeStringRegex = /(['"])((?:\\.|(?!\1)[\s\S])+?)\1/g;
+            let match: RegExpExecArray | null;
+            // eslint-disable-next-line no-cond-assign
+            while ((match = bladeStringRegex.exec(selectionText)) !== null) {
+                const full = match[0];
+                const inner = match[2];
+
+                if (!this.isTranslatableText(inner)) {
+                    continue;
+                }
+
+                const startOffset = baseOffset + match.index;
+                const endOffset = startOffset + full.length;
+                const startPos = document.positionAt(startOffset);
+                const endPos = document.positionAt(endOffset);
+                const range = new vscode.Range(startPos, endPos);
+                candidates.push({ range, text: inner.trim() });
+            }
         }
 
         // Fallback: if nothing matched, treat the full selection as a single candidate
         // but only if it passes the translatability check
         if (!candidates.length) {
             const trimmed = selectionText.trim();
-            if (trimmed && this.isTranslatableText(trimmed)) {
+
+            // For JS-like languages, avoid using the entire selection when it clearly
+            // looks like code (object literals, JSX, functions, etc.). In those cases
+            // we would rather ask the user to tighten the selection than replace a
+            // large code fragment.
+            const looksLikeJsCode =
+                isJsLike && /[:;{}<>]|=>|\bfunction\b|\breturn\b/.test(trimmed);
+
+            if (!looksLikeJsCode && trimmed && this.isTranslatableText(trimmed)) {
                 candidates.push({ range: selection, text: trimmed });
             }
         }
 
         return candidates;
+    }
+
+    private analyzeTemplateLiteral(rawLiteral: string):
+        | { baseText: string; placeholders: Array<{ name: string; expression: string }> }
+        | null {
+        if (!rawLiteral || rawLiteral.length < 2 || rawLiteral[0] !== '`' || rawLiteral[rawLiteral.length - 1] !== '`') {
+            return null;
+        }
+
+        const inner = rawLiteral.slice(1, -1);
+        const placeholders: Array<{ name: string; expression: string }> = [];
+        let baseText = '';
+        let lastIndex = 0;
+        const usedNames = new Set<string>();
+
+        const interpolationRegex = /\$\{([^}]*)\}/g;
+        let match: RegExpExecArray | null;
+        // eslint-disable-next-line no-cond-assign
+        while ((match = interpolationRegex.exec(inner)) !== null) {
+            const expr = match[1].trim();
+
+            baseText += inner.slice(lastIndex, match.index);
+
+            if (expr.length > 0) {
+                let name: string | null = null;
+
+                const lengthMatch = expr.match(/([A-Za-z_][A-Za-z0-9_]*)\s*\.length\s*$/);
+                if (lengthMatch && lengthMatch[1]) {
+                    const base = lengthMatch[1];
+                    name = /count$/i.test(base) ? base : `${base}Count`;
+                }
+
+                if (!name) {
+                    const idMatch = expr.match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/);
+                    if (idMatch && idMatch[1]) {
+                        name = idMatch[1];
+                    }
+                }
+
+                if (!name) {
+                    name = `value${placeholders.length + 1}`;
+                }
+
+                let uniqueName = name;
+                let counter = 2;
+                while (usedNames.has(uniqueName)) {
+                    uniqueName = `${name}${counter}`;
+                    counter += 1;
+                }
+                usedNames.add(uniqueName);
+
+                placeholders.push({ name: uniqueName, expression: expr });
+                baseText += `{${uniqueName}}`;
+            }
+
+            lastIndex = interpolationRegex.lastIndex;
+        }
+
+        baseText += inner.slice(lastIndex);
+
+        return { baseText, placeholders };
+    }
+
+    /**
+     * Extract static text parts from a template literal, excluding interpolations.
+     * Returns array of {text, offset} where offset is relative to the template content.
+     */
+    private extractStaticPartsFromTemplate(template: string): Array<{ text: string; offset: number }> {
+        const parts: Array<{ text: string; offset: number }> = [];
+        
+        // Split by ${...} interpolations
+        const segments = template.split(/\$\{[^}]*\}/);
+        let currentOffset = 0;
+        
+        for (let i = 0; i < segments.length; i++) {
+            const segment = segments[i];
+            if (segment.trim().length > 0) {
+                parts.push({ text: segment, offset: currentOffset });
+            }
+            
+            // Move offset forward by segment length + interpolation length
+            currentOffset += segment.length;
+            if (i < segments.length - 1) {
+                // Find the interpolation that was removed
+                const remainingTemplate = template.substring(currentOffset);
+                const interpolationMatch = remainingTemplate.match(/^\$\{[^}]*\}/);
+                if (interpolationMatch) {
+                    currentOffset += interpolationMatch[0].length;
+                }
+            }
+        }
+        
+        return parts;
     }
 
     /**
