@@ -29,6 +29,8 @@
     "onCommand:ai-assistant.i18n.runRewriteBladeScript",
     "onCommand:ai-assistant.i18n.openUntranslatedReport",
     "onCommand:ai-assistant.i18n.applyUntranslatedAiFixes",
+    "onCommand:ai-assistant.i18n.applyStyleSuggestionQuickFix",
+    "onCommand:ai-assistant.i18n.applyAllStyleSuggestionsInFile",
     "onLanguage:javascript",
     "onLanguage:typescript",
     "onLanguage:javascriptreact",
@@ -104,6 +106,14 @@
         "title": "AI i18n: Apply AI Quick Fix for Untranslated Key"
       },
       {
+        "command": "ai-assistant.i18n.applyStyleSuggestionQuickFix",
+        "title": "AI i18n: Apply Suggested Style for Key"
+      },
+      {
+        "command": "ai-assistant.i18n.applyAllStyleSuggestionsInFile",
+        "title": "AI i18n: Apply All Style Suggestions in Current File"
+      },
+      {
         "command": "ai-assistant.i18n.gotoTranslationFromHover",
         "title": "AI i18n: Go to Translation from Hover"
       },
@@ -138,6 +148,12 @@
         {
           "command": "ai-assistant.i18n.showStatus",
           "group": "ai@9"
+        }
+        ,
+        {
+          "command": "ai-assistant.i18n.applyAllStyleSuggestionsInFile",
+          "group": "ai@4",
+          "when": "editorLangId == json || editorLangId == jsonc"
         }
       ]
     },

@@ -494,40 +494,50 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         range: vscode.Range,
         context: vscode.CodeActionContext,
     ): vscode.ProviderResult<(vscode.CodeAction | vscode.Command)[]> {
-        const diagnostics = context.diagnostics.filter((d) => d.code === 'ai-i18n.untranslated');
-        if (!diagnostics.length) {
-            return [];
-        }
-
         const actions: vscode.CodeAction[] = [];
 
-        for (const diagnostic of diagnostics) {
+        const relevant = context.diagnostics.filter(
+            (d) => d.code === 'ai-i18n.untranslated' || d.code === 'ai-i18n.style',
+        );
+
+        for (const diagnostic of relevant) {
             if (!diagnostic.range.intersection(range)) {
                 continue;
             }
 
-            const parsed = this.parseDiagnosticMessage(String(diagnostic.message || ''));
-            if (!parsed) {
-                continue;
+            if (diagnostic.code === 'ai-i18n.untranslated') {
+                const parsed = this.parseDiagnosticMessage(String(diagnostic.message || ''));
+                if (!parsed) continue;
+                const { key, locales } = parsed;
+                if (!key || !locales || !locales.length) {
+                    continue;
+                }
+                const uniqueLocales = Array.from(new Set(locales));
+                const localeLabel = uniqueLocales.join(', ');
+                const title = `AI i18n: AI-translate ${localeLabel} for ${key}`;
+                const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                action.diagnostics = [diagnostic];
+                action.command = {
+                    title,
+                    command: 'ai-assistant.i18n.applyUntranslatedQuickFix',
+                    arguments: [document.uri, key, uniqueLocales],
+                };
+                actions.push(action);
+            } else if (diagnostic.code === 'ai-i18n.style') {
+                const styleParsed = this.parseStyleDiagnostic(String(diagnostic.message || ''));
+                if (!styleParsed) continue;
+                const { key, locale, suggested } = styleParsed;
+                if (!key || !locale || !suggested) continue;
+                const title = `AI i18n: Apply suggested style (${locale}) for ${key}`;
+                const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                action.diagnostics = [diagnostic];
+                action.command = {
+                    title,
+                    command: 'ai-assistant.i18n.applyStyleSuggestionQuickFix',
+                    arguments: [document.uri, key, locale, suggested],
+                };
+                actions.push(action);
             }
-
-            const { key, locales } = parsed;
-            if (!key || !locales.length) {
-                continue;
-            }
-
-            const uniqueLocales = Array.from(new Set(locales));
-            const localeLabel = uniqueLocales.join(', ');
-            const title = `AI i18n: AI-translate ${localeLabel} for ${key}`;
-
-            const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
-            action.diagnostics = [diagnostic];
-            action.command = {
-                title,
-                command: 'ai-assistant.i18n.applyUntranslatedQuickFix',
-                arguments: [document.uri, key, uniqueLocales],
-            };
-            actions.push(action);
         }
 
         return actions;
@@ -572,6 +582,21 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         }
 
         return null;
+    }
+
+    private parseStyleDiagnostic(message: string): { key: string; locale: string; suggested: string } | null {
+        if (!message) return null;
+        const clean = message.replace(/^AI i18n:\s*/, '');
+        // Format: Style suggestion for key <key> in locale <loc> (current: X | suggested: Y)
+        const m = clean.match(/^Style suggestion for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)\s*\(([^)]*)\)/);
+        if (!m) return null;
+        const key = m[1].trim();
+        const locale = m[2].trim();
+        const details = m[3] || '';
+        const sugMatch = details.match(/suggested:\s*([^|)]+)/i);
+        const suggested = sugMatch ? sugMatch[1].trim() : '';
+        if (!key || !locale || !suggested) return null;
+        return { key, locale, suggested };
     }
 }
 

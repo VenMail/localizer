@@ -25,6 +25,7 @@ export class UntranslatedCommands {
             folder = await pickWorkspaceFolder();
         }
 
+
         if (!folder) {
             vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
             return;
@@ -234,6 +235,126 @@ export class UntranslatedCommands {
             vscode.window.showErrorMessage(
                 'AI i18n: Failed to apply AI quick fix for untranslated key.',
             );
+        }
+    }
+
+    private parseStyleDiagnostic(message: string): { key: string; locale: string; suggested: string } | null {
+        if (!message) return null;
+        const clean = String(message).replace(/^AI i18n:\s*/, '');
+        const m = clean.match(/^Style suggestion for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)\s*\(([^)]*)\)/);
+        if (!m) return null;
+        const key = m[1].trim();
+        const locale = m[2].trim();
+        const details = m[3] || '';
+        const sugMatch = details.match(/suggested:\s*([^|)]+)/i);
+        const suggested = sugMatch ? sugMatch[1].trim() : '';
+        if (!key || !locale || !suggested) return null;
+        return { key, locale, suggested };
+    }
+
+    async applyStyleSuggestionQuickFix(
+        documentUri: vscode.Uri,
+        key: string,
+        locale: string,
+        suggested: string,
+    ): Promise<void> {
+        try {
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+            await setTranslationValue(folder, locale, key, suggested);
+            await this.i18nIndex.ensureInitialized(true);
+            await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Applied style suggestion for ${key} in ${locale}.`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to apply style suggestion quick fix:', err);
+            vscode.window.showErrorMessage(
+                'AI i18n: Failed to apply style suggestion quick fix.',
+            );
+        }
+    }
+
+    async applyAllStyleSuggestionsInFile(documentUri?: vscode.Uri): Promise<void> {
+        try {
+            const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
+            if (!targetUri) {
+                vscode.window.showInformationMessage('AI i18n: No active document to apply style suggestions.');
+                return;
+            }
+
+            let folder = vscode.workspace.getWorkspaceFolder(targetUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            const diags = vscode.languages
+                .getDiagnostics(targetUri)
+                .filter((d) => String(d.code) === 'ai-i18n.style');
+
+            if (!diags.length) {
+                vscode.window.showInformationMessage('AI i18n: No style suggestions found for this file.');
+                return;
+            }
+
+            const suggestions: { key: string; locale: string; suggested: string }[] = [];
+            for (const d of diags) {
+                const parsed = this.parseStyleDiagnostic(String(d.message || ''));
+                if (parsed) suggestions.push(parsed);
+            }
+
+            if (!suggestions.length) {
+                vscode.window.showInformationMessage('AI i18n: No parsable style suggestions in diagnostics.');
+                return;
+            }
+
+            // Deduplicate by locale+key
+            const uniqueMap = new Map<string, { key: string; locale: string; suggested: string }>();
+            for (const s of suggestions) {
+                uniqueMap.set(`${s.locale}::${s.key}`, s);
+            }
+            const unique = Array.from(uniqueMap.values());
+
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: 'Apply',
+                        description: `Write ${unique.length} style suggestion(s) to locale files`,
+                    },
+                    { label: 'Cancel', description: 'Do not apply suggestions' },
+                ],
+                { placeHolder: 'Apply all AI i18n style suggestions for this file?' },
+            );
+            if (!choice || choice.label !== 'Apply') {
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+            for (const s of unique) {
+                await setTranslationValue(folder, s.locale, s.key, s.suggested);
+            }
+            await this.i18nIndex.ensureInitialized(true);
+            await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Applied ${unique.length} style suggestion(s) for this file.`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to apply all style suggestions:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to apply all style suggestions for file.');
         }
     }
 }

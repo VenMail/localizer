@@ -129,6 +129,15 @@ export class CommandRegistry {
                     untranslatedCmds.applyQuickFix(documentUri, key, locales),
             ),
             vscode.commands.registerCommand(
+                'ai-assistant.i18n.applyStyleSuggestionQuickFix',
+                (documentUri: vscode.Uri, key: string, locale: string, suggested: string) =>
+                    untranslatedCmds.applyStyleSuggestionQuickFix(documentUri, key, locale, suggested),
+            ),
+            vscode.commands.registerCommand(
+                'ai-assistant.i18n.applyAllStyleSuggestionsInFile',
+                (documentUri?: vscode.Uri) => untranslatedCmds.applyAllStyleSuggestionsInFile(documentUri),
+            ),
+            vscode.commands.registerCommand(
                 'ai-assistant.i18n.gotoTranslationFromHover',
                 async (args: { uri: string; position: { line: number; character: number } }) => {
                     try {
