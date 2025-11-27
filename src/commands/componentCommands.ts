@@ -3,6 +3,7 @@ import * as path from 'path';
 import { FileSystemService } from '../services/fileSystemService';
 import { pickWorkspaceFolder, workspaceLooksTypeScript } from '../core/workspace';
 import { ensureReactI18nRuntime } from '../core/reactRuntime';
+import { ensureVueI18nRuntime } from '../core/vueRuntime';
 import { detectFrameworkProfile } from '../frameworks/detection';
 
 /**
@@ -90,12 +91,32 @@ export class ComponentCommands {
         }
 
         const looksTs = await workspaceLooksTypeScript(folder);
-        const ext = looksTs ? 'tsx' : 'jsx';
-        
+        const profile = await detectFrameworkProfile(folder);
+
+        let isVue = profile?.kind === 'vue' || profile?.kind === 'nuxt';
+        let isReact = profile?.kind === 'react' || (!isVue && profile?.kind !== 'laravel');
+
+        if (profile?.kind === 'laravel') {
+            const pick = await vscode.window.showQuickPick(
+                [
+                    { label: 'React', description: 'Inertia React or React SPA' },
+                    { label: 'Vue', description: 'Inertia Vue or Vue SPA' },
+                ],
+                { placeHolder: 'Laravel detected. Generate a React or Vue LanguageSwitcher?' },
+            );
+            if (!pick) return;
+            isVue = pick.label === 'Vue';
+            isReact = pick.label === 'React';
+        }
+
+        const targetFileName = isVue ? 'LanguageSwitcher.vue' : `LanguageSwitcher.${looksTs ? 'tsx' : 'jsx'}`;
+        const preferredDirs = isVue && profile?.kind === 'nuxt'
+            ? ['components', 'src/components']
+            : ['resources/js/components', 'src/components'];
         const suggested = await this.fileSystemService.suggestFilePath(
             folder,
-            `LanguageSwitcher.${ext}`,
-            ['resources/js/components', 'src/components'],
+            targetFileName,
+            preferredDirs,
         );
 
         const input = await vscode.window.showInputBox({
@@ -124,32 +145,79 @@ export class ComponentCommands {
             }
         }
 
-        const useTsx = relativePath.toLowerCase().endsWith('.tsx') || (!relativePath.toLowerCase().endsWith('.jsx') && looksTs);
-        const templateFileName = useTsx ? 'LanguageSwitcher.tsx' : 'LanguageSwitcher.jsx';
-        
-        const src = vscode.Uri.joinPath(
-            this.context.extensionUri,
-            'src',
-            'i18n',
-            'components',
-            'react',
-            templateFileName,
-        );
+        if (isVue) {
+            const templateFileName = 'LanguageSwitcher.vue';
+            const src = vscode.Uri.joinPath(
+                this.context.extensionUri,
+                'src',
+                'i18n',
+                'components',
+                'vue',
+                templateFileName,
+            );
+            await this.fileSystemService.copyFileWithTransform(src, targetUri, (text) => {
+                const wsRoot = folder!.uri.fsPath;
+                const compDirAbs = path.dirname(targetUri.fsPath);
+                // Determine base root for Vue projects
+                let vueBaseRoot: string;
+                if (profile?.kind === 'laravel') {
+                    vueBaseRoot = path.join(wsRoot, 'resources', 'js');
+                } else if (profile?.kind === 'nuxt') {
+                    // Nuxt composables are typically at project root
+                    vueBaseRoot = wsRoot;
+                } else {
+                    vueBaseRoot = path.join(wsRoot, (profile?.rootDir || 'src'));
+                }
+                const relI18n = path.relative(compDirAbs, path.join(vueBaseRoot, 'i18n')).replace(/\\/g, '/');
+                const relComposable = path.relative(compDirAbs, path.join(vueBaseRoot, 'composables', 'useTranslation')).replace(/\\/g, '/');
+                return text
+                    .replace(/'@\/i18n'/g, `'${relI18n}'`)
+                    .replace(/"@\/i18n"/g, `"${relI18n}"`)
+                    .replace(/'@\/composables\/useTranslation'/g, `'${relComposable}'`)
+                    .replace(/"@\/composables\/useTranslation"/g, `"${relComposable}"`);
+            });
 
-        await this.fileSystemService.copyFileWithTransform(src, targetUri, (text) => {
-            // Replace import paths
-            return text
-                .replace(/'@\/i18n'/g, "'../i18n'")
-                .replace(/"@\/i18n"/g, '"../i18n"')
-                .replace(/'@\/hooks\/useTranslation'/g, "'../hooks/useTranslation'")
-                .replace(/"@\/hooks\/useTranslation"/g, '"../hooks/useTranslation"');
-        });
+            const doc = await vscode.workspace.openTextDocument(targetUri);
+            await vscode.window.showTextDocument(doc, { preview: false });
 
-        const doc = await vscode.workspace.openTextDocument(targetUri);
-        await vscode.window.showTextDocument(doc, { preview: false });
+            await ensureVueI18nRuntime(this.context, folder, relativePath);
+        } else {
+            const useTsx = relativePath.toLowerCase().endsWith('.tsx') || (!relativePath.toLowerCase().endsWith('.jsx') && looksTs);
+            const templateFileName = useTsx ? 'LanguageSwitcher.tsx' : 'LanguageSwitcher.jsx';
+            const src = vscode.Uri.joinPath(
+                this.context.extensionUri,
+                'src',
+                'i18n',
+                'components',
+                'react',
+                templateFileName,
+            );
+            await this.fileSystemService.copyFileWithTransform(src, targetUri, (text) => {
+                const wsRoot = folder!.uri.fsPath;
+                const compDirAbs = path.dirname(targetUri.fsPath);
+                let reactBaseRoot: string;
+                if (profile?.kind === 'react' && profile?.flavor === 'inertia-react') {
+                    reactBaseRoot = path.join(wsRoot, 'resources', 'js');
+                } else if (profile?.kind === 'laravel') {
+                    // User chose React in a Laravel app
+                    reactBaseRoot = path.join(wsRoot, 'resources', 'js');
+                } else {
+                    reactBaseRoot = path.join(wsRoot, (profile?.rootDir || 'src'));
+                }
+                const relI18n = path.relative(compDirAbs, path.join(reactBaseRoot, 'i18n')).replace(/\\/g, '/');
+                const relHook = path.relative(compDirAbs, path.join(reactBaseRoot, 'hooks', 'useTranslation')).replace(/\\/g, '/');
+                return text
+                    .replace(/'@\/i18n'/g, `'${relI18n}'`)
+                    .replace(/"@\/i18n"/g, `"${relI18n}"`)
+                    .replace(/'@\/hooks\/useTranslation'/g, `'${relHook}'`)
+                    .replace(/"@\/hooks\/useTranslation"/g, `"${relHook}"`);
+            });
 
-        // Ensure runtime files and hook are present (preserves original behavior)
-        await ensureReactI18nRuntime(this.context, folder, relativePath);
+            const doc = await vscode.workspace.openTextDocument(targetUri);
+            await vscode.window.showTextDocument(doc, { preview: false });
+
+            await ensureReactI18nRuntime(this.context, folder, relativePath);
+        }
 
         vscode.window.showInformationMessage(
             `AI i18n: LanguageSwitcher component created at ${relativePath}.`,

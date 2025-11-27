@@ -2,9 +2,9 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { I18nIndex } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
-import { setTranslationValue } from '../core/i18nFs';
+import { setTranslationValue, setTranslationValueInFile } from '../core/i18nFs';
 import { pickWorkspaceFolder } from '../core/workspace';
-import { TextDecoder } from 'util';
+import { TextDecoder, TextEncoder } from 'util';
 
 /**
  * Commands for handling untranslated strings
@@ -24,8 +24,6 @@ export class UntranslatedCommands {
         if (!folder) {
             folder = await pickWorkspaceFolder();
         }
-
-
         if (!folder) {
             vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
             return;
@@ -43,6 +41,45 @@ export class UntranslatedCommands {
                 'AI i18n: Untranslated report not found. Run the fix-untranslated script first.',
             );
         }
+    }
+
+    private async setMultipleInFile(fileUri: vscode.Uri, updates: Map<string, string>): Promise<void> {
+        const decoder = new TextDecoder('utf-8');
+        const encoder = new TextEncoder();
+        let root: any = {};
+        try {
+            const data = await vscode.workspace.fs.readFile(fileUri);
+            const raw = decoder.decode(data);
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') root = parsed;
+        } catch {}
+        if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+        const ensureDeepContainer = (obj: any, segments: string[]) => {
+            let node: any = obj;
+            for (const seg of segments) {
+                if (!node || typeof node !== 'object') break;
+                if (
+                    !Object.prototype.hasOwnProperty.call(node, seg) ||
+                    typeof node[seg] !== 'object' ||
+                    Array.isArray(node[seg])
+                ) {
+                    node[seg] = {};
+                }
+                node = node[seg];
+            }
+            return node;
+        };
+
+        for (const [fullKey, value] of updates.entries()) {
+            const segments = fullKey.split('.').filter(Boolean);
+            const container = ensureDeepContainer(root, segments.slice(0, -1));
+            const last = segments[segments.length - 1];
+            container[last] = value;
+        }
+
+        const payload = `${JSON.stringify(root, null, 2)}\n`;
+        await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
     }
 
     async applyAiFixes(): Promise<void> {
@@ -259,19 +296,12 @@ export class UntranslatedCommands {
         suggested: string,
     ): Promise<void> {
         try {
-            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
-            if (!folder) {
-                folder = await pickWorkspaceFolder();
-            }
-            if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
-                return;
-            }
-
-            await this.i18nIndex.ensureInitialized();
-            await setTranslationValue(folder, locale, key, suggested);
-            await this.i18nIndex.ensureInitialized(true);
-            await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+            // Write directly into the file where the diagnostic originated
+            await setTranslationValueInFile(documentUri, key, suggested);
+            // Incrementally update index for just this file
+            await this.i18nIndex.updateFile(documentUri);
+            // Refresh diagnostics only for this file, focusing on the changed key
+            await vscode.commands.executeCommand('ai-assistant.i18n.refreshFileDiagnostics', documentUri, [key]);
 
             vscode.window.showInformationMessage(
                 `AI i18n: Applied style suggestion for ${key} in ${locale}.`,
@@ -342,12 +372,13 @@ export class UntranslatedCommands {
                 return;
             }
 
-            await this.i18nIndex.ensureInitialized();
-            for (const s of unique) {
-                await setTranslationValue(folder, s.locale, s.key, s.suggested);
-            }
-            await this.i18nIndex.ensureInitialized(true);
-            await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
+            // Fast path: single read/write for this file
+            const updatesMap = new Map<string, string>();
+            for (const s of unique) updatesMap.set(s.key, s.suggested);
+            await this.setMultipleInFile(targetUri, updatesMap);
+            // Incremental reindex and diagnostics refresh for this file only
+            await this.i18nIndex.updateFile(targetUri);
+            await vscode.commands.executeCommand('ai-assistant.i18n.refreshFileDiagnostics', targetUri, Array.from(updatesMap.keys()));
 
             vscode.window.showInformationMessage(
                 `AI i18n: Applied ${unique.length} style suggestion(s) for this file.`,

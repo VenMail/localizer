@@ -120,6 +120,13 @@ export class CommandRegistry {
             vscode.commands.registerCommand('ai-assistant.i18n.openUntranslatedReport', () =>
                 untranslatedCmds.openReport(),
             ),
+            vscode.commands.registerCommand(
+                'ai-assistant.i18n.refreshFileDiagnostics',
+                async (uri: vscode.Uri, extraKeys?: string[]) => {
+                    if (!uri) return;
+                    await this.refreshFileDiagnostics(untranslatedDiagnostics, uri, extraKeys);
+                },
+            ),
             vscode.commands.registerCommand('ai-assistant.i18n.applyUntranslatedAiFixes', () =>
                 untranslatedCmds.applyAiFixes(),
             ),

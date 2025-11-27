@@ -41,6 +41,13 @@ export async function detectFrameworkProfile(
 
     const has = (name: string) => Object.prototype.hasOwnProperty.call(deps, name);
 
+    // Inertia Vue (Laravel) - detect before generic Vue
+    if (has('@inertiajs/vue3') || has('@inertiajs/inertia-vue3')) {
+        const rootDir = 'resources/js';
+        const entryPatterns = ['resources/js/app.ts', 'resources/js/app.js', 'resources/js/Pages/**/*.vue'];
+        return { kind: 'vue', flavor: 'spa', rootDir, entryPatterns };
+    }
+
     // Nuxt (implies Vue)
     if (has('nuxt') || has('nuxt-edge') || has('nuxt3')) {
         const flavor: NuxtFlavor = has('nuxt3') ? 'nuxt3' : 'nuxt2';

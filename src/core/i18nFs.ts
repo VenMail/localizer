@@ -132,6 +132,34 @@ export async function upsertTranslationKey(
     await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
 }
 
+export async function setTranslationValueInFile(
+    fileUri: vscode.Uri,
+    fullKey: string,
+    value: string,
+): Promise<void> {
+    const decoder = new TextDecoder('utf-8');
+    const encoder = new TextEncoder();
+    let root: any = {};
+    try {
+        const data = await vscode.workspace.fs.readFile(fileUri);
+        const raw = decoder.decode(data);
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+            root = parsed;
+        }
+    } catch {
+    }
+    if (!root || typeof root !== 'object' || Array.isArray(root)) {
+        root = {};
+    }
+    const segments = fullKey.split('.').filter(Boolean);
+    const container = ensureDeepContainer(root, segments.slice(0, -1));
+    const last = segments[segments.length - 1];
+    container[last] = value;
+    const payload = `${JSON.stringify(root, null, 2)}\n`;
+    await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
+}
+
 export async function setTranslationValue(
     folder: vscode.WorkspaceFolder,
     locale: string,
