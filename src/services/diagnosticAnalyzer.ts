@@ -4,7 +4,7 @@ import { I18nIndex } from '../core/i18nIndex';
 import { ProjectConfigService } from './projectConfigService';
 
 /**
- * Performant incremental diagnostic analyzer for i18n translation issues.
+ * Incremental diagnostic analyzer for i18n translation issues.
  * 
  * Architecture:
  * - Maintains per-file diagnostic cache
@@ -23,6 +23,7 @@ export class DiagnosticAnalyzer {
         { english?: string; current?: string; suggested?: string }
     >();
     private decoder = new TextDecoder('utf-8');
+    private ignorePatterns: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } | null = null;
 
     constructor(
         private i18nIndex: I18nIndex,
@@ -37,18 +38,32 @@ export class DiagnosticAnalyzer {
     async analyzeFile(
         uri: vscode.Uri,
         config: DiagnosticConfig,
+        extraKeys?: string[],
+        forcedLocales?: string[],
     ): Promise<vscode.Diagnostic[]> {
         const fileKey = uri.toString();
         this.log.appendLine(`[DiagnosticAnalyzer] Analyzing file: ${uri.fsPath}`);
 
         // Get keys contributed by this file
         const fileInfo = this.i18nIndex.getKeysForFile(uri);
-        if (!fileInfo) {
-            this.log.appendLine(`[DiagnosticAnalyzer] No keys found for file: ${uri.fsPath}`);
+        
+        // If no keys in this file, we still need to check if this is a locale file
+        // that should have keys from the default locale
+        const fileLocale = fileInfo?.locale;
+        const fileKeys = fileInfo?.keys || [];
+        const keysToAnalyze = extraKeys && extraKeys.length
+            ? Array.from(new Set<string>([...fileKeys, ...extraKeys]))
+            : fileKeys;
+        const changedKeysSet = new Set<string>(extraKeys || []);
+        
+        if (!fileLocale) {
+            this.log.appendLine(`[DiagnosticAnalyzer] Cannot determine locale for file: ${uri.fsPath}`);
             return [];
         }
-
-        const { locale: fileLocale, keys: fileKeys } = fileInfo;
+        
+        this.log.appendLine(
+            `[DiagnosticAnalyzer] File has ${fileKeys.length} key(s) for locale '${fileLocale}' (analyzing ${keysToAnalyze.length})`,
+        );
         const diagnostics: vscode.Diagnostic[] = [];
 
         // Get workspace folder config
@@ -58,63 +73,102 @@ export class DiagnosticAnalyzer {
         }
 
         const projectConfig = await this.projectConfigService.readConfig(folder);
-        const defaultLocale = config.defaultLocale || 'en';
-        let locales = projectConfig?.locales || [defaultLocale];
-        if (!locales.includes(defaultLocale)) {
-            locales = [defaultLocale, ...locales];
+        const defaultLocaleGlobal = config.defaultLocale || 'en';
+        const discoveredLocales = this.i18nIndex.getAllLocales();
+        const configuredLocales = projectConfig?.locales || [];
+        const union = new Set<string>([...configuredLocales, ...discoveredLocales, defaultLocaleGlobal]);
+        const localesBase = [
+            defaultLocaleGlobal,
+            ...Array.from(union).filter((l) => l !== defaultLocaleGlobal),
+        ];
+        const localesSet = new Set<string>(localesBase);
+        for (const fl of forcedLocales || []) {
+            if (fl) localesSet.add(fl);
         }
+        const locales = Array.from(localesSet);
 
-        // For each key in this file, check all locales
-        for (const key of fileKeys) {
+        // For each key in this file (plus any extra changed keys), check all locales
+        for (const key of keysToAnalyze) {
             const record = this.i18nIndex.getRecord(key);
             if (!record) {
                 continue;
             }
 
-            const defaultValue = record.locales.get(defaultLocale);
-            if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
-                continue;
-            }
+            const defaultLocaleForKey = record.defaultLocale || defaultLocaleGlobal;
+            const defaultValueRaw =
+                record.locales.get(defaultLocaleForKey) ??
+                record.locales.get(defaultLocaleGlobal);
+            const hasDefaultValue = typeof defaultValueRaw === 'string' && !!defaultValueRaw.trim();
+            const defaultValue = hasDefaultValue ? (defaultValueRaw as string) : '';
+            const defaultPlaceholders = hasDefaultValue ? this.extractPlaceholders(defaultValue) : new Set<string>();
 
-            const defaultPlaceholders = this.extractPlaceholders(defaultValue);
+
+            this.log.appendLine(
+                `[DiagnosticAnalyzer] Checking key '${key}' (default='${defaultLocaleForKey}') in file '${uri.fsPath}' (fileLocale='${fileLocale}')`,
+            );
 
             // Check all locales for this key
             for (const locale of locales) {
-                if (locale === defaultLocale) {
+                if (locale === defaultLocaleForKey) {
                     continue;
                 }
 
                 const val = record.locales.get(locale);
                 const locEntry = record.locations.find((l) => l.locale === locale);
 
-                // Only create diagnostics for this file if it owns this locale
-                if (locEntry && locEntry.uri.toString() !== fileKey) {
+                // Determine if we should report diagnostics for this locale in this file:
+                // 1. If this file IS the locale file (fileLocale === locale), always report
+                // 2. If this file is the DEFAULT locale and the key is missing in target locale, report
+                // 3. If locEntry exists but points to a different file, skip (that file will handle it)
+                
+                const shouldReport = 
+                    fileLocale === locale || // This file owns this locale
+                    (fileLocale === defaultLocaleForKey && !locEntry); // Default-locale file reporting missing translations
+                
+                if (!shouldReport) {
+                    // Skip if another file owns this locale
+                    if (locEntry && locEntry.uri.toString() !== fileKey) {
+                        continue;
+                    }
+                }
+
+                // Avoid duplicate missing diagnostics: only the default-locale file should emit
+                if ((!val || !val.trim()) && fileLocale !== defaultLocaleForKey) {
                     continue;
                 }
 
-                // If this file is the locale file for this locale, analyze it
-                if (fileLocale === locale || !locEntry) {
-                    const issues = this.analyzeKeyForLocale(
-                        key,
-                        locale,
-                        val,
-                        defaultValue,
-                        defaultPlaceholders,
-                        config,
-                    );
+                this.log.appendLine(
+                    `[DiagnosticAnalyzer] Considering locale '${locale}' for key '${key}': ` +
+                    `val=${val ? 'present' : 'missing'}, locEntry=${!!locEntry}, shouldReport=${shouldReport}`,
+                );
 
-                    for (const issue of issues) {
-                        const range = await this.getKeyRangeInFile(uri, key);
-                        const diagnostic = new vscode.Diagnostic(
-                            range,
-                            issue.message,
-                            issue.severity,
-                        );
-                        diagnostic.code = issue.code;
-                        diagnostics.push(diagnostic);
-                    }
+                if (!val || !val.trim()) {
+                    this.log.appendLine(
+                        `[DiagnosticAnalyzer] Missing translation detected for key '${key}' in locale '${locale}' while analyzing file '${uri.fsPath}' (fileLocale='${fileLocale}', defaultLocale='${defaultLocaleForKey}')`,
+                    );
+                }
+
+                const issues = this.analyzeKeyForLocale(
+                    key,
+                    locale,
+                    val,
+                    defaultValue,
+                    defaultPlaceholders,
+                    config,
+                );
+
+                for (const issue of issues) {
+                    const range = await this.getKeyRangeInFile(uri, key);
+                    const diagnostic = new vscode.Diagnostic(
+                        range,
+                        issue.message,
+                        issue.severity,
+                    );
+                    diagnostic.code = issue.code;
+                    diagnostics.push(diagnostic);
                 }
             }
+
         }
 
         this.diagnosticsByFile.set(fileKey, diagnostics);
@@ -219,6 +273,96 @@ export class DiagnosticAnalyzer {
     }
 
     /**
+     * Load ignore patterns from scripts/i18n-ignore-patterns.json if present.
+     */
+    async loadIgnorePatterns(workspaceFolders: readonly vscode.WorkspaceFolder[]): Promise<void> {
+        const merged: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } = {
+            exact: [],
+            exactInsensitive: [],
+            contains: [],
+        };
+        for (const folder of workspaceFolders) {
+            try {
+                const ignoreUri = vscode.Uri.joinPath(
+                    folder.uri,
+                    'scripts',
+                    'i18n-ignore-patterns.json',
+                );
+                const data = await vscode.workspace.fs.readFile(ignoreUri);
+                const raw = this.decoder.decode(data);
+                const json = JSON.parse(raw);
+                if (Array.isArray(json?.exact)) merged.exact!.push(...json.exact);
+                if (Array.isArray(json?.exactInsensitive)) merged.exactInsensitive!.push(...json.exactInsensitive);
+                if (Array.isArray(json?.contains)) merged.contains!.push(...json.contains);
+            } catch {
+                // ignore missing/invalid files
+            }
+        }
+        this.ignorePatterns = merged;
+    }
+
+    private isIgnoredText(text: string): boolean {
+        const pat = this.ignorePatterns;
+        if (!pat) return false;
+        const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!normalized) return false;
+        if (Array.isArray(pat.exact) && pat.exact.includes(normalized)) return true;
+        if (Array.isArray(pat.exactInsensitive)) {
+            const lower = normalized.toLowerCase();
+            for (const v of pat.exactInsensitive) {
+                if (String(v || '').toLowerCase() === lower) return true;
+            }
+        }
+        if (Array.isArray(pat.contains)) {
+            for (const sub of pat.contains) {
+                if (sub && normalized.includes(String(sub))) return true;
+            }
+        }
+        return false;
+    }
+
+    // Lightweight heuristics inspired by fix-untranslated.js isNonTranslatableExample
+    private isProbablyNonTranslatable(text: string): boolean {
+        const normalized = String(text || '').trim().replace(/\s+/g, ' ');
+        if (!normalized) return false;
+        // obvious URLs
+        if (/^https?:\/\//i.test(normalized) || /^www\./i.test(normalized)) return true;
+        // example tokens
+        if (/\bexample\b/i.test(normalized)) return true;
+        // filesystem-like paths
+        if (/^\\\\[^\s]+/.test(normalized) || /^\/[\w/.-]+$/.test(normalized) || /^[A-Za-z]:[\\/][^\s]*$/.test(normalized)) return true;
+        // single character
+        if (normalized.length === 1) return true;
+        // emails on example/acme
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+            const lower = normalized.toLowerCase();
+            if (lower.includes('example.') || lower.includes('acme.')) return true;
+        }
+        // id-like tokens (mixed alnum, no spaces)
+        const noSpace = !/\s/.test(normalized);
+        const hasLetter = /[A-Za-z]/.test(normalized);
+        const hasDigit = /\d/.test(normalized);
+        if (noSpace && hasLetter && hasDigit && normalized.length >= 6 && normalized.length <= 64) return true;
+        // protocol-like tokens and well-known abbreviations (configurable)
+        const lower = normalized.toLowerCase();
+        try {
+            const cfg = vscode.workspace.getConfiguration('ai-assistant');
+            const csv = cfg.get<string>('i18n.heuristics.abbreviationsCsv') || 'webdav, imap, smtp, pop3, ftp, sftp';
+            const abbrs = csv
+                .split(',')
+                .map((s) => s.trim().toLowerCase())
+                .filter(Boolean);
+            if (abbrs.includes(lower)) return true;
+        } catch {
+            // ignore config read errors
+        }
+        // all-caps short codes
+        const alphaNum = normalized.replace(/[^A-Za-z0-9]/g, '');
+        if (alphaNum && alphaNum.length <= 4 && alphaNum.toUpperCase() === alphaNum) return true;
+        return false;
+    }
+
+    /**
      * Clear cached diagnostics for a file.
      */
     clearFile(uri: vscode.Uri): void {
@@ -258,13 +402,16 @@ export class DiagnosticAnalyzer {
             return issues; // No point checking placeholders if value is missing
         }
 
-        // Check for untranslated (same as default)
+        // Check for untranslated (same as default) and apply ignore patterns/heuristics
         if (config.untranslatedEnabled && value === defaultValue) {
-            issues.push({
-                message: `AI i18n: Untranslated (same as default) value for key ${key} in locale ${locale}`,
-                severity: config.untranslatedSeverity,
-                code: 'ai-i18n.untranslated',
-            });
+            const ignore = this.isIgnoredText(defaultValue) || this.isProbablyNonTranslatable(defaultValue);
+            if (!ignore) {
+                issues.push({
+                    message: `AI i18n: Untranslated (same as default) value for key ${key} in locale ${locale}`,
+                    severity: config.untranslatedSeverity,
+                    code: 'ai-i18n.untranslated',
+                });
+            }
         }
 
         // Check for placeholder mismatch

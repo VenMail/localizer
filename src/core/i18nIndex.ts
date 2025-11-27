@@ -207,12 +207,27 @@ export class I18nIndex {
         return entry || null;
     }
 
+    /**
+     * Return the set of all locales present across the workspace, derived from file-to-keys map.
+     */
+    getAllLocales(): string[] {
+        const set = new Set<string>();
+        for (const entry of this.fileToKeys.values()) {
+            if (entry?.locale) {
+                set.add(entry.locale);
+            }
+        }
+        return Array.from(set);
+    }
+
     async updateFile(uri: vscode.Uri): Promise<void> {
         const config = vscode.workspace.getConfiguration('ai-assistant');
         this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
 
         const fileKey = uri.toString();
         const existing = this.fileToKeys.get(fileKey);
+        const existingLocale = existing?.locale;
+        
         if (existing) {
             for (const key of existing.keys) {
                 const record = this.keyMap.get(key);
@@ -227,7 +242,7 @@ export class I18nIndex {
                     this.keyMap.delete(key);
                 }
             }
-            this.fileToKeys.delete(fileKey);
+            // Don't delete fileToKeys entry yet - we'll update it below
         }
 
         let stat: vscode.FileStat;
@@ -261,11 +276,17 @@ export class I18nIndex {
             return;
         }
 
-        const locale = this.inferLocaleFromPath(uri);
+        const locale = this.inferLocaleFromPath(uri) || existingLocale;
         if (!locale) {
+            // Can't determine locale, remove the entry
+            this.fileToKeys.delete(fileKey);
             return;
         }
 
+        // Always set/update the fileToKeys entry, even if no keys are found
+        // This preserves locale information for empty files
+        this.fileToKeys.set(fileKey, { locale, keys: [] });
+        
         this.walkJson('', json, locale, uri);
     }
 

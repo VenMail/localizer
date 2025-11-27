@@ -245,6 +245,11 @@
           ],
           "default": "warning",
           "description": "Severity level used when a locale value is identical to the default locale value."
+        },
+        "ai-assistant.i18n.heuristics.abbreviationsCsv": {
+          "type": "string",
+          "default": "webdav, imap, smtp, pop3, ftp, sftp",
+          "description": "Comma-separated list of well-known protocol or technical abbreviations that should be considered non-translatable when matching exact tokens (used to filter 'untranslated (same as default)' warnings)."
         }
       }
     }

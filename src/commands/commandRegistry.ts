@@ -208,20 +208,74 @@ export class CommandRegistry {
                 'i18n/**/*.json',
             ];
 
+        const handleLocaleChange = async (uri: vscode.Uri) => {
+            this.log.appendLine(`[Watch] Locale file change detected: ${uri.fsPath}`);
+
+            const beforeInfo = this.i18nIndex.getKeysForFile(uri);
+            const beforeKeys = beforeInfo?.keys || [];
+
+            await this.i18nIndex.updateFile(uri);
+
+            const afterInfo = this.i18nIndex.getKeysForFile(uri);
+            const afterKeys = afterInfo?.keys || [];
+
+            const changedKeySet = new Set<string>();
+            for (const k of beforeKeys) changedKeySet.add(k);
+            for (const k of afterKeys) changedKeySet.add(k);
+
+            this.log.appendLine(
+                `[Watch] Keys changed in ${uri.fsPath}: ` +
+                `Before: ${beforeKeys.length}, After: ${afterKeys.length}, Changed set: ${changedKeySet.size}`
+            );
+
+            // Always include the changed file itself so its diagnostics are cleared/updated.
+            const impactedUriStrings = new Set<string>([uri.toString()]);
+
+            // For each changed key, re-analyze all locale files that contain that key.
+            for (const key of changedKeySet) {
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) {
+                    this.log.appendLine(`[Watch] Key ${key} not found in index (deleted from all locales)`);
+                    continue;
+                }
+                
+                // Always include default locale file for this key
+                const defaultLocale = record.defaultLocale;
+                const defaultLoc = record.locations.find(l => l.locale === defaultLocale);
+                if (defaultLoc) {
+                    impactedUriStrings.add(defaultLoc.uri.toString());
+                }
+                
+                // Include all other locales where this key appears
+                for (const loc of record.locations) {
+                    impactedUriStrings.add(loc.uri.toString());
+                }
+                
+                this.log.appendLine(
+                    `[Watch] Key '${key}' impacts ${record.locations.length} locale file(s)`
+                );
+            }
+
+            const impactedUris = Array.from(impactedUriStrings).map((s) => vscode.Uri.parse(s));
+            this.log.appendLine(
+                `[Watch] Recomputing diagnostics for ${impactedUris.length} locale file(s) ` +
+                    `due to change in ${uri.fsPath}.`,
+            );
+
+            const extraKeys = Array.from(changedKeySet);
+            for (const targetUri of impactedUris) {
+                this.log.appendLine(`[Watch] Analyzing impacted file: ${targetUri.fsPath}`);
+                await this.refreshFileDiagnostics(untranslatedDiagnostics, targetUri, extraKeys);
+            }
+        };
+
         for (const folder of folders) {
             for (const glob of localeGlobs) {
                 const pattern = new vscode.RelativePattern(folder, glob);
                 const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                const handle = async (uri: vscode.Uri) => {
-                    this.log.appendLine(
-                        `[Watch] Locale file change detected: ${uri.fsPath}`,
-                    );
-                    await this.i18nIndex.updateFile(uri);
-                    await this.refreshFileDiagnostics(untranslatedDiagnostics, uri);
-                };
-                watcher.onDidChange(handle, undefined, disposables);
-                watcher.onDidCreate(handle, undefined, disposables);
-                watcher.onDidDelete(handle, undefined, disposables);
+                watcher.onDidChange(handleLocaleChange, undefined, disposables);
+                watcher.onDidCreate(handleLocaleChange, undefined, disposables);
+                watcher.onDidDelete(handleLocaleChange, undefined, disposables);
                 disposables.push(watcher);
             }
         }
@@ -246,6 +300,7 @@ export class CommandRegistry {
     private async refreshFileDiagnostics(
         collection: vscode.DiagnosticCollection,
         uri: vscode.Uri,
+        extraKeys?: string[],
     ): Promise<void> {
         const config = getDiagnosticConfig();
         if (!config.enabled) {
@@ -255,8 +310,9 @@ export class CommandRegistry {
 
         const folders = vscode.workspace.workspaceFolders || [];
         await this.diagnosticAnalyzer.loadStyleReport(folders);
+        await this.diagnosticAnalyzer.loadIgnorePatterns(folders);
 
-        const diagnostics = await this.diagnosticAnalyzer.analyzeFile(uri, config);
+        const diagnostics = await this.diagnosticAnalyzer.analyzeFile(uri, config, extraKeys);
         collection.set(uri, diagnostics);
     }
 
@@ -290,6 +346,7 @@ export class CommandRegistry {
 
         const folders = vscode.workspace.workspaceFolders || [];
         await this.diagnosticAnalyzer.loadStyleReport(folders);
+        await this.diagnosticAnalyzer.loadIgnorePatterns(folders);
 
         const diagnosticMap = await this.diagnosticAnalyzer.analyzeAll(config);
 

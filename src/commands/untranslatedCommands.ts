@@ -185,6 +185,17 @@ export class UntranslatedCommands {
                 return;
             }
 
+            // First: sync missing keys with default placeholder values
+            for (const locale of targetLocales) {
+                const current = record.locales.get(locale);
+                if (typeof current !== 'string' || !current.trim()) {
+                    await setTranslationValue(folder, locale, key, defaultValue);
+                }
+            }
+
+            // Reindex after placeholder sync so Problems panel updates immediately
+            await this.i18nIndex.ensureInitialized(true);
+
             const translations = await this.translationService.translateToLocales(
                 defaultValue,
                 defaultLocale,
@@ -194,9 +205,17 @@ export class UntranslatedCommands {
             );
 
             if (!translations || translations.size === 0) {
-                vscode.window.showInformationMessage(
+                const choice = await vscode.window.showInformationMessage(
                     'AI i18n: No translations were generated for this quick fix (check API key and settings).',
+                    'Open OpenAI API Key Settings',
+                    'Dismiss',
                 );
+                if (choice === 'Open OpenAI API Key Settings') {
+                    await vscode.commands.executeCommand('ai-assistant.setOpenAiApiKeySecret');
+                }
+                // No AI translations, but placeholders were applied already; reindex and rescan
+                await this.i18nIndex.ensureInitialized(true);
+                await vscode.commands.executeCommand('ai-assistant.i18n.rescan');
                 return;
             }
 
