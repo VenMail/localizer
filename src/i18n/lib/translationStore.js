@@ -163,4 +163,6 @@ module.exports = {
   primeTextKeyMap,
   registerTranslation,
   ensureTranslationForKey,
+  // Alias for compatibility with babel-extract-i18n.js
+  ensureTranslation: ensureTranslationForKey,
 };

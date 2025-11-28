@@ -45,6 +45,27 @@ export class UntranslatedCommands {
         }
     }
 
+    /**
+     * Check if a key path exists in a JSON object
+     */
+    private hasKeyPathInObject(obj: any, keyPath: string): boolean {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+        const segments = String(keyPath).split('.').filter(Boolean);
+        if (!segments.length) return false;
+
+        let node = obj;
+        for (const segment of segments) {
+            if (!node || typeof node !== 'object' || Array.isArray(node)) {
+                return false;
+            }
+            if (!Object.prototype.hasOwnProperty.call(node, segment)) {
+                return false;
+            }
+            node = node[segment];
+        }
+        return true;
+    }
+
     private deleteKeyPathInObject(obj: any, keyPath: string): boolean {
         if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
         const segments = String(keyPath).split('.').filter(Boolean);
@@ -365,6 +386,7 @@ export class UntranslatedCommands {
             if (fileLocale === globalDefaultLocale) {
                 await this.translateMissingLocalesFromDefaultFile(
                     folder,
+                    targetUri,
                     fileInfo,
                     globalDefaultLocale,
                 );
@@ -374,12 +396,12 @@ export class UntranslatedCommands {
             // Narrow the type for TypeScript
             const targetLocale: string = fileLocale;
 
-            // Find ALL keys that need translation for this locale
+            // Find ALL keys in this file that need translation for this locale
             // This includes keys that exist in default locale but are missing/untranslated in this locale
             const keysToTranslate: { key: string; defaultValue: string }[] = [];
-            const allKeys = this.i18nIndex.getAllKeys();
+            const keysInFile = fileInfo?.keys || [];
 
-            for (const key of allKeys) {
+            for (const key of keysInFile) {
                 const record = this.i18nIndex.getRecord(key);
                 if (!record) continue;
 
@@ -498,20 +520,10 @@ export class UntranslatedCommands {
 
     private async translateMissingLocalesFromDefaultFile(
         folder: vscode.WorkspaceFolder,
+        documentUri: vscode.Uri,
         fileInfo: { locale: string; keys: string[] } | null,
         globalDefaultLocale: string,
     ): Promise<void> {
-        const projectConfig = await this.projectConfigService.readConfig(folder);
-        const configuredLocales = projectConfig?.locales || [globalDefaultLocale];
-        const candidateLocales = configuredLocales.filter((l) => l && l !== globalDefaultLocale);
-
-        if (!candidateLocales.length) {
-            vscode.window.showInformationMessage(
-                'AI i18n: No non-default locales configured in aiI18n.locales for this project.',
-            );
-            return;
-        }
-
         const keysInFile = fileInfo?.keys || [];
         if (!keysInFile.length) {
             vscode.window.showInformationMessage(
@@ -520,9 +532,28 @@ export class UntranslatedCommands {
             return;
         }
 
-        const missingPerLocale = new Map<string, { key: string; defaultValue: string }[]>();
+        const keySet = new Set(keysInFile);
+        const diagnostics = vscode.languages
+            .getDiagnostics(documentUri)
+            .filter((d) => String(d.code) === 'ai-i18n.untranslated');
 
-        for (const key of keysInFile) {
+        if (!diagnostics.length) {
+            vscode.window.showInformationMessage(
+                'AI i18n: No untranslated diagnostics found for this file.',
+            );
+            return;
+        }
+
+        const missingPerLocale = new Map<string, { key: string; defaultValue: string }[]>();
+        const localeSet = new Set<string>();
+
+        for (const diag of diagnostics) {
+            const parsed = this.parseUntranslatedDiagnostic(String(diag.message || ''));
+            if (!parsed) continue;
+            const { key, locales } = parsed;
+            if (!key || !locales || !locales.length) continue;
+            if (!keySet.has(key)) continue;
+
             const record = this.i18nIndex.getRecord(key);
             if (!record) continue;
 
@@ -530,16 +561,9 @@ export class UntranslatedCommands {
             const defaultValue = record.locales.get(defaultLocale);
             if (typeof defaultValue !== 'string' || !defaultValue.trim()) continue;
 
-            for (const locale of candidateLocales) {
-                if (locale === defaultLocale) continue;
-
-                const currentValue = record.locales.get(locale);
-                const needsTranslation =
-                    !currentValue ||
-                    !currentValue.trim() ||
-                    currentValue.trim() === defaultValue.trim();
-
-                if (!needsTranslation) continue;
+            for (const locale of locales) {
+                if (!locale || locale === defaultLocale) continue;
+                localeSet.add(locale);
 
                 let list = missingPerLocale.get(locale);
                 if (!list) {
@@ -550,9 +574,9 @@ export class UntranslatedCommands {
             }
         }
 
-        if (!missingPerLocale.size) {
+        if (!missingPerLocale.size || !localeSet.size) {
             vscode.window.showInformationMessage(
-                'AI i18n: No untranslated keys found for configured locales in this file.',
+                'AI i18n: No untranslated keys found for non-default locales in this file.',
             );
             return;
         }
@@ -838,6 +862,65 @@ export class UntranslatedCommands {
         }
     }
 
+    private parseUntranslatedDiagnostic(message: string): { key: string; locales: string[] } | null {
+        if (!message) {
+            return null;
+        }
+
+        const missingNewMatch = message.match(/^Missing translation for "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
+        if (missingNewMatch) {
+            const key = missingNewMatch[1].trim();
+            const locale = missingNewMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        const untranslatedNewMatch = message.match(
+            /^Untranslated \(same as default\) "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/,
+        );
+        if (untranslatedNewMatch) {
+            const key = untranslatedNewMatch[1].trim();
+            const locale = untranslatedNewMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        const clean = message.replace(/^AI i18n:\s*/, '');
+
+        const missingMatch = clean.match(
+            /^Missing translation for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/,
+        );
+        if (missingMatch) {
+            const key = missingMatch[1].trim();
+            const locale = missingMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        const untranslatedMatch = clean.match(
+            /^Untranslated \(same as default\) value for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/,
+        );
+        if (untranslatedMatch) {
+            const key = untranslatedMatch[1].trim();
+            const locale = untranslatedMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        const selectionMatch = clean.match(
+            /^Missing translations for\s+(.+?)\s+in locales:\s+(.+)$/,
+        );
+        if (selectionMatch) {
+            const key = selectionMatch[1].trim();
+            const localesRaw = selectionMatch[2]
+                .split(',')
+                .map((p) => p.trim())
+                .filter(Boolean);
+            if (!key || !localesRaw.length) {
+                return null;
+            }
+            return { key, locales: localesRaw };
+        }
+
+        return null;
+    }
+
     private parseStyleDiagnostic(message: string): { key: string; locale: string; suggested: string } | null {
         if (!message) return null;
         const clean = String(message).replace(/^AI i18n:\s*/, '');
@@ -1022,14 +1105,15 @@ export class UntranslatedCommands {
                 return;
             }
 
-            const unused = Array.isArray(report.unused) ? report.unused : [];
-            if (!unused.length) {
+            const allUnused = Array.isArray(report.unused) ? report.unused : [];
+            if (!allUnused.length) {
                 vscode.window.showInformationMessage(
                     'AI i18n: No unused keys found in unused keys report.',
                 );
                 return;
             }
 
+            // Parse the current file to find which keys exist in it
             let root: any = {};
             try {
                 const text = doc.getText();
@@ -1037,6 +1121,39 @@ export class UntranslatedCommands {
                 if (parsed && typeof parsed === 'object') root = parsed;
             } catch {}
             if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+            // Filter to only keys that exist in this file
+            const unused = allUnused.filter((item: any) => {
+                if (!item || typeof item.keyPath !== 'string') return false;
+                return this.hasKeyPathInObject(root, item.keyPath);
+            });
+
+            if (!unused.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No unused keys from report were found in this file.',
+                );
+                return;
+            }
+
+            // Confirm with user before proceeding
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: `Remove ${unused.length} unused key(s)`,
+                        description: `Remove ${unused.length} unused key(s) from this locale file only.`,
+                    },
+                    {
+                        label: 'Cancel',
+                        description: 'Do not remove keys.',
+                    },
+                ],
+                {
+                    placeHolder: `AI i18n: Remove ${unused.length} unused key(s) found in this file?`,
+                },
+            );
+            if (!choice || choice.label === 'Cancel') {
+                return;
+            }
 
             const deletedKeys = new Set<string>();
             for (const item of unused) {
@@ -1051,7 +1168,7 @@ export class UntranslatedCommands {
 
             if (!deletedKeys.size) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No unused keys from report were found in this file.',
+                    'AI i18n: No unused keys were removed from this file.',
                 );
                 return;
             }
@@ -1146,10 +1263,32 @@ export class UntranslatedCommands {
                 return;
             }
 
-            const invalid = Array.isArray(report.invalid) ? report.invalid : [];
-            if (!invalid.length) {
+            const allInvalid = Array.isArray(report.invalid) ? report.invalid : [];
+            if (!allInvalid.length) {
                 vscode.window.showInformationMessage(
                     'AI i18n: No invalid/non-translatable keys found in invalid keys report.',
+                );
+                return;
+            }
+
+            // Parse the current file to find which keys exist in it
+            let root: any = {};
+            try {
+                const text = doc.getText();
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed === 'object') root = parsed;
+            } catch {}
+            if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+            // Filter to only keys that exist in this file
+            const invalid = allInvalid.filter((item: any) => {
+                if (!item || typeof item.keyPath !== 'string') return false;
+                return this.hasKeyPathInObject(root, item.keyPath);
+            });
+
+            if (!invalid.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No invalid/non-translatable keys from report were found in this file.',
                 );
                 return;
             }
@@ -1158,8 +1297,8 @@ export class UntranslatedCommands {
             const choice = await vscode.window.showQuickPick(
                 [
                     {
-                        label: 'Restore code references and remove from locale files',
-                        description: `Restore inline strings in code and remove ${invalid.length} invalid key(s) from all locale files.`,
+                        label: 'Restore code references and remove from this file',
+                        description: `Restore inline strings in code and remove ${invalid.length} invalid key(s) from this locale file only.`,
                     },
                     {
                         label: 'Cancel',
@@ -1167,14 +1306,14 @@ export class UntranslatedCommands {
                     },
                 ],
                 {
-                    placeHolder: `AI i18n: Restore ${invalid.length} invalid key(s) to inline strings and remove from locale files?`,
+                    placeHolder: `AI i18n: Restore ${invalid.length} invalid key(s) found in this file to inline strings?`,
                 },
             );
             if (!choice || choice.label === 'Cancel') {
                 return;
             }
 
-            // First, restore code references for all invalid keys
+            // First, restore code references for invalid keys in this file
             let codeRestoreCount = 0;
             for (const item of invalid) {
                 if (!item || typeof item.keyPath !== 'string') continue;
@@ -1200,10 +1339,9 @@ export class UntranslatedCommands {
                 }
             }
 
-            // Then remove keys from this locale file
-            let root: any = {};
+            // Then remove keys from this locale file only
+            // Re-read the file in case it was modified by code restoration
             try {
-                // Re-read the file in case it was modified
                 const freshDoc = await vscode.workspace.openTextDocument(targetUri);
                 const text = freshDoc.getText();
                 const parsed = JSON.parse(text);
@@ -1235,23 +1373,11 @@ export class UntranslatedCommands {
                 );
             }
 
-            // Also remove from other locale files
-            await this.i18nIndex.ensureInitialized();
-            for (const item of invalid) {
-                if (!item || typeof item.keyPath !== 'string') continue;
-                const record = this.i18nIndex.getRecord(item.keyPath);
-                if (record) {
-                    const otherUris = record.locations
-                        .map((l) => l.uri)
-                        .filter((u) => u.toString() !== targetUri.toString());
-                    if (otherUris.length) {
-                        await this.deleteKeyFromLocaleFiles(item.keyPath, otherUris);
-                    }
-                }
-            }
+            // Note: We intentionally do NOT remove from other locale files here.
+            // This is a single-file operation. Use the project-wide script for bulk cleanup.
 
             const message = codeRestoreCount > 0
-                ? `AI i18n: Restored ${codeRestoreCount} code reference(s) and removed ${deletedKeys.size} invalid key(s) from locale files.`
+                ? `AI i18n: Restored ${codeRestoreCount} code reference(s) and removed ${deletedKeys.size} invalid key(s) from this file.`
                 : `AI i18n: Removed ${deletedKeys.size} invalid/non-translatable key(s) from this file.`;
             vscode.window.showInformationMessage(message);
         } catch (err) {

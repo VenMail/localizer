@@ -259,6 +259,58 @@ export class AutoMonitor {
             const autoExtract = config.get<boolean>('i18n.autoExtract', true);
             const autoRewrite = config.get<boolean>('i18n.autoRewrite', true);
 
+            if (autoExtract || autoRewrite) {
+                const scriptsLabel = autoExtract && autoRewrite
+                    ? 'i18n:extract and i18n:rewrite'
+                    : autoExtract
+                        ? 'i18n:extract'
+                        : 'i18n:rewrite';
+
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: `Run ${scriptsLabel} now`,
+                            description: `Process ${cleanFiles.length} clean file(s) with AI i18n scripts`,
+                        },
+                        {
+                            label: 'Skip this time',
+                            description: 'Do not run i18n scripts automatically right now',
+                        },
+                        {
+                            label: 'Disable auto extract/rewrite',
+                            description:
+                                'Turn off ai-localizer.i18n.autoExtract and ai-localizer.i18n.autoRewrite for this workspace',
+                        },
+                    ],
+                    {
+                        placeHolder: `AI i18n: Run ${scriptsLabel} for ${cleanFiles.length} clean file(s)?`,
+                    },
+                );
+
+                if (!choice || choice.label === 'Skip this time') {
+                    state.pendingFiles.clear();
+                    return;
+                }
+
+                if (choice.label === 'Disable auto extract/rewrite') {
+                    await config.update(
+                        'i18n.autoExtract',
+                        false,
+                        vscode.ConfigurationTarget.Workspace,
+                    );
+                    await config.update(
+                        'i18n.autoRewrite',
+                        false,
+                        vscode.ConfigurationTarget.Workspace,
+                    );
+                    vscode.window.showInformationMessage(
+                        'AI i18n: Disabled automatic extract/rewrite for this workspace.',
+                    );
+                    state.pendingFiles.clear();
+                    return;
+                }
+            }
+
             if (autoExtract) {
                 await runI18nScript('i18n:extract');
                 state.lastExtractTime = Date.now();

@@ -163,10 +163,19 @@ function shouldTranslateText(text, patterns) {
   return true;
 }
 
+/**
+ * Check if text should be ignored (inverse of shouldTranslateText)
+ * This is an alias for compatibility with babel-extract-i18n.js
+ */
+function shouldIgnoreText(text, patterns) {
+  return !shouldTranslateText(text, patterns);
+}
+
 module.exports = {
   loadIgnorePatterns,
   getIgnorePatterns,
   shouldIgnoreAttribute,
   isNonTranslatableText,
   shouldTranslateText,
+  shouldIgnoreText,
 };
