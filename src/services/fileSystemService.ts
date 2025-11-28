@@ -236,6 +236,12 @@ export class FileSystemService {
             // ignore invalid/missing package.json
         }
 
+        // Final fallback: use the actual running Node.js version
+        const runtimeVersion = this.normalizeVersion(process.version);
+        if (runtimeVersion) {
+            return runtimeVersion;
+        }
+
         return null;
     }
 
