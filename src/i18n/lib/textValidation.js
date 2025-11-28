@@ -189,13 +189,17 @@ function isTranslatableText(text) {
   }
 
   // Exclude URL-like strings
-  if (/^(https?:\/\/|www\.|\//).test(trimmed)) {
+  if (/^(https?:\/\/|www\.|\/)/.test(trimmed)) {
     return false;
   }
 
-  // Exclude bare query-string or fragment-like segments (e.g. "?duration=", "?lang=en")
-  if (!/\s/.test(trimmed) && /[?&]/.test(trimmed) && /=/.test(trimmed)) {
-    return false;
+  // Exclude standalone query-string or fragment-like segments
+  // Examples: "?duration=", "?lang=en", "foo=bar&baz=qux"
+  if (!/\s/.test(trimmed)) {
+    const queryLike = /^(?:[?#])?[A-Za-z0-9_.-]+(?:=[^&\s]*)?(?:&[A-Za-z0-9_.-]+(?:=[^&\s]*)?)*$/;
+    if (queryLike.test(trimmed)) {
+      return false;
+    }
   }
 
   // Exclude file paths and extensions
@@ -211,6 +215,15 @@ function isTranslatableText(text) {
   // Exclude numbers-only or mostly numbers
   if (/^\d+$/.test(trimmed) || /^\d[\d\s.,-]*\d$/.test(trimmed)) {
     return false;
+  }
+
+  // Exclude id-like tokens (mixed alnum, no spaces)
+  if (!/\s/.test(trimmed)) {
+    const hasLetter = /[A-Za-z]/.test(trimmed);
+    const hasDigit = /\d/.test(trimmed);
+    if (hasLetter && hasDigit && trimmed.length >= 6 && trimmed.length <= 64) {
+      return false;
+    }
   }
 
   // Exclude single words with underscores or dots (technical identifiers)
