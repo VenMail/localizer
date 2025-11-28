@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { I18nIndex } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
+import { ProjectConfigService } from '../services/projectConfigService';
 import { setTranslationValue, setTranslationValueInFile } from '../core/i18nFs';
 import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
 import { TextDecoder, TextEncoder } from 'util';
@@ -13,6 +14,7 @@ export class UntranslatedCommands {
     constructor(
         private i18nIndex: I18nIndex,
         private translationService: TranslationService,
+        private projectConfigService: ProjectConfigService,
     ) {}
 
     async openReport(): Promise<void> {
@@ -203,7 +205,7 @@ export class UntranslatedCommands {
                 await setTranslationValue(folder, u.locale, u.keyPath, u.newValue);
             }
 
-            await this.i18nIndex.ensureInitialized(true);
+            // Locale file writes trigger watchers which update index + diagnostics incrementally
             vscode.window.showInformationMessage(
                 `AI i18n: Applied ${updates.length} AI translation updates.`,
             );
@@ -263,8 +265,7 @@ export class UntranslatedCommands {
                 }
             }
 
-            // Reindex after placeholder sync so Problems panel updates immediately
-            await this.i18nIndex.ensureInitialized(true);
+            // Locale file writes trigger watchers which update index + diagnostics incrementally
 
             const translations = await this.translationService.translateToLocales(
                 defaultValue,
@@ -283,9 +284,8 @@ export class UntranslatedCommands {
                 if (choice === 'Open OpenAI API Key Settings') {
                     await vscode.commands.executeCommand('ai-localizer.setOpenAiApiKeySecret');
                 }
-                // No AI translations, but placeholders were applied already; reindex and rescan
-                await this.i18nIndex.ensureInitialized(true);
-                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+                // No AI translations, but placeholders were applied already
+                // Locale file writes trigger watchers which update index + diagnostics incrementally
                 return;
             }
 
@@ -293,9 +293,7 @@ export class UntranslatedCommands {
                 await setTranslationValue(folder, locale, key, newValue);
             }
 
-            await this.i18nIndex.ensureInitialized(true);
-            await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
-
+            // Locale file writes trigger watchers which update index + diagnostics incrementally
             vscode.window.showInformationMessage(
                 `AI i18n: Applied AI translations for ${key} in ${translations.size} locale(s).`,
             );
@@ -365,8 +363,10 @@ export class UntranslatedCommands {
             }
 
             if (fileLocale === globalDefaultLocale) {
-                vscode.window.showInformationMessage(
-                    `AI i18n: This is the default locale file (${globalDefaultLocale}). Nothing to translate.`,
+                await this.translateMissingLocalesFromDefaultFile(
+                    folder,
+                    fileInfo,
+                    globalDefaultLocale,
                 );
                 return;
             }
@@ -474,8 +474,7 @@ export class UntranslatedCommands {
                 },
             );
 
-            await this.i18nIndex.ensureInitialized(true);
-            await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+            // Locale file writes trigger watchers which update index + diagnostics incrementally
 
             if (translatedCount > 0) {
                 vscode.window.showInformationMessage(
@@ -494,6 +493,187 @@ export class UntranslatedCommands {
         } catch (err) {
             console.error('AI i18n: Failed to translate all untranslated keys:', err);
             vscode.window.showErrorMessage('AI i18n: Failed to translate all untranslated keys.');
+        }
+    }
+
+    private async translateMissingLocalesFromDefaultFile(
+        folder: vscode.WorkspaceFolder,
+        fileInfo: { locale: string; keys: string[] } | null,
+        globalDefaultLocale: string,
+    ): Promise<void> {
+        const projectConfig = await this.projectConfigService.readConfig(folder);
+        const configuredLocales = projectConfig?.locales || [globalDefaultLocale];
+        const candidateLocales = configuredLocales.filter((l) => l && l !== globalDefaultLocale);
+
+        if (!candidateLocales.length) {
+            vscode.window.showInformationMessage(
+                'AI i18n: No non-default locales configured in aiI18n.locales for this project.',
+            );
+            return;
+        }
+
+        const keysInFile = fileInfo?.keys || [];
+        if (!keysInFile.length) {
+            vscode.window.showInformationMessage(
+                'AI i18n: No translation keys found in this file.',
+            );
+            return;
+        }
+
+        const missingPerLocale = new Map<string, { key: string; defaultValue: string }[]>();
+
+        for (const key of keysInFile) {
+            const record = this.i18nIndex.getRecord(key);
+            if (!record) continue;
+
+            const defaultLocale = record.defaultLocale || globalDefaultLocale;
+            const defaultValue = record.locales.get(defaultLocale);
+            if (typeof defaultValue !== 'string' || !defaultValue.trim()) continue;
+
+            for (const locale of candidateLocales) {
+                if (locale === defaultLocale) continue;
+
+                const currentValue = record.locales.get(locale);
+                const needsTranslation =
+                    !currentValue ||
+                    !currentValue.trim() ||
+                    currentValue.trim() === defaultValue.trim();
+
+                if (!needsTranslation) continue;
+
+                let list = missingPerLocale.get(locale);
+                if (!list) {
+                    list = [];
+                    missingPerLocale.set(locale, list);
+                }
+                list.push({ key, defaultValue });
+            }
+        }
+
+        if (!missingPerLocale.size) {
+            vscode.window.showInformationMessage(
+                'AI i18n: No untranslated keys found for configured locales in this file.',
+            );
+            return;
+        }
+
+        const localeEntries = Array.from(missingPerLocale.entries());
+        let selectedLocale: string;
+        let keysToTranslate: { key: string; defaultValue: string }[];
+
+        if (localeEntries.length === 1) {
+            [selectedLocale, keysToTranslate] = localeEntries[0];
+        } else {
+            const items = localeEntries.map(([locale, list]) => {
+                const count = list.length;
+                return {
+                    label: `${locale} (${count} key${count === 1 ? '' : 's'})`,
+                    description: undefined,
+                    locale,
+                    count,
+                } as vscode.QuickPickItem & { locale: string; count: number };
+            });
+
+            const choice = await vscode.window.showQuickPick(items, {
+                placeHolder:
+                    'AI i18n: Select target locale to translate missing keys for this file',
+            });
+            if (!choice) {
+                return;
+            }
+
+            selectedLocale = (choice as any).locale;
+            keysToTranslate = missingPerLocale.get(selectedLocale) || [];
+        }
+
+        if (!keysToTranslate || !keysToTranslate.length) {
+            vscode.window.showInformationMessage(
+                `AI i18n: No untranslated keys found for locale ${selectedLocale} in this file.`,
+            );
+            return;
+        }
+
+        const confirm = await vscode.window.showQuickPick(
+            [
+                {
+                    label: `Translate ${keysToTranslate.length} key(s)`,
+                    description: `Use AI to translate ${keysToTranslate.length} untranslated key(s) to ${selectedLocale}`,
+                },
+                { label: 'Cancel', description: 'Do not translate' },
+            ],
+            {
+                placeHolder: `AI i18n: Translate ${keysToTranslate.length} untranslated key(s) in this file?`,
+            },
+        );
+        if (!confirm || confirm.label === 'Cancel') {
+            return;
+        }
+
+        let translatedCount = 0;
+        const batchSize = 10;
+
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'AI i18n: Translating...',
+                cancellable: true,
+            },
+            async (progress, token) => {
+                for (let i = 0; i < keysToTranslate.length; i += batchSize) {
+                    if (token.isCancellationRequested) break;
+
+                    const batch = keysToTranslate.slice(i, i + batchSize);
+                    progress.report({
+                        message: `${i + 1}-${Math.min(i + batchSize, keysToTranslate.length)} of ${keysToTranslate.length}`,
+                        increment: (batch.length / keysToTranslate.length) * 100,
+                    });
+
+                    for (const { key, defaultValue } of batch) {
+                        if (token.isCancellationRequested) break;
+
+                        try {
+                            const record = this.i18nIndex.getRecord(key);
+                            const defaultLocale = record?.defaultLocale || globalDefaultLocale;
+
+                            const translations =
+                                await this.translationService.translateToLocales(
+                                    defaultValue,
+                                    defaultLocale,
+                                    [selectedLocale],
+                                    'text',
+                                    true,
+                                );
+
+                            if (translations && translations.size > 0) {
+                                const newValue = translations.get(selectedLocale);
+                                if (newValue) {
+                                    await setTranslationValue(folder, selectedLocale, key, newValue);
+                                    translatedCount += 1;
+                                }
+                            }
+                        } catch (err) {
+                            console.error(`AI i18n: Failed to translate key ${key}:`, err);
+                        }
+                    }
+                }
+            },
+        );
+
+        // Locale file writes trigger watchers which update index + diagnostics incrementally
+
+        if (translatedCount > 0) {
+            vscode.window.showInformationMessage(
+                `AI i18n: Translated ${translatedCount} key(s) in ${selectedLocale}.`,
+            );
+        } else {
+            const apiChoice = await vscode.window.showInformationMessage(
+                'AI i18n: No translations were generated (check API key and settings).',
+                'Open OpenAI API Key Settings',
+                'Dismiss',
+            );
+            if (apiChoice === 'Open OpenAI API Key Settings') {
+                await vscode.commands.executeCommand('ai-localizer.setOpenAiApiKeySecret');
+            }
         }
     }
 
@@ -1616,7 +1796,7 @@ export class UntranslatedCommands {
                 deletedFromLocales = await this.deleteKeyFromLocaleFiles(key, localeUris);
             }
 
-            await this.i18nIndex.ensureInitialized(true);
+            // deleteKeyFromLocaleFiles already calls updateFile + refreshFileDiagnostics for each changed file
 
             if (deletedFromLocales > 0) {
                 vscode.window.showInformationMessage(
@@ -1818,8 +1998,7 @@ export class UntranslatedCommands {
             const newValue = translations.get(locale);
             if (newValue) {
                 await setTranslationValue(folder, locale, key, newValue);
-                await this.i18nIndex.ensureInitialized(true);
-                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+                // Locale file writes trigger watchers which update index + diagnostics incrementally
 
                 vscode.window.showInformationMessage(
                     `AI i18n: Fixed placeholder mismatch for ${key} in ${locale}.`,

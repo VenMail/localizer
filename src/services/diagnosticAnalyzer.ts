@@ -22,8 +22,10 @@ export class DiagnosticAnalyzer {
         string,
         { english?: string; current?: string; suggested?: string }
     >();
+    private styleReportLoaded = false;
     private decoder = new TextDecoder('utf-8');
     private ignorePatterns: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } | null = null;
+    private ignorePatternsLoaded = false;
 
     constructor(
         private i18nIndex: I18nIndex,
@@ -254,7 +256,14 @@ export class DiagnosticAnalyzer {
     /**
      * Load style issues from .i18n-untranslated-style.json report.
      */
-    async loadStyleReport(workspaceFolders: readonly vscode.WorkspaceFolder[]): Promise<void> {
+    async loadStyleReport(
+        workspaceFolders: readonly vscode.WorkspaceFolder[],
+        force = false,
+    ): Promise<void> {
+        if (this.styleReportLoaded && !force) {
+            return;
+        }
+
         this.styleIssuesByLocaleKey.clear();
 
         for (const folder of workspaceFolders) {
@@ -295,12 +304,20 @@ export class DiagnosticAnalyzer {
                 // Style report is optional
             }
         }
+        this.styleReportLoaded = true;
     }
 
     /**
      * Load ignore patterns from scripts/i18n-ignore-patterns.json if present.
      */
-    async loadIgnorePatterns(workspaceFolders: readonly vscode.WorkspaceFolder[]): Promise<void> {
+    async loadIgnorePatterns(
+        workspaceFolders: readonly vscode.WorkspaceFolder[],
+        force = false,
+    ): Promise<void> {
+        if (this.ignorePatternsLoaded && !force) {
+            return;
+        }
+
         const merged: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } = {
             exact: [],
             exactInsensitive: [],
@@ -339,6 +356,7 @@ export class DiagnosticAnalyzer {
             }
         }
         this.ignorePatterns = merged;
+        this.ignorePatternsLoaded = true;
     }
 
     private isIgnoredText(text: string): boolean {

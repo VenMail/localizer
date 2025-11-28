@@ -185,7 +185,7 @@ export class ConvertSelectionCommand {
                 this.reportUntranslatedLocales(document, single.range, finalKey, missingLocalesSingle);
             }
 
-            await this.i18nIndex.ensureInitialized(true);
+            // Locale file writes trigger watchers which update index + diagnostics incrementally
 
             const edit = new vscode.WorkspaceEdit();
 
@@ -365,7 +365,7 @@ export class ConvertSelectionCommand {
             }
         }
 
-        await this.i18nIndex.ensureInitialized(true);
+        // Locale file writes trigger watchers which update index + diagnostics incrementally
         await vscode.workspace.applyEdit(edit);
         vscode.window.showInformationMessage(
             `AI i18n: Applied translations to ${segments.length} selected text segment(s).`,

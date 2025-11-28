@@ -15,13 +15,20 @@ export interface ProjectConfig {
 export class ProjectConfigService {
     private decoder = new TextDecoder('utf-8');
     private encoder = new TextEncoder();
+    private configCache = new Map<string, ProjectConfig | null>();
 
     /**
      * Read project configuration from package.json
      */
     async readConfig(folder: vscode.WorkspaceFolder): Promise<ProjectConfig | null> {
+        const cacheKey = folder.uri.fsPath;
+        if (this.configCache.has(cacheKey)) {
+            return this.configCache.get(cacheKey) || null;
+        }
+
         const pkgUri = await findPackageJson(folder);
         if (!pkgUri) {
+            this.configCache.set(cacheKey, null);
             return null;
         }
 
@@ -42,9 +49,12 @@ export class ProjectConfigService {
 
             const scripts: Record<string, string> = pkg?.scripts || {};
 
-            return { locales, srcRoot, scripts };
+            const result: ProjectConfig = { locales, srcRoot, scripts };
+            this.configCache.set(cacheKey, result);
+            return result;
         } catch (err) {
             console.error('Failed to read project config:', err);
+            this.configCache.set(cacheKey, null);
             return null;
         }
     }
@@ -56,6 +66,8 @@ export class ProjectConfigService {
         folder: vscode.WorkspaceFolder,
         updates: Partial<ProjectConfig>,
     ): Promise<void> {
+        const cacheKey = folder.uri.fsPath;
+        this.configCache.delete(cacheKey);
         const pkgUri = await findPackageJson(folder);
         if (!pkgUri) {
             throw new Error('No package.json found');

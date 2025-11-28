@@ -121,6 +121,7 @@ export class CommandRegistry {
         const untranslatedCmds = new UntranslatedCommands(
             this.i18nIndex,
             this.translationService,
+            this.projectConfigService,
         );
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.openUntranslatedReport', () =>
@@ -407,8 +408,8 @@ export class CommandRegistry {
         );
 
         const folders = vscode.workspace.workspaceFolders || [];
-        await this.diagnosticAnalyzer.loadStyleReport(folders);
-        await this.diagnosticAnalyzer.loadIgnorePatterns(folders);
+        await this.diagnosticAnalyzer.loadStyleReport(folders, true);
+        await this.diagnosticAnalyzer.loadIgnorePatterns(folders, true);
 
         const diagnosticMap = await this.diagnosticAnalyzer.analyzeAll(config);
 
