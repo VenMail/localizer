@@ -10,10 +10,16 @@ export class FileSystemService {
     private decoder = new TextDecoder('utf-8');
     private encoder = new TextEncoder();
 
-    /**
-     * Required dependencies for i18n scripts
-     */
-    private static readonly REQUIRED_DEPS = ['oxc-parser', 'magic-string'];
+    // Babel-based dependencies for i18n scripts
+    private static readonly BABEL_DEPS = [
+        '@babel/parser',
+        '@babel/traverse',
+        '@babel/generator',
+        '@babel/types',
+    ];
+
+    // oxc-based dependencies for i18n scripts
+    private static readonly OXC_DEPS = ['oxc-parser', 'magic-string'];
 
     /**
      * Copy i18n scripts to project and install required dependencies
@@ -35,26 +41,44 @@ export class FileSystemService {
         // This makes scripts work regardless of whether the project uses ESM or CJS
         await this.createScriptsPackageJson(targetDir);
 
-        // Use oxc-based scripts (faster, no Babel dependency)
-        const scriptNames = [
-            'oxc-extract-i18n.js',
-            'oxc-replace-i18n.js',
-            'sync-i18n.js',
-            'fix-untranslated.js',
-            'rewrite-i18n-blade.js',
-            'cleanup-i18n-unused.js',
-            'restore-i18n-invalid.js',
-        ];
+        // Detect project Node version to decide whether we can safely use oxc-based scripts
+        const detectedNodeVersion = await this.detectProjectNodeVersion(projectRoot);
+        const useOxc = detectedNodeVersion ? this.supportsOxc(detectedNodeVersion) : false;
 
-        // Map oxc script names to standard names in target project
-        const scriptNameMap: Record<string, string> = {
-            'oxc-extract-i18n.js': 'extract-i18n.js',
-            'oxc-replace-i18n.js': 'replace-i18n.js',
-        };
+        const scriptNames = useOxc
+            ? [
+                  'oxc-extract-i18n.js',
+                  'oxc-replace-i18n.js',
+                  'sync-i18n.js',
+                  'fix-untranslated.js',
+                  'rewrite-i18n-blade.js',
+                  'cleanup-i18n-unused.js',
+                  'restore-i18n-invalid.js',
+              ]
+            : [
+                  'babel-extract-i18n.js',
+                  'babel-replace-i18n.js',
+                  'sync-i18n.js',
+                  'fix-untranslated.js',
+                  'rewrite-i18n-blade.js',
+                  'cleanup-i18n-unused.js',
+                  'restore-i18n-invalid.js',
+              ];
+
+        // Map internal script names to standard names in target project
+        const scriptNameMap: Record<string, string> = useOxc
+            ? {
+                  'oxc-extract-i18n.js': 'extract-i18n.js',
+                  'oxc-replace-i18n.js': 'replace-i18n.js',
+              }
+            : {
+                  'babel-extract-i18n.js': 'extract-i18n.js',
+                  'babel-replace-i18n.js': 'replace-i18n.js',
+              };
 
         for (const name of scriptNames) {
             const src = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n', name);
-            // Use mapped name if available (oxc scripts -> standard names)
+            // Use mapped name if available (internal scripts -> standard names)
             const destName = scriptNameMap[name] || name;
             const dest = vscode.Uri.joinPath(targetDir, destName);
             
@@ -114,10 +138,11 @@ export class FileSystemService {
             }
         }
 
-        // Install required dependencies
+        // Install required dependencies based on the selected script stack
         const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectRoot));
         if (folder) {
-            await this.ensureRequiredDependencies(folder);
+            const deps = useOxc ? FileSystemService.OXC_DEPS : FileSystemService.BABEL_DEPS;
+            await this.ensureRequiredDependencies(folder, deps);
         }
     }
 
@@ -144,10 +169,10 @@ export class FileSystemService {
     /**
      * Ensure required dependencies are installed in the project
      */
-    async ensureRequiredDependencies(folder: vscode.WorkspaceFolder): Promise<void> {
+    async ensureRequiredDependencies(folder: vscode.WorkspaceFolder, deps: string[]): Promise<void> {
         const missingDeps: string[] = [];
 
-        for (const dep of FileSystemService.REQUIRED_DEPS) {
+        for (const dep of deps) {
             const installed = await isPackageInstalled(folder, dep);
             if (!installed) {
                 missingDeps.push(dep);
@@ -174,6 +199,77 @@ export class FileSystemService {
                 `AI i18n: Scripts may not work without ${missingDeps.join(', ')}. You can install them manually.`,
             );
         }
+    }
+
+    private async detectProjectNodeVersion(projectRoot: string): Promise<string | null> {
+        // Prefer explicit version files in the project root
+        const versionFiles = ['.nvmrc', '.node-version'];
+        for (const fileName of versionFiles) {
+            const uri = vscode.Uri.file(path.join(projectRoot, fileName));
+            try {
+                const data = await vscode.workspace.fs.readFile(uri);
+                const raw = this.decoder.decode(data).trim();
+                const version = this.normalizeVersion(raw);
+                if (version) {
+                    return version;
+                }
+            } catch {
+                // ignore missing/unreadable file
+            }
+        }
+
+        // Fallback: derive a minimum version from package.json engines.node
+        const pkgUri = vscode.Uri.file(path.join(projectRoot, 'package.json'));
+        try {
+            const data = await vscode.workspace.fs.readFile(pkgUri);
+            const text = this.decoder.decode(data);
+            const pkg = JSON.parse(text);
+            const engines = pkg && typeof pkg === 'object' ? pkg.engines : undefined;
+            const nodeSpec = engines && typeof engines.node === 'string' ? engines.node : null;
+            if (nodeSpec) {
+                const version = this.normalizeVersion(nodeSpec);
+                if (version) {
+                    return version;
+                }
+            }
+        } catch {
+            // ignore invalid/missing package.json
+        }
+
+        return null;
+    }
+
+    private normalizeVersion(source: string): string | null {
+        const match = String(source || '').match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+        if (!match) {
+            return null;
+        }
+        const major = parseInt(match[1], 10);
+        const minor = match[2] !== undefined ? parseInt(match[2], 10) : 0;
+        const patch = match[3] !== undefined ? parseInt(match[3], 10) : 0;
+        if (Number.isNaN(major) || Number.isNaN(minor) || Number.isNaN(patch)) {
+            return null;
+        }
+        return `${major}.${minor}.${patch}`;
+    }
+
+    private compareVersions(a: string, b: string): number {
+        const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+        const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+        for (let i = 0; i < 3; i += 1) {
+            if (pa[i] < pb[i]) return -1;
+            if (pa[i] > pb[i]) return 1;
+        }
+        return 0;
+    }
+
+    private supportsOxc(nodeVersion: string): boolean {
+        // Match oxc-parser engines: ^20.19.0 || >=22.12.0
+        const atLeast20_19 =
+            this.compareVersions(nodeVersion, '20.19.0') >= 0 &&
+            this.compareVersions(nodeVersion, '21.0.0') < 0;
+        const atLeast22_12 = this.compareVersions(nodeVersion, '22.12.0') >= 0;
+        return atLeast20_19 || atLeast22_12;
     }
 
     /**

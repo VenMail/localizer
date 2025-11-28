@@ -17,9 +17,11 @@ let parseSync;
 try {
   parseSync = require('oxc-parser').parseSync;
 } catch (err) {
-  console.error('[i18n-replace] Error: oxc-parser is not installed.');
-  console.error('Run your package manager to install it: npm install -D oxc-parser');
-  process.exit(1);
+  console.error('[i18n-replace] Warning: oxc-parser is not installed or is incompatible with this Node version.');
+  console.error('[i18n-replace] Skipping rewrite. No source files were modified.');
+  console.error('[i18n-replace] To enable oxc-based rewrite, install a compatible oxc-parser (e.g. npm install -D oxc-parser)');
+  console.error('[i18n-replace] or re-run the AI i18n "Configure Project i18n" command to switch to the Babel-based rewrite script.');
+  process.exit(0);
 }
 
 // magic-string for efficient source manipulation
@@ -27,9 +29,11 @@ let MagicString;
 try {
   MagicString = require('magic-string');
 } catch (err) {
-  console.error('[i18n-replace] Error: magic-string is not installed.');
-  console.error('Run your package manager to install it: npm install -D magic-string');
-  process.exit(1);
+  console.error('[i18n-replace] Warning: magic-string is not installed.');
+  console.error('[i18n-replace] Skipping rewrite. No source files were modified.');
+  console.error('[i18n-replace] To enable oxc-based rewrite, install magic-string (e.g. npm install -D magic-string)');
+  console.error('[i18n-replace] or re-run the AI i18n "Configure Project i18n" command to switch to the Babel-based rewrite script.');
+  process.exit(0);
 }
 
 // Import shared utilities

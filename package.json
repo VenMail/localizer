@@ -30,6 +30,11 @@
     "onCommand:ai-localizer.i18n.runRewriteBladeScript",
     "onCommand:ai-localizer.i18n.runCleanupUnusedScript",
     "onCommand:ai-localizer.i18n.runRestoreInvalidScript",
+    "onCommand:ai-localizer.i18n.cleanupUnusedKeysInFile",
+    "onCommand:ai-localizer.i18n.restoreInvalidKeysInFile",
+    "onCommand:ai-localizer.i18n.removeUnusedKeyInFile",
+    "onCommand:ai-localizer.i18n.removeInvalidKeyInFile",
+    "onCommand:ai-localizer.i18n.restoreInvalidKeyInCode",
     "onCommand:ai-localizer.i18n.generateAutoIgnore",
     "onCommand:ai-localizer.i18n.openUntranslatedReport",
     "onCommand:ai-localizer.i18n.applyUntranslatedAiFixes",
@@ -105,6 +110,26 @@
       {
         "command": "ai-localizer.i18n.runRestoreInvalidScript",
         "title": "AI i18n: Restore Invalid Extracted Keys"
+      },
+      {
+        "command": "ai-localizer.i18n.cleanupUnusedKeysInFile",
+        "title": "AI i18n: Cleanup Unused Keys in This Locale File"
+      },
+      {
+        "command": "ai-localizer.i18n.restoreInvalidKeysInFile",
+        "title": "AI i18n: Remove Invalid Extracted Keys in This Locale File"
+      },
+      {
+        "command": "ai-localizer.i18n.removeUnusedKeyInFile",
+        "title": "AI i18n: Remove This Unused Key in Current Locale File"
+      },
+      {
+        "command": "ai-localizer.i18n.removeInvalidKeyInFile",
+        "title": "AI i18n: Remove This Invalid/Non-Translatable Key in Current Locale File"
+      },
+      {
+        "command": "ai-localizer.i18n.restoreInvalidKeyInCode",
+        "title": "AI i18n: Restore Inline String for Invalid Extracted Key at Cursor"
       },
       {
         "command": "ai-localizer.i18n.generateAutoIgnore",
@@ -278,6 +303,17 @@
           ],
           "default": "warning",
           "description": "Severity level used when a locale value is identical to the default locale value."
+        },
+        "ai-localizer.i18n.diagnostics.invalidBaseValueSeverity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "hint"
+          ],
+          "default": "warning",
+          "description": "Severity level used when a default-locale translation value looks like an invalid/non-translatable fragment (URLs, query strings, technical tokens, etc.)."
         },
         "ai-localizer.i18n.heuristics.abbreviationsCsv": {
           "type": "string",

@@ -152,7 +152,8 @@ function shouldTranslateText(text, patterns) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
   if (!/[A-Za-z]/.test(trimmed)) return false;
-  if (isNonTranslatableText(trimmed, patterns)) return false;
+  const pats = patterns || getIgnorePatterns();
+  if (isNonTranslatableText(trimmed, pats)) return false;
   
   // Check for unbalanced parentheses
   const openParens = (trimmed.match(/\(/g) || []).length;

@@ -154,6 +154,29 @@ export class CommandRegistry {
                 (documentUri?: vscode.Uri) => untranslatedCmds.applyAllStyleSuggestionsInFile(documentUri),
             ),
             vscode.commands.registerCommand(
+                'ai-localizer.i18n.cleanupUnusedKeysInFile',
+                (documentUri?: vscode.Uri) => untranslatedCmds.cleanupUnusedInFile(documentUri),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.restoreInvalidKeysInFile',
+                (documentUri?: vscode.Uri) => untranslatedCmds.restoreInvalidInFile(documentUri),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.removeUnusedKeyInFile',
+                (documentUri: vscode.Uri, keyPath: string) =>
+                    untranslatedCmds.removeUnusedKeyInFile(documentUri, keyPath),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.removeInvalidKeyInFile',
+                (documentUri: vscode.Uri, keyPath: string) =>
+                    untranslatedCmds.removeInvalidKeyInFile(documentUri, keyPath),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.restoreInvalidKeyInCode',
+                (documentUri: vscode.Uri, position: { line: number; character: number }, key: string) =>
+                    untranslatedCmds.restoreInvalidKeyInCode(documentUri, position, key),
+            ),
+            vscode.commands.registerCommand(
                 'ai-localizer.i18n.gotoTranslationFromHover',
                 async (args: { uri: string; position: { line: number; character: number } }) => {
                     try {

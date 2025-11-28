@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { TextDecoder } from 'util';
 import { I18nIndex, extractKeyAtPosition, escapeMarkdown } from '../core/i18nIndex';
 import { detectFrameworkProfile } from '../frameworks/detection';
 
@@ -489,16 +490,22 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
 class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
     public static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
 
-    provideCodeActions(
+    private decoder = new TextDecoder('utf-8');
+
+    constructor(private i18nIndex: I18nIndex) {}
+
+    async provideCodeActions(
         document: vscode.TextDocument,
         range: vscode.Range,
         context: vscode.CodeActionContext,
-    ): vscode.ProviderResult<(vscode.CodeAction | vscode.Command)[]> {
+    ): Promise<(vscode.CodeAction | vscode.Command)[]> {
         const actions: vscode.CodeAction[] = [];
 
         const relevant = context.diagnostics.filter(
             (d) => d.code === 'ai-i18n.untranslated' || d.code === 'ai-i18n.style',
         );
+
+        let addedBulkActions = false;
 
         for (const diagnostic of relevant) {
             if (!diagnostic.range.intersection(range)) {
@@ -537,6 +544,107 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                     arguments: [document.uri, key, locale, suggested],
                 };
                 actions.push(action);
+            }
+
+            if (!addedBulkActions && (document.languageId === 'json' || document.languageId === 'jsonc')) {
+                addedBulkActions = true;
+
+                const cleanupTitle = 'AI i18n: Cleanup unused keys in this file (from report)';
+                const cleanupAction = new vscode.CodeAction(
+                    cleanupTitle,
+                    vscode.CodeActionKind.QuickFix,
+                );
+                cleanupAction.command = {
+                    title: cleanupTitle,
+                    command: 'ai-localizer.i18n.cleanupUnusedKeysInFile',
+                    arguments: [document.uri],
+                };
+                actions.push(cleanupAction);
+
+                const invalidTitle =
+                    'AI i18n: Remove invalid/non-translatable keys in this file (from report)';
+                const invalidAction = new vscode.CodeAction(
+                    invalidTitle,
+                    vscode.CodeActionKind.QuickFix,
+                );
+                invalidAction.command = {
+                    title: invalidTitle,
+                    command: 'ai-localizer.i18n.restoreInvalidKeysInFile',
+                    arguments: [document.uri],
+                };
+                actions.push(invalidAction);
+            }
+        }
+
+        const folder = vscode.workspace.getWorkspaceFolder(document.uri) || undefined;
+
+        if (folder && (document.languageId === 'json' || document.languageId === 'jsonc')) {
+            const keyPath = await this.getKeyPathForJsonRange(document, range);
+            if (keyPath) {
+                const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+                const unusedReport = await this.loadReport(scriptsDir, '.i18n-unused-report.json');
+                const invalidReport = await this.loadReport(scriptsDir, '.i18n-invalid-report.json');
+
+                const unused = Array.isArray(unusedReport?.unused) ? unusedReport.unused : [];
+                const invalid = Array.isArray(invalidReport?.invalid) ? invalidReport.invalid : [];
+
+                const isUnused = unused.some(
+                    (item: any) => item && typeof item.keyPath === 'string' && item.keyPath === keyPath,
+                );
+                const isInvalid = invalid.some(
+                    (item: any) => item && typeof item.keyPath === 'string' && item.keyPath === keyPath,
+                );
+
+                if (isUnused) {
+                    const title = `AI i18n: Remove this unused key (${keyPath}) from this file (from report)`;
+                    const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                    action.command = {
+                        title,
+                        command: 'ai-localizer.i18n.removeUnusedKeyInFile',
+                        arguments: [document.uri, keyPath],
+                    };
+                    actions.push(action);
+                }
+
+                if (isInvalid) {
+                    const title = `AI i18n: Remove this invalid/non-translatable key (${keyPath}) from this file (from report)`;
+                    const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                    action.isPreferred = true;
+                    action.command = {
+                        title,
+                        command: 'ai-localizer.i18n.removeInvalidKeyInFile',
+                        arguments: [document.uri, keyPath],
+                    };
+                    actions.push(action);
+                }
+            }
+        }
+
+        if (folder && document.languageId !== 'json' && document.languageId !== 'jsonc') {
+            const keyInfo = extractKeyAtPosition(document, range.start) || extractKeyAtPosition(document, range.end);
+            if (keyInfo) {
+                const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+                const invalidReport = await this.loadReport(scriptsDir, '.i18n-invalid-report.json');
+                const invalid = Array.isArray(invalidReport?.invalid) ? invalidReport.invalid : [];
+                const hasInvalid = invalid.some(
+                    (item: any) => item && typeof item.keyPath === 'string' && item.keyPath === keyInfo.key,
+                );
+
+                if (hasInvalid) {
+                    const title = `AI i18n: Restore inline string and remove invalid key (${keyInfo.key}) (from report)`;
+                    const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                    action.isPreferred = true;
+                    action.command = {
+                        title,
+                        command: 'ai-localizer.i18n.restoreInvalidKeyInCode',
+                        arguments: [
+                            document.uri,
+                            { line: keyInfo.range.start.line, character: keyInfo.range.start.character },
+                            keyInfo.key,
+                        ],
+                    };
+                    actions.push(action);
+                }
             }
         }
 
@@ -598,6 +706,68 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         if (!key || !locale || !suggested) return null;
         return { key, locale, suggested };
     }
+
+    private async loadReport(scriptsDir: vscode.Uri, fileName: string): Promise<any | null> {
+        const reportUri = vscode.Uri.joinPath(scriptsDir, fileName);
+        try {
+            const data = await vscode.workspace.fs.readFile(reportUri);
+            const raw = this.decoder.decode(data);
+            return JSON.parse(raw);
+        } catch {
+            return null;
+        }
+    }
+
+    private async getKeyPathForJsonRange(
+        document: vscode.TextDocument,
+        range: vscode.Range,
+    ): Promise<string | null> {
+        await this.i18nIndex.ensureInitialized();
+        const info = this.i18nIndex.getKeysForFile(document.uri);
+        const keys = info?.keys || [];
+        if (!keys.length) {
+            return null;
+        }
+        const text = document.getText();
+        for (const fullKey of keys) {
+            const keyRange = this.findKeyRangeInJsonText(document, text, fullKey);
+            if (keyRange && keyRange.intersection(range)) {
+                return fullKey;
+            }
+        }
+        return null;
+    }
+
+    private findKeyRangeInJsonText(
+        document: vscode.TextDocument,
+        text: string,
+        fullKey: string,
+    ): vscode.Range | null {
+        const parts = fullKey.split('.');
+        const lastSegment = parts[parts.length - 1];
+        if (!lastSegment) {
+            return null;
+        }
+        const needle = `"${lastSegment}"`;
+        let index = text.indexOf(needle);
+        while (index !== -1) {
+            let i = index + needle.length;
+            while (
+                i < text.length &&
+                (text[i] === ' ' || text[i] === '\t' || text[i] === '\r' || text[i] === '\n')
+            ) {
+                i += 1;
+            }
+            if (i < text.length && text[i] === ':') {
+                const startOffset = index + 1;
+                const start = document.positionAt(startOffset);
+                const end = new vscode.Position(start.line, start.character + lastSegment.length);
+                return new vscode.Range(start, end);
+            }
+            index = text.indexOf(needle, index + needle.length);
+        }
+        return null;
+    }
 }
 
 /**
@@ -610,7 +780,7 @@ export function registerI18nProviders(
     const hoverProvider = new I18nHoverProvider(i18nIndex);
     const definitionProvider = new I18nDefinitionProvider(i18nIndex);
     const completionProvider = new I18nCompletionProvider(i18nIndex);
-    const codeActionProvider = new I18nUntranslatedCodeActionProvider();
+    const codeActionProvider = new I18nUntranslatedCodeActionProvider(i18nIndex);
 
     context.subscriptions.push(
         vscode.languages.registerHoverProvider(I18N_CODE_SELECTOR, hoverProvider),

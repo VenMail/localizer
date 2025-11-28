@@ -189,7 +189,12 @@ function isTranslatableText(text) {
   }
 
   // Exclude URL-like strings
-  if (/^(https?:\/\/|www\.|\/)/.test(trimmed)) {
+  if (/^(https?:\/\/|www\.|\//).test(trimmed)) {
+    return false;
+  }
+
+  // Exclude bare query-string or fragment-like segments (e.g. "?duration=", "?lang=en")
+  if (!/\s/.test(trimmed) && /[?&]/.test(trimmed) && /=/.test(trimmed)) {
     return false;
   }
 

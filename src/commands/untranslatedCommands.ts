@@ -3,8 +3,11 @@ import * as path from 'path';
 import { I18nIndex } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
 import { setTranslationValue, setTranslationValueInFile } from '../core/i18nFs';
-import { pickWorkspaceFolder } from '../core/workspace';
+import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
 import { TextDecoder, TextEncoder } from 'util';
+
+let parseSync: any;
+let MagicString: any;
 
 /**
  * Commands for handling untranslated strings
@@ -41,6 +44,38 @@ export class UntranslatedCommands {
                 'AI i18n: Untranslated report not found. Run the fix-untranslated script first.',
             );
         }
+    }
+
+    private deleteKeyPathInObject(obj: any, keyPath: string): boolean {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+        const segments = String(keyPath).split('.').filter(Boolean);
+        if (!segments.length) return false;
+
+        const helper = (target: any, index: number): boolean => {
+            if (!target || typeof target !== 'object' || Array.isArray(target)) {
+                return false;
+            }
+            const key = segments[index];
+            if (index === segments.length - 1) {
+                if (!Object.prototype.hasOwnProperty.call(target, key)) {
+                    return false;
+                }
+                delete target[key];
+                return Object.keys(target).length === 0;
+            }
+            if (!Object.prototype.hasOwnProperty.call(target, key)) {
+                return false;
+            }
+            const child = target[key];
+            const shouldDeleteChild = helper(child, index + 1);
+            if (shouldDeleteChild) {
+                delete target[key];
+            }
+            return Object.keys(target).length === 0;
+        };
+
+        helper(obj, 0);
+        return true;
     }
 
     private async setMultipleInFile(fileUri: vscode.Uri, updates: Map<string, string>): Promise<void> {
@@ -548,5 +583,885 @@ export class UntranslatedCommands {
             console.error('AI i18n: Failed to apply all style suggestions:', err);
             vscode.window.showErrorMessage('AI i18n: Failed to apply all style suggestions for file.');
         }
+    }
+
+    async cleanupUnusedInFile(documentUri?: vscode.Uri): Promise<void> {
+        try {
+            const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
+            if (!targetUri) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No active document to cleanup unused keys.',
+                );
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(targetUri);
+            if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Cleanup unused keys only applies to locale JSON files.',
+                );
+                return;
+            }
+
+            let folder = vscode.workspace.getWorkspaceFolder(targetUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+            const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-unused-report.json');
+            const decoder = new TextDecoder('utf-8');
+
+            let rawReport: string;
+            try {
+                const data = await vscode.workspace.fs.readFile(reportUri);
+                rawReport = decoder.decode(data);
+            } catch {
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: 'Generate report',
+                            description:
+                                'Run i18n:cleanup-unused script now to analyze and generate the unused keys report.',
+                        },
+                        { label: 'Cancel', description: 'Skip cleaning up unused keys for now.' },
+                    ],
+                    {
+                        placeHolder:
+                            'AI i18n: Unused keys report not found. Generate it by running the cleanup script?',
+                    },
+                );
+                if (!choice || choice.label !== 'Generate report') {
+                    return;
+                }
+                await runI18nScript('i18n:cleanup-unused');
+                vscode.window.showInformationMessage(
+                    'AI i18n: Running i18n:cleanup-unused script in a terminal. Re-run this quick fix after it completes.',
+                );
+                return;
+            }
+
+            let report: any;
+            try {
+                report = JSON.parse(rawReport);
+            } catch {
+                vscode.window.showErrorMessage(
+                    'AI i18n: Unused keys report is not valid JSON.',
+                );
+                return;
+            }
+
+            const unused = Array.isArray(report.unused) ? report.unused : [];
+            if (!unused.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No unused keys found in unused keys report.',
+                );
+                return;
+            }
+
+            let root: any = {};
+            try {
+                const text = doc.getText();
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed === 'object') root = parsed;
+            } catch {}
+            if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+            const deletedKeys = new Set<string>();
+            for (const item of unused) {
+                if (!item || typeof item.keyPath !== 'string') continue;
+                const before = JSON.stringify(root);
+                this.deleteKeyPathInObject(root, item.keyPath);
+                const after = JSON.stringify(root);
+                if (before !== after) {
+                    deletedKeys.add(item.keyPath);
+                }
+            }
+
+            if (!deletedKeys.size) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No unused keys from report were found in this file.',
+                );
+                return;
+            }
+
+            const encoder = new TextEncoder();
+            const payload = `${JSON.stringify(root, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(targetUri, encoder.encode(payload));
+
+            await this.i18nIndex.updateFile(targetUri);
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.refreshFileDiagnostics',
+                targetUri,
+                Array.from(deletedKeys),
+            );
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Removed ${deletedKeys.size} unused key(s) from this file.`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to cleanup unused keys for file:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to cleanup unused keys for file.');
+        }
+    }
+
+    async restoreInvalidInFile(documentUri?: vscode.Uri): Promise<void> {
+        try {
+            const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
+            if (!targetUri) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No active document to cleanup invalid keys.',
+                );
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(targetUri);
+            if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Restore invalid keys only applies to locale JSON files.',
+                );
+                return;
+            }
+
+            let folder = vscode.workspace.getWorkspaceFolder(targetUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+            const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-invalid-report.json');
+            const decoder = new TextDecoder('utf-8');
+
+            let rawReport: string;
+            try {
+                const data = await vscode.workspace.fs.readFile(reportUri);
+                rawReport = decoder.decode(data);
+            } catch {
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: 'Generate report',
+                            description:
+                                'Run i18n:restore-invalid script now to analyze and generate the invalid keys report.',
+                        },
+                        { label: 'Cancel', description: 'Skip cleaning up invalid keys for now.' },
+                    ],
+                    {
+                        placeHolder:
+                            'AI i18n: Invalid keys report not found. Generate it by running the restore-invalid script?',
+                    },
+                );
+                if (!choice || choice.label !== 'Generate report') {
+                    return;
+                }
+                await runI18nScript('i18n:restore-invalid');
+                vscode.window.showInformationMessage(
+                    'AI i18n: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
+                );
+                return;
+            }
+
+            let report: any;
+            try {
+                report = JSON.parse(rawReport);
+            } catch {
+                vscode.window.showErrorMessage(
+                    'AI i18n: Invalid keys report is not valid JSON.',
+                );
+                return;
+            }
+
+            const invalid = Array.isArray(report.invalid) ? report.invalid : [];
+            if (!invalid.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No invalid/non-translatable keys found in invalid keys report.',
+                );
+                return;
+            }
+
+            let root: any = {};
+            try {
+                const text = doc.getText();
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed === 'object') root = parsed;
+            } catch {}
+            if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+            const deletedKeys = new Set<string>();
+            for (const item of invalid) {
+                if (!item || typeof item.keyPath !== 'string') continue;
+                const before = JSON.stringify(root);
+                this.deleteKeyPathInObject(root, item.keyPath);
+                const after = JSON.stringify(root);
+                if (before !== after) {
+                    deletedKeys.add(item.keyPath);
+                }
+            }
+
+            if (!deletedKeys.size) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No invalid/non-translatable keys from report were found in this file.',
+                );
+                return;
+            }
+
+            const encoder = new TextEncoder();
+            const payload = `${JSON.stringify(root, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(targetUri, encoder.encode(payload));
+
+            await this.i18nIndex.updateFile(targetUri);
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.refreshFileDiagnostics',
+                targetUri,
+                Array.from(deletedKeys),
+            );
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Removed ${deletedKeys.size} invalid/non-translatable key(s) from this file.`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to cleanup invalid keys for file:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to cleanup invalid keys for file.');
+        }
+    }
+
+    async removeUnusedKeyInFile(documentUri: vscode.Uri, keyPath: string): Promise<void> {
+        try {
+            if (!documentUri) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No document provided to remove unused key.',
+                );
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(documentUri);
+            if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Remove unused key only applies to locale JSON files.',
+                );
+                return;
+            }
+
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+            const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-unused-report.json');
+            const decoder = new TextDecoder('utf-8');
+
+            let rawReport: string;
+            try {
+                const data = await vscode.workspace.fs.readFile(reportUri);
+                rawReport = decoder.decode(data);
+            } catch {
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: 'Generate report',
+                            description:
+                                'Run i18n:cleanup-unused script now to analyze and generate the unused keys report.',
+                        },
+                        { label: 'Cancel', description: 'Skip removing this unused key for now.' },
+                    ],
+                    {
+                        placeHolder:
+                            'AI i18n: Unused keys report not found. Generate it by running the cleanup script?',
+                    },
+                );
+                if (!choice || choice.label !== 'Generate report') {
+                    return;
+                }
+                await runI18nScript('i18n:cleanup-unused');
+                vscode.window.showInformationMessage(
+                    'AI i18n: Running i18n:cleanup-unused script in a terminal. Re-run this quick fix after it completes.',
+                );
+                return;
+            }
+
+            let report: any;
+            try {
+                report = JSON.parse(rawReport);
+            } catch {
+                vscode.window.showErrorMessage(
+                    'AI i18n: Unused keys report is not valid JSON.',
+                );
+                return;
+            }
+
+            const unused = Array.isArray(report.unused) ? report.unused : [];
+            const hasEntry = unused.some(
+                (item: any) => item && typeof item.keyPath === 'string' && item.keyPath === keyPath,
+            );
+            if (!hasEntry) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Key ${keyPath} is not marked as unused in unused keys report.`,
+                );
+            }
+
+            let root: any = {};
+            try {
+                const text = doc.getText();
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed === 'object') root = parsed;
+            } catch {}
+            if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+            const before = JSON.stringify(root);
+            this.deleteKeyPathInObject(root, keyPath);
+            const after = JSON.stringify(root);
+            if (before === after) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Key ${keyPath} was not found in this file.`,
+                );
+                return;
+            }
+
+            const encoder = new TextEncoder();
+            const payload = `${JSON.stringify(root, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(documentUri, encoder.encode(payload));
+
+            await this.i18nIndex.updateFile(documentUri);
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.refreshFileDiagnostics',
+                documentUri,
+                [keyPath],
+            );
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Removed unused key ${keyPath} from this file.`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to remove unused key from file:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to remove unused key from file.');
+        }
+    }
+
+    async removeInvalidKeyInFile(documentUri: vscode.Uri, keyPath: string): Promise<void> {
+        try {
+            if (!documentUri) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No document provided to remove invalid key.',
+                );
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(documentUri);
+            if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Remove invalid key only applies to locale JSON files.',
+                );
+                return;
+            }
+
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+            const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-invalid-report.json');
+            const decoder = new TextDecoder('utf-8');
+
+            let rawReport: string;
+            try {
+                const data = await vscode.workspace.fs.readFile(reportUri);
+                rawReport = decoder.decode(data);
+            } catch {
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: 'Generate report',
+                            description:
+                                'Run i18n:restore-invalid script now to analyze and generate the invalid keys report.',
+                        },
+                        { label: 'Cancel', description: 'Skip removing this invalid key for now.' },
+                    ],
+                    {
+                        placeHolder:
+                            'AI i18n: Invalid keys report not found. Generate it by running the restore-invalid script?',
+                    },
+                );
+                if (!choice || choice.label !== 'Generate report') {
+                    return;
+                }
+                await runI18nScript('i18n:restore-invalid');
+                vscode.window.showInformationMessage(
+                    'AI i18n: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
+                );
+                return;
+            }
+
+            let report: any;
+            try {
+                report = JSON.parse(rawReport);
+            } catch {
+                vscode.window.showErrorMessage(
+                    'AI i18n: Invalid keys report is not valid JSON.',
+                );
+                return;
+            }
+
+            const invalid = Array.isArray(report.invalid) ? report.invalid : [];
+            const hasEntry = invalid.some(
+                (item: any) => item && typeof item.keyPath === 'string' && item.keyPath === keyPath,
+            );
+            if (!hasEntry) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Key ${keyPath} is not marked as invalid/non-translatable in invalid keys report.`,
+                );
+            }
+
+            let root: any = {};
+            try {
+                const text = doc.getText();
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed === 'object') root = parsed;
+            } catch {}
+            if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+            const before = JSON.stringify(root);
+            this.deleteKeyPathInObject(root, keyPath);
+            const after = JSON.stringify(root);
+            if (before === after) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Key ${keyPath} was not found in this file.`,
+                );
+                return;
+            }
+
+            const encoder = new TextEncoder();
+            const payload = `${JSON.stringify(root, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(documentUri, encoder.encode(payload));
+
+            await this.i18nIndex.updateFile(documentUri);
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.refreshFileDiagnostics',
+                documentUri,
+                [keyPath],
+            );
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Removed invalid/non-translatable key ${keyPath} from this file.`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to remove invalid key from file:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to remove invalid key from file.');
+        }
+    }
+
+    async restoreInvalidKeyInCode(
+        documentUri: vscode.Uri,
+        position: { line: number; character: number },
+        key: string,
+    ): Promise<void> {
+        try {
+            if (!parseSync || !MagicString) {
+                try {
+                    // @ts-ignore - runtime dependency without TypeScript types
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    parseSync = require('oxc-parser').parseSync;
+                    // @ts-ignore - runtime dependency without TypeScript types
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    MagicString = require('magic-string');
+                } catch (err) {
+                    console.error('AI i18n: Failed to load oxc-parser or magic-string for restore quick fix:', err);
+                    vscode.window.showErrorMessage(
+                        'AI i18n: Failed to load parser dependencies (oxc-parser, magic-string) for restore quick fix. Install these dependencies in your extension environment to enable this quick fix.',
+                    );
+                    return;
+                }
+            }
+
+            const doc = await vscode.workspace.openTextDocument(documentUri);
+
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+            const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-invalid-report.json');
+            const decoder = new TextDecoder('utf-8');
+
+            let rawReport: string;
+            try {
+                const data = await vscode.workspace.fs.readFile(reportUri);
+                rawReport = decoder.decode(data);
+            } catch {
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: 'Generate report',
+                            description:
+                                'Run i18n:restore-invalid script now to analyze and generate the invalid keys report.',
+                        },
+                        { label: 'Cancel', description: 'Skip restoring this key for now.' },
+                    ],
+                    {
+                        placeHolder:
+                            'AI i18n: Invalid keys report not found. Generate it by running the restore-invalid script?',
+                    },
+                );
+                if (!choice || choice.label !== 'Generate report') {
+                    return;
+                }
+                await runI18nScript('i18n:restore-invalid');
+                vscode.window.showInformationMessage(
+                    'AI i18n: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
+                );
+                return;
+            }
+
+            let report: any;
+            try {
+                report = JSON.parse(rawReport);
+            } catch {
+                vscode.window.showErrorMessage(
+                    'AI i18n: Invalid keys report is not valid JSON.',
+                );
+                return;
+            }
+
+            const invalid = Array.isArray(report.invalid) ? report.invalid : [];
+            const entry = invalid.find(
+                (item: any) => item && typeof item.keyPath === 'string' && item.keyPath === key,
+            );
+            if (!entry || typeof entry.baseValue !== 'string') {
+                vscode.window.showInformationMessage(
+                    `AI i18n: No invalid/non-translatable entry found in invalid keys report for key ${key}.`,
+                );
+                return;
+            }
+
+            const baseValue = String(entry.baseValue || '');
+
+            await this.i18nIndex.ensureInitialized();
+            const record = this.i18nIndex.getRecord(key);
+            const localeUris = record ? record.locations.map((l) => l.uri) : [];
+
+            let shouldDeleteFromLocales = false;
+            if (localeUris.length) {
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: 'Restore and delete from locale files',
+                            description: `Remove ${key} from ${localeUris.length} locale file(s) after restoring inline string.`,
+                        },
+                        {
+                            label: 'Cancel',
+                            description: 'Do not change code or locale files.',
+                        },
+                    ],
+                    {
+                        placeHolder: `AI i18n: Restore invalid key ${key} and delete it from locale files?`,
+                    },
+                );
+                if (!choice || choice.label === 'Cancel') {
+                    return;
+                }
+                shouldDeleteFromLocales = true;
+            }
+
+            const code = doc.getText();
+            const fileName = path.basename(documentUri.fsPath);
+            const ext = path.extname(documentUri.fsPath).toLowerCase();
+
+            let parsed: any;
+            try {
+                parsed = parseSync(fileName, code, {
+                    sourceType: 'module',
+                    lang:
+                        ext === '.tsx'
+                            ? 'tsx'
+                            : ext === '.ts'
+                            ? 'ts'
+                            : ext === '.jsx'
+                            ? 'jsx'
+                            : 'js',
+                });
+            } catch (err) {
+                console.error('AI i18n: Failed to parse source file for restore quick fix:', err);
+                vscode.window.showErrorMessage(
+                    'AI i18n: Failed to analyze source file for restore quick fix.',
+                );
+                return;
+            }
+
+            if (!parsed || !parsed.program) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Could not analyze source file for restore quick fix.',
+                );
+                return;
+            }
+
+            const ast = parsed.program;
+            const s = new MagicString(code);
+            const docPosition = new vscode.Position(position.line, position.character);
+            const posOffset = doc.offsetAt(docPosition);
+
+            const isStringLiteralNode = (node: any): boolean => {
+                if (!node) return false;
+                if (node.type === 'StringLiteral') return true;
+                if (node.type === 'Literal' && typeof node.value === 'string') return true;
+                return false;
+            };
+
+            const getStringLiteralValue = (node: any): string | null => {
+                if (!node) return null;
+                if (node.type === 'StringLiteral') return node.value;
+                if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+                return null;
+            };
+
+            const buildInlineFromCall = (callNode: any): string | null => {
+                const args = callNode.arguments || [];
+                if (!args.length || !isStringLiteralNode(args[0])) return null;
+                const keyPath = getStringLiteralValue(args[0]);
+                if (!keyPath || keyPath !== key) return null;
+
+                const placeholderRegex = /\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)\}/g;
+                const parts: { type: 'text' | 'placeholder'; value?: string; name?: string }[] = [];
+                let lastIndex = 0;
+                let match: RegExpExecArray | null;
+
+                while ((match = placeholderRegex.exec(baseValue)) !== null) {
+                    if (match.index > lastIndex) {
+                        parts.push({ type: 'text', value: baseValue.slice(lastIndex, match.index) });
+                    }
+                    parts.push({ type: 'placeholder', name: match[1] });
+                    lastIndex = match.index + match[0].length;
+                }
+                if (lastIndex < baseValue.length) {
+                    parts.push({ type: 'text', value: baseValue.slice(lastIndex) });
+                }
+
+                const hasPlaceholder = parts.some((p) => p.type === 'placeholder');
+                if (!hasPlaceholder) {
+                    const escaped = baseValue
+                        .replace(/\\/g, '\\\\')
+                        .replace(/'/g, "\\'")
+                        .replace(/\r?\n/g, '\\n');
+                    return `'${escaped}'`;
+                }
+
+                const placeholdersArg = args[1];
+                if (!placeholdersArg || placeholdersArg.type !== 'ObjectExpression') {
+                    return null;
+                }
+
+                const exprByName = new Map<string, string>();
+                for (const prop of placeholdersArg.properties || []) {
+                    if (!prop || prop.type !== 'Property') continue;
+                    if (prop.computed) continue;
+                    const keyNode = prop.key;
+                    let name: string | null = null;
+                    if (keyNode.type === 'Identifier') name = keyNode.name;
+                    else if (isStringLiteralNode(keyNode)) name = getStringLiteralValue(keyNode);
+                    if (!name) continue;
+                    const valueNode = prop.value;
+                    if (!valueNode) continue;
+                    const exprCode = code.slice(valueNode.start, valueNode.end);
+                    exprByName.set(name, exprCode);
+                }
+
+                let out = '`';
+                for (const part of parts) {
+                    if (part.type === 'text') {
+                        const safe = String(part.value || '')
+                            .replace(/`/g, '\\`')
+                            .replace(/\$/g, '\\$');
+                        out += safe;
+                    } else if (part.type === 'placeholder') {
+                        if (!part.name) {
+                            return null;
+                        }
+                        const expr = exprByName.get(part.name);
+                        if (!expr) {
+                            return null;
+                        }
+                        out += '${' + expr + '}';
+                    }
+                }
+                out += '`';
+                return out;
+            };
+
+            let replaced = false;
+
+            const walkAst = (node: any): void => {
+                if (!node || typeof node !== 'object') return;
+                const visit = (node as any).type === 'CallExpression';
+                if (visit) {
+                    const callNode: any = node;
+                    const callee = callNode.callee;
+                    const args = callNode.arguments || [];
+                    if (
+                        callee &&
+                        callee.type === 'Identifier' &&
+                        callee.name === 't' &&
+                        args.length &&
+                        isStringLiteralNode(args[0]) &&
+                        typeof callNode.start === 'number' &&
+                        typeof callNode.end === 'number'
+                    ) {
+                        if (posOffset >= callNode.start && posOffset <= callNode.end) {
+                            const inline = buildInlineFromCall(callNode);
+                            if (inline) {
+                                s.overwrite(callNode.start, callNode.end, inline);
+                                replaced = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                for (const key of Object.keys(node)) {
+                    if (key === 'type' || key === 'loc' || key === 'range' || key === 'start' || key === 'end') {
+                        continue;
+                    }
+                    const child = (node as any)[key];
+                    if (Array.isArray(child)) {
+                        for (const c of child) {
+                            if (c && typeof c === 'object') {
+                                walkAst(c);
+                                if (replaced) return;
+                            }
+                        }
+                    } else if (child && typeof child === 'object') {
+                        walkAst(child);
+                        if (replaced) return;
+                    }
+                }
+            };
+
+            walkAst(ast);
+
+            if (!replaced) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: No matching t('${key}') call found at this location to restore.`,
+                );
+                return;
+            }
+
+            const newCode = s.toString();
+            const edit = new vscode.WorkspaceEdit();
+            const fullRange = new vscode.Range(
+                doc.positionAt(0),
+                doc.positionAt(code.length),
+            );
+            edit.replace(documentUri, fullRange, newCode);
+            const applied = await vscode.workspace.applyEdit(edit);
+            if (!applied) {
+                vscode.window.showErrorMessage(
+                    'AI i18n: Failed to apply restore quick fix edit to source file.',
+                );
+                return;
+            }
+
+            await doc.save();
+
+            let deletedFromLocales = 0;
+            if (shouldDeleteFromLocales && localeUris.length) {
+                deletedFromLocales = await this.deleteKeyFromLocaleFiles(key, localeUris);
+            }
+
+            await this.i18nIndex.ensureInitialized(true);
+
+            if (deletedFromLocales > 0) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Restored inline string for invalid/non-translatable key ${key} at this location and removed it from ${deletedFromLocales} locale file(s).`,
+                );
+            } else {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Restored inline string for invalid/non-translatable key ${key} at this location.`,
+                );
+            }
+        } catch (err) {
+            console.error('AI i18n: Failed to restore invalid key in code:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to restore invalid key in code.');
+        }
+    }
+
+    private async deleteKeyFromLocaleFiles(
+        keyPath: string,
+        uris: vscode.Uri[],
+    ): Promise<number> {
+        if (!uris.length) {
+            return 0;
+        }
+
+        const decoder = new TextDecoder('utf-8');
+        const encoder = new TextEncoder();
+        const changedUris: vscode.Uri[] = [];
+
+        for (const uri of uris) {
+            try {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                    continue;
+                }
+
+                let root: any = {};
+                try {
+                    const data = await vscode.workspace.fs.readFile(uri);
+                    const raw = decoder.decode(data);
+                    const parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object') root = parsed;
+                } catch {
+                    continue;
+                }
+                if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+                const before = JSON.stringify(root);
+                this.deleteKeyPathInObject(root, keyPath);
+                const after = JSON.stringify(root);
+                if (before === after) {
+                    continue;
+                }
+
+                const payload = `${JSON.stringify(root, null, 2)}\n`;
+                await vscode.workspace.fs.writeFile(uri, encoder.encode(payload));
+                changedUris.push(uri);
+            } catch {
+                // Ignore failures for individual locale files
+            }
+        }
+
+        for (const uri of changedUris) {
+            try {
+                await this.i18nIndex.updateFile(uri);
+                await vscode.commands.executeCommand(
+                    'ai-localizer.i18n.refreshFileDiagnostics',
+                    uri,
+                    [keyPath],
+                );
+            } catch {
+                // Ignore failures during diagnostics refresh
+            }
+        }
+
+        return changedUris.length;
     }
 }

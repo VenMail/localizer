@@ -216,24 +216,6 @@ async function collectInvalidBaseKeys() {
 let parseSync;
 let MagicString;
 
-try {
-  // eslint-disable-next-line global-require
-  parseSync = require('oxc-parser').parseSync;
-} catch (err) {
-  console.error('[restore-i18n-invalid] Error: oxc-parser is not installed.');
-  console.error('Run your package manager to install it: npm install -D oxc-parser');
-  process.exit(1);
-}
-
-try {
-  // eslint-disable-next-line global-require
-  MagicString = require('magic-string');
-} catch (err) {
-  console.error('[restore-i18n-invalid] Error: magic-string is not installed.');
-  console.error('Run your package manager to install it: npm install -D magic-string');
-  process.exit(1);
-}
-
 function isStringLiteral(node) {
   if (!node) return false;
   if (node.type === 'StringLiteral') return true;
@@ -348,6 +330,30 @@ function buildInlineFromCall(node, code, invalidByKey) {
 async function applyCodeRestores(invalid) {
   if (!invalid.length) return { filesChanged: 0 };
   if (!srcRoot || !existsSync(srcRoot)) return { filesChanged: 0 };
+
+  // Lazy-load parser dependencies so that report generation and locale cleanup
+  // can still run even when oxc-parser or magic-string are unavailable.
+  if (!parseSync || !MagicString) {
+    try {
+      // eslint-disable-next-line global-require
+      parseSync = require('oxc-parser').parseSync;
+    } catch (err) {
+      console.error('[restore-i18n-invalid] Warning: oxc-parser is not installed or is incompatible with this Node version.');
+      console.error('[restore-i18n-invalid] Skipping code restores. Invalid report and locale JSON cleanup can still be applied.');
+      console.error('[restore-i18n-invalid] To enable code-side restores, install a compatible oxc-parser (e.g. npm install -D oxc-parser).');
+      return { filesChanged: 0 };
+    }
+
+    try {
+      // eslint-disable-next-line global-require
+      MagicString = require('magic-string');
+    } catch (err) {
+      console.error('[restore-i18n-invalid] Warning: magic-string is not installed.');
+      console.error('[restore-i18n-invalid] Skipping code restores. Invalid report and locale JSON cleanup can still be applied.');
+      console.error('[restore-i18n-invalid] To enable code-side restores, install magic-string (e.g. npm install -D magic-string).');
+      return { filesChanged: 0 };
+    }
+  }
 
   // Group invalid keys by file based on usage info
   const byFile = new Map(); // absPath -> Set<keyPath>

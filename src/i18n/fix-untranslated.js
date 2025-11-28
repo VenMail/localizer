@@ -177,6 +177,11 @@ function isNonTranslatableExample(text) {
     addExactIgnorePattern(normalized);
     return true;
   }
+  // Query-string or URL-fragment-like segments such as "?duration=", "?lang=en"
+  if (!/\s/.test(normalized) && /[?&]/.test(normalized) && /=/.test(normalized)) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
   if (!/\s/.test(normalized) && /[:\[\]]/.test(normalized) && /^[A-Za-z0-9:._\-\[\]]+$/.test(normalized)) {
     addExactIgnorePattern(normalized);
     return true;

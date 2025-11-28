@@ -113,6 +113,24 @@ export class DiagnosticAnalyzer {
                 `[DiagnosticAnalyzer] Checking key '${key}' (default='${defaultLocaleForKey}') in file '${uri.fsPath}' (fileLocale='${fileLocale}')`,
             );
 
+            // Emit a dedicated diagnostic when the default-locale value itself looks invalid/non-translatable.
+            // This runs only when analyzing the default-locale file for this key so Problems entries are stable.
+            if (fileLocale === defaultLocaleForKey && hasDefaultValue) {
+                const looksInvalid =
+                    this.isIgnoredText(defaultValue) ||
+                    this.isProbablyNonTranslatable(defaultValue);
+                if (looksInvalid) {
+                    const range = await this.getKeyRangeInFile(uri, key);
+                    const invalidDiag = new vscode.Diagnostic(
+                        range,
+                        `AI i18n: Invalid/non-translatable default value for key ${key} in locale ${defaultLocaleForKey}`,
+                        config.invalidSeverity,
+                    );
+                    invalidDiag.code = 'ai-i18n.invalid';
+                    diagnostics.push(invalidDiag);
+                }
+            }
+
             // Check all locales for this key
             for (const locale of locales) {
                 if (locale === defaultLocaleForKey) {
@@ -416,6 +434,9 @@ export class DiagnosticAnalyzer {
         // Filesystem-like paths
         if (/^\\\\[^\s]+/.test(normalized) || /^\/[\w/.-]+$/.test(normalized) || /^[A-Za-z]:[\\/][^\s]*$/.test(normalized)) return true;
 
+        // Query-string / link fragments like "?duration=" or "?lang=en"
+        if (!/\s/.test(normalized) && /[?&]/.test(normalized) && /=/.test(normalized)) return true;
+
         // Single character
         if (normalized.length === 1) return true;
 
@@ -700,6 +721,7 @@ export interface DiagnosticConfig {
     missingSeverity: vscode.DiagnosticSeverity;
     untranslatedEnabled: boolean;
     untranslatedSeverity: vscode.DiagnosticSeverity;
+    invalidSeverity: vscode.DiagnosticSeverity;
 }
 
 export function getDiagnosticConfig(): DiagnosticConfig {
@@ -725,6 +747,8 @@ export function getDiagnosticConfig(): DiagnosticConfig {
     const untranslatedEnabled = cfg.get<boolean>('i18n.diagnostics.untranslatedSameAsDefaultEnabled') ?? true;
     const untranslatedSeveritySetting =
         cfg.get<string>('i18n.diagnostics.untranslatedSameAsDefaultSeverity') || 'warning';
+    const invalidSeveritySetting =
+        cfg.get<string>('i18n.diagnostics.invalidBaseValueSeverity') || 'warning';
 
     return {
         enabled,
@@ -732,5 +756,6 @@ export function getDiagnosticConfig(): DiagnosticConfig {
         missingSeverity: mapSeverity(missingSeveritySetting),
         untranslatedEnabled,
         untranslatedSeverity: mapSeverity(untranslatedSeveritySetting),
+        invalidSeverity: mapSeverity(invalidSeveritySetting),
     };
 }
