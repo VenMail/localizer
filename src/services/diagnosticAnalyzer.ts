@@ -123,7 +123,7 @@ export class DiagnosticAnalyzer {
                     const range = await this.getKeyRangeInFile(uri, key);
                     const invalidDiag = new vscode.Diagnostic(
                         range,
-                        `AI i18n: Invalid/non-translatable default value for key ${key} in locale ${defaultLocaleForKey}`,
+                        `Invalid/non-translatable value "${key}" [${defaultLocaleForKey}]`,
                         config.invalidSeverity,
                     );
                     invalidDiag.code = 'ai-i18n.invalid';
@@ -384,16 +384,26 @@ export class DiagnosticAnalyzer {
         return false;
     }
 
-    // Lightweight heuristics inspired by fix-untranslated.js isNonTranslatableExample
+    /**
+     * Detect values that are clearly extraction errors and should be removed/restored.
+     * These are technical fragments that should never have been translation keys.
+     * Examples:
+     *   - "?duration=" (query fragment)
+     *   - "/schedule/" (path fragment)
+     *   - "{value1} {value2} {value3} {value4}" (placeholder-only)
+     *   - "font-medium {color}" (CSS + placeholder)
+     */
     private isProbablyNonTranslatable(text: string): boolean {
         const normalized = String(text || '').trim().replace(/\s+/g, ' ');
+        if (!normalized) return false;
+
+        // Placeholder-only text (no real words, just placeholders and punctuation)
         if (this.isPlaceholderOnlyText(normalized)) {
             return true;
         }
-        if (!normalized) return false;
 
-        // Bare domains/subdomains like "WordPress.com"
-        if (!/\s/.test(normalized) && normalized.includes('.') && /^[A-Za-z0-9.-]+$/.test(normalized)) {
+        // CSS/utility class patterns with placeholders like "font-medium {color}"
+        if (this.isCssWithPlaceholders(normalized)) {
             return true;
         }
 
@@ -412,11 +422,6 @@ export class DiagnosticAnalyzer {
             return true;
         }
 
-        // Domain + optional port and qualifier, e.g. "imap.gmail.com:993 (SSL)"
-        if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:\d+)?(\s*\([A-Za-z0-9\s]+\))?$/.test(normalized)) {
-            return true;
-        }
-
         // Analytics / object-literal style code snippets (e.g. gtag(... { 'send_to': ... }); )
         if (
             normalized.includes('gtag(') ||
@@ -428,49 +433,43 @@ export class DiagnosticAnalyzer {
         // Obvious URLs
         if (/^https?:\/\//i.test(normalized) || /^www\./i.test(normalized)) return true;
 
-        // Example tokens
-        if (/\bexample\b/i.test(normalized)) return true;
+        // Filesystem-like paths (e.g. "/schedule/", "/api/v1", "C:\path")
+        if (/^\/[A-Za-z0-9_/-]+\/?$/.test(normalized)) return true;
+        if (/^\\\\[^\s]+/.test(normalized) || /^[A-Za-z]:[\\/][^\s]*$/.test(normalized)) return true;
 
-        // Filesystem-like paths
-        if (/^\\\\[^\s]+/.test(normalized) || /^\/[\w/.-]+$/.test(normalized) || /^[A-Za-z]:[\\/][^\s]*$/.test(normalized)) return true;
-
-        // Query-string / link fragments like "?duration=" or "?lang=en"
-        if (!/\s/.test(normalized) && /[?&]/.test(normalized) && /=/.test(normalized)) return true;
+        // Query-string fragments (e.g. "?duration=", "?lang=en", "foo=bar&baz=qux")
+        if (!/\s/.test(normalized)) {
+            // Starts with ? or # and has key=value pattern
+            if (/^[?#][A-Za-z0-9_.-]+=/.test(normalized)) return true;
+            // Pure query string without leading ?
+            if (/^[A-Za-z0-9_.-]+=[^&\s]*(&[A-Za-z0-9_.-]+=[^&\s]*)+$/.test(normalized)) return true;
+        }
 
         // Single character
         if (normalized.length === 1) return true;
 
-        // Emails on example/acme
-        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
-            const lowerEmail = normalized.toLowerCase();
-            if (lowerEmail.includes('example.') || lowerEmail.includes('acme.')) return true;
-        }
-
-        // id-like tokens (mixed alnum, no spaces)
-        const noSpace = !/\s/.test(normalized);
-        const hasLetter = /[A-Za-z]/.test(normalized);
-        const hasDigit = /\d/.test(normalized);
-        if (noSpace && hasLetter && hasDigit && normalized.length >= 6 && normalized.length <= 64) return true;
-
-        // Protocol-like tokens and well-known abbreviations (configurable)
-        const lower = normalized.toLowerCase();
-        try {
-            const cfg = vscode.workspace.getConfiguration('ai-localizer');
-            const csv = cfg.get<string>('i18n.heuristics.abbreviationsCsv') || 'webdav, imap, smtp, pop3, ftp, sftp';
-            const abbrs = csv
-                .split(',')
-                .map((s) => s.trim().toLowerCase())
-                .filter(Boolean);
-            if (abbrs.includes(lower)) return true;
-        } catch {
-            // ignore config read errors
-        }
-
-        // All-caps short codes
-        const alphaNum = normalized.replace(/[^A-Za-z0-9]/g, '');
-        if (alphaNum && alphaNum.length <= 4 && alphaNum.toUpperCase() === alphaNum) return true;
-
         return false;
+    }
+
+    /**
+     * Detect CSS/utility class patterns mixed with placeholders.
+     * Examples: "font-medium {color}", "w-full {value1}", "text-{size} font-bold"
+     */
+    private isCssWithPlaceholders(text: string): boolean {
+        const hasPlaceholder = /\{[A-Za-z0-9_]+\}/.test(text);
+        if (!hasPlaceholder) return false;
+
+        // Remove placeholders and check if remaining looks like CSS classes
+        const withoutPlaceholders = text.replace(/\{[A-Za-z0-9_]+\}/g, '').trim();
+        if (!withoutPlaceholders) return true; // Only placeholders
+
+        // Check if remaining parts look like CSS utility classes (kebab-case tokens)
+        const tokens = withoutPlaceholders.split(/\s+/).filter(Boolean);
+        if (tokens.length === 0) return true;
+
+        // If all remaining tokens are kebab-case or utility-like, it's CSS
+        const cssLikeTokens = tokens.filter(t => /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/i.test(t));
+        return cssLikeTokens.length === tokens.length;
     }
 
     private isProbablyConstantAcrossLocales(
@@ -529,7 +528,7 @@ export class DiagnosticAnalyzer {
         // Check for missing translation
         if (!value || !value.trim()) {
             issues.push({
-                message: `AI i18n: Missing translation for key ${key} in locale ${locale}`,
+                message: `Missing translation for "${key}" [${locale}]`,
                 severity: config.missingSeverity,
                 code: 'ai-i18n.untranslated',
             });
@@ -544,7 +543,7 @@ export class DiagnosticAnalyzer {
                 this.isProbablyNonTranslatable(defaultValue);
             if (!ignore) {
                 issues.push({
-                    message: `AI i18n: Untranslated (same as default) value for key ${key} in locale ${locale}`,
+                    message: `Untranslated (same as default) "${key}" [${locale}]`,
                     severity: config.untranslatedSeverity,
                     code: 'ai-i18n.untranslated',
                 });
@@ -571,8 +570,8 @@ export class DiagnosticAnalyzer {
                 const expected = Array.from(defaultPlaceholders).join(', ');
                 const message =
                     expected.length > 0
-                        ? `AI i18n: Placeholder mismatch for key ${key} in locale ${locale} (expected: ${expected})`
-                        : `AI i18n: Placeholder mismatch for key ${key} in locale ${locale}`;
+                        ? `Placeholder mismatch "${key}" [${locale}] (expected: ${expected})`
+                        : `Placeholder mismatch "${key}" [${locale}]`;
                 issues.push({
                     message,
                     severity: vscode.DiagnosticSeverity.Warning,
@@ -611,7 +610,7 @@ export class DiagnosticAnalyzer {
             }
             const details = parts.length ? ` (${parts.join(' | ')})` : '';
             issues.push({
-                message: `AI i18n: Style suggestion for key ${key} in locale ${locale}${details}`,
+                message: `Style suggestion "${key}" [${locale}]${details}`,
                 severity: vscode.DiagnosticSeverity.Information,
                 code: 'ai-i18n.style',
             });

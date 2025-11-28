@@ -6,9 +6,6 @@ import { setTranslationValue, setTranslationValueInFile } from '../core/i18nFs';
 import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
 import { TextDecoder, TextEncoder } from 'util';
 
-let parseSync: any;
-let MagicString: any;
-
 /**
  * Commands for handling untranslated strings
  */
@@ -307,6 +304,196 @@ export class UntranslatedCommands {
             vscode.window.showErrorMessage(
                 'AI i18n: Failed to apply AI quick fix for untranslated key.',
             );
+        }
+    }
+
+    /**
+     * Translate all untranslated keys in a locale file using AI.
+     */
+    async translateAllUntranslatedInFile(documentUri?: vscode.Uri): Promise<void> {
+        try {
+            const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
+            if (!targetUri) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No active document to translate.',
+                );
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(targetUri);
+            if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Bulk translate only applies to locale JSON files.',
+                );
+                return;
+            }
+
+            let folder = vscode.workspace.getWorkspaceFolder(targetUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+
+            // Get locale for this file
+            const fileInfo = this.i18nIndex.getKeysForFile(targetUri);
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const globalDefaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+
+            // Infer locale from file path if not in index
+            let fileLocale: string | null = fileInfo?.locale || null;
+            if (!fileLocale) {
+                // Try to infer from path (e.g., /auto/fr.json or /locales/fr.json)
+                const fsPath = targetUri.fsPath;
+                const parts = fsPath.split(/[\\/]/).filter(Boolean);
+                const fileName = parts[parts.length - 1];
+                const match = fileName.match(/^([A-Za-z0-9_-]+)\.json$/);
+                if (match) {
+                    fileLocale = match[1];
+                }
+            }
+
+            if (!fileLocale) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Could not determine locale for this file.',
+                );
+                return;
+            }
+
+            if (fileLocale === globalDefaultLocale) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: This is the default locale file (${globalDefaultLocale}). Nothing to translate.`,
+                );
+                return;
+            }
+
+            // Narrow the type for TypeScript
+            const targetLocale: string = fileLocale;
+
+            // Find ALL keys that need translation for this locale
+            // This includes keys that exist in default locale but are missing/untranslated in this locale
+            const keysToTranslate: { key: string; defaultValue: string }[] = [];
+            const allKeys = this.i18nIndex.getAllKeys();
+
+            for (const key of allKeys) {
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) continue;
+
+                const defaultLocale = record.defaultLocale || globalDefaultLocale;
+                if (targetLocale === defaultLocale) continue; // Skip if this is the default locale
+
+                const defaultValue = record.locales.get(defaultLocale);
+                if (typeof defaultValue !== 'string' || !defaultValue.trim()) continue;
+
+                const currentValue = record.locales.get(targetLocale);
+                const needsTranslation =
+                    !currentValue ||
+                    !currentValue.trim() ||
+                    currentValue.trim() === defaultValue.trim();
+
+                if (needsTranslation) {
+                    keysToTranslate.push({ key, defaultValue });
+                }
+            }
+
+            if (!keysToTranslate.length) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: No untranslated keys found for locale ${targetLocale}.`,
+                );
+                return;
+            }
+
+            // Confirm with user
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: `Translate ${keysToTranslate.length} key(s)`,
+                        description: `Use AI to translate ${keysToTranslate.length} untranslated key(s) to ${targetLocale}`,
+                    },
+                    { label: 'Cancel', description: 'Do not translate' },
+                ],
+                {
+                    placeHolder: `AI i18n: Translate ${keysToTranslate.length} untranslated key(s) in this file?`,
+                },
+            );
+            if (!choice || choice.label === 'Cancel') {
+                return;
+            }
+
+            // Translate in batches
+            let translatedCount = 0;
+            const batchSize = 10;
+
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'AI i18n: Translating...',
+                    cancellable: true,
+                },
+                async (progress, token) => {
+                    for (let i = 0; i < keysToTranslate.length; i += batchSize) {
+                        if (token.isCancellationRequested) break;
+
+                        const batch = keysToTranslate.slice(i, i + batchSize);
+                        progress.report({
+                            message: `${i + 1}-${Math.min(i + batchSize, keysToTranslate.length)} of ${keysToTranslate.length}`,
+                            increment: (batch.length / keysToTranslate.length) * 100,
+                        });
+
+                        for (const { key, defaultValue } of batch) {
+                            if (token.isCancellationRequested) break;
+
+                            try {
+                                const record = this.i18nIndex.getRecord(key);
+                                const defaultLocale = record?.defaultLocale || globalDefaultLocale;
+
+                                const translations = await this.translationService.translateToLocales(
+                                    defaultValue,
+                                    defaultLocale,
+                                    [targetLocale],
+                                    'text',
+                                    true,
+                                );
+
+                                if (translations && translations.size > 0) {
+                                    const newValue = translations.get(targetLocale);
+                                    if (newValue) {
+                                        await setTranslationValue(folder!, targetLocale, key, newValue);
+                                        translatedCount++;
+                                    }
+                                }
+                            } catch (err) {
+                                console.error(`AI i18n: Failed to translate key ${key}:`, err);
+                            }
+                        }
+                    }
+                },
+            );
+
+            await this.i18nIndex.ensureInitialized(true);
+            await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+
+            if (translatedCount > 0) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Translated ${translatedCount} key(s) in ${targetLocale}.`,
+                );
+            } else {
+                const apiChoice = await vscode.window.showInformationMessage(
+                    'AI i18n: No translations were generated (check API key and settings).',
+                    'Open OpenAI API Key Settings',
+                    'Dismiss',
+                );
+                if (apiChoice === 'Open OpenAI API Key Settings') {
+                    await vscode.commands.executeCommand('ai-localizer.setOpenAiApiKeySecret');
+                }
+            }
+        } catch (err) {
+            console.error('AI i18n: Failed to translate all untranslated keys:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to translate all untranslated keys.');
         }
     }
 
@@ -787,9 +974,58 @@ export class UntranslatedCommands {
                 return;
             }
 
+            // Confirm with user before proceeding
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: 'Restore code references and remove from locale files',
+                        description: `Restore inline strings in code and remove ${invalid.length} invalid key(s) from all locale files.`,
+                    },
+                    {
+                        label: 'Cancel',
+                        description: 'Do not change code or locale files.',
+                    },
+                ],
+                {
+                    placeHolder: `AI i18n: Restore ${invalid.length} invalid key(s) to inline strings and remove from locale files?`,
+                },
+            );
+            if (!choice || choice.label === 'Cancel') {
+                return;
+            }
+
+            // First, restore code references for all invalid keys
+            let codeRestoreCount = 0;
+            for (const item of invalid) {
+                if (!item || typeof item.keyPath !== 'string') continue;
+                const usages = Array.isArray(item.usages) ? item.usages : [];
+                const baseValue = typeof item.baseValue === 'string' ? item.baseValue : '';
+                
+                for (const usage of usages) {
+                    if (!usage || typeof usage.file !== 'string' || typeof usage.line !== 'number') continue;
+                    const codeFileUri = vscode.Uri.joinPath(folder.uri, usage.file);
+                    try {
+                        const restored = await this.restoreInlineStringInFile(
+                            codeFileUri,
+                            item.keyPath,
+                            baseValue,
+                            usage.line - 1, // Convert to 0-indexed
+                        );
+                        if (restored) {
+                            codeRestoreCount++;
+                        }
+                    } catch (err) {
+                        console.error(`AI i18n: Failed to restore code reference for ${item.keyPath} in ${usage.file}:`, err);
+                    }
+                }
+            }
+
+            // Then remove keys from this locale file
             let root: any = {};
             try {
-                const text = doc.getText();
+                // Re-read the file in case it was modified
+                const freshDoc = await vscode.workspace.openTextDocument(targetUri);
+                const text = freshDoc.getText();
                 const parsed = JSON.parse(text);
                 if (parsed && typeof parsed === 'object') root = parsed;
             } catch {}
@@ -806,30 +1042,121 @@ export class UntranslatedCommands {
                 }
             }
 
-            if (!deletedKeys.size) {
-                vscode.window.showInformationMessage(
-                    'AI i18n: No invalid/non-translatable keys from report were found in this file.',
+            if (deletedKeys.size > 0) {
+                const encoder = new TextEncoder();
+                const payload = `${JSON.stringify(root, null, 2)}\n`;
+                await vscode.workspace.fs.writeFile(targetUri, encoder.encode(payload));
+
+                await this.i18nIndex.updateFile(targetUri);
+                await vscode.commands.executeCommand(
+                    'ai-localizer.i18n.refreshFileDiagnostics',
+                    targetUri,
+                    Array.from(deletedKeys),
                 );
-                return;
             }
 
-            const encoder = new TextEncoder();
-            const payload = `${JSON.stringify(root, null, 2)}\n`;
-            await vscode.workspace.fs.writeFile(targetUri, encoder.encode(payload));
+            // Also remove from other locale files
+            await this.i18nIndex.ensureInitialized();
+            for (const item of invalid) {
+                if (!item || typeof item.keyPath !== 'string') continue;
+                const record = this.i18nIndex.getRecord(item.keyPath);
+                if (record) {
+                    const otherUris = record.locations
+                        .map((l) => l.uri)
+                        .filter((u) => u.toString() !== targetUri.toString());
+                    if (otherUris.length) {
+                        await this.deleteKeyFromLocaleFiles(item.keyPath, otherUris);
+                    }
+                }
+            }
 
-            await this.i18nIndex.updateFile(targetUri);
-            await vscode.commands.executeCommand(
-                'ai-localizer.i18n.refreshFileDiagnostics',
-                targetUri,
-                Array.from(deletedKeys),
-            );
-
-            vscode.window.showInformationMessage(
-                `AI i18n: Removed ${deletedKeys.size} invalid/non-translatable key(s) from this file.`,
-            );
+            const message = codeRestoreCount > 0
+                ? `AI i18n: Restored ${codeRestoreCount} code reference(s) and removed ${deletedKeys.size} invalid key(s) from locale files.`
+                : `AI i18n: Removed ${deletedKeys.size} invalid/non-translatable key(s) from this file.`;
+            vscode.window.showInformationMessage(message);
         } catch (err) {
             console.error('AI i18n: Failed to cleanup invalid keys for file:', err);
             vscode.window.showErrorMessage('AI i18n: Failed to cleanup invalid keys for file.');
+        }
+    }
+
+    /**
+     * Restore a single t('key') call to an inline string in a specific file at a specific line.
+     * Uses regex-based replacement to avoid external dependencies.
+     */
+    private async restoreInlineStringInFile(
+        fileUri: vscode.Uri,
+        keyPath: string,
+        baseValue: string,
+        lineNumber: number,
+    ): Promise<boolean> {
+        try {
+            const doc = await vscode.workspace.openTextDocument(fileUri);
+            const lineText = doc.lineAt(lineNumber).text;
+
+            // Escape special regex characters in the key
+            const escapedKey = keyPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            // Match t('key') or t("key") with optional second argument
+            // Pattern: t('key') or t('key', {...})
+            const patterns = [
+                // t('key') - simple case without placeholders
+                new RegExp(`t\\(\\s*['"]${escapedKey}['"]\\s*\\)`, 'g'),
+                // t('key', { ... }) - with placeholder object (greedy match for the object)
+                new RegExp(`t\\(\\s*['"]${escapedKey}['"]\\s*,\\s*\\{[^}]*\\}\\s*\\)`, 'g'),
+            ];
+
+            let newLineText = lineText;
+            let replaced = false;
+
+            // Check if baseValue has placeholders
+            const placeholderRegex = /\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)\}/g;
+            const hasPlaceholders = placeholderRegex.test(baseValue);
+
+            // Build the replacement string
+            let replacement: string;
+            if (hasPlaceholders) {
+                // For placeholders, we need to extract the expressions from the t() call
+                // This is complex without AST, so for now just use the base value with placeholders as-is
+                // wrapped in backticks as a template literal hint
+                const escaped = baseValue
+                    .replace(/`/g, '\\`')
+                    .replace(/\$/g, '\\$');
+                replacement = `\`${escaped}\``;
+            } else {
+                // Simple string without placeholders
+                const escaped = baseValue
+                    .replace(/\\/g, '\\\\')
+                    .replace(/'/g, "\\'")
+                    .replace(/\r?\n/g, '\\n');
+                replacement = `'${escaped}'`;
+            }
+
+            // Try each pattern
+            for (const pattern of patterns) {
+                if (pattern.test(newLineText)) {
+                    newLineText = newLineText.replace(pattern, replacement);
+                    replaced = true;
+                    break;
+                }
+            }
+
+            if (!replaced) {
+                return false;
+            }
+
+            // Apply the edit
+            const edit = new vscode.WorkspaceEdit();
+            const lineRange = doc.lineAt(lineNumber).range;
+            edit.replace(fileUri, lineRange, newLineText);
+            const applied = await vscode.workspace.applyEdit(edit);
+            if (applied) {
+                await doc.save();
+            }
+            return applied;
+        } catch (err) {
+            console.error(`AI i18n: Failed to restore inline string in ${fileUri.fsPath}:`, err);
+            return false;
         }
     }
 
@@ -1020,18 +1347,65 @@ export class UntranslatedCommands {
             }
 
             const invalid = Array.isArray(report.invalid) ? report.invalid : [];
-            const hasEntry = invalid.some(
+            const entry = invalid.find(
                 (item: any) => item && typeof item.keyPath === 'string' && item.keyPath === keyPath,
             );
-            if (!hasEntry) {
+            if (!entry) {
                 vscode.window.showInformationMessage(
                     `AI i18n: Key ${keyPath} is not marked as invalid/non-translatable in invalid keys report.`,
                 );
+                return;
             }
 
+            // Confirm with user before proceeding
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: 'Restore code references and remove from locale files',
+                        description: `Restore inline string in code and remove ${keyPath} from all locale files.`,
+                    },
+                    {
+                        label: 'Cancel',
+                        description: 'Do not change code or locale files.',
+                    },
+                ],
+                {
+                    placeHolder: `AI i18n: Restore invalid key ${keyPath} to inline string and remove from locale files?`,
+                },
+            );
+            if (!choice || choice.label === 'Cancel') {
+                return;
+            }
+
+            // First, restore code references for this key
+            let codeRestoreCount = 0;
+            const usages = Array.isArray(entry.usages) ? entry.usages : [];
+            const baseValue = typeof entry.baseValue === 'string' ? entry.baseValue : '';
+
+            for (const usage of usages) {
+                if (!usage || typeof usage.file !== 'string' || typeof usage.line !== 'number') continue;
+                const codeFileUri = vscode.Uri.joinPath(folder.uri, usage.file);
+                try {
+                    const restored = await this.restoreInlineStringInFile(
+                        codeFileUri,
+                        keyPath,
+                        baseValue,
+                        usage.line - 1, // Convert to 0-indexed
+                    );
+                    if (restored) {
+                        codeRestoreCount++;
+                    }
+                } catch (err) {
+                    console.error(`AI i18n: Failed to restore code reference for ${keyPath} in ${usage.file}:`, err);
+                }
+            }
+
+            // Then remove from this locale file
             let root: any = {};
             try {
-                const text = doc.getText();
+                // Re-read the file in case it was modified
+                const freshDoc = await vscode.workspace.openTextDocument(documentUri);
+                const text = freshDoc.getText();
                 const parsed = JSON.parse(text);
                 if (parsed && typeof parsed === 'object') root = parsed;
             } catch {}
@@ -1040,27 +1414,35 @@ export class UntranslatedCommands {
             const before = JSON.stringify(root);
             this.deleteKeyPathInObject(root, keyPath);
             const after = JSON.stringify(root);
-            if (before === after) {
-                vscode.window.showInformationMessage(
-                    `AI i18n: Key ${keyPath} was not found in this file.`,
+            if (before !== after) {
+                const encoder = new TextEncoder();
+                const payload = `${JSON.stringify(root, null, 2)}\n`;
+                await vscode.workspace.fs.writeFile(documentUri, encoder.encode(payload));
+
+                await this.i18nIndex.updateFile(documentUri);
+                await vscode.commands.executeCommand(
+                    'ai-localizer.i18n.refreshFileDiagnostics',
+                    documentUri,
+                    [keyPath],
                 );
-                return;
             }
 
-            const encoder = new TextEncoder();
-            const payload = `${JSON.stringify(root, null, 2)}\n`;
-            await vscode.workspace.fs.writeFile(documentUri, encoder.encode(payload));
+            // Also remove from other locale files
+            await this.i18nIndex.ensureInitialized();
+            const record = this.i18nIndex.getRecord(keyPath);
+            if (record) {
+                const otherUris = record.locations
+                    .map((l) => l.uri)
+                    .filter((u) => u.toString() !== documentUri.toString());
+                if (otherUris.length) {
+                    await this.deleteKeyFromLocaleFiles(keyPath, otherUris);
+                }
+            }
 
-            await this.i18nIndex.updateFile(documentUri);
-            await vscode.commands.executeCommand(
-                'ai-localizer.i18n.refreshFileDiagnostics',
-                documentUri,
-                [keyPath],
-            );
-
-            vscode.window.showInformationMessage(
-                `AI i18n: Removed invalid/non-translatable key ${keyPath} from this file.`,
-            );
+            const message = codeRestoreCount > 0
+                ? `AI i18n: Restored ${codeRestoreCount} code reference(s) and removed invalid key ${keyPath} from locale files.`
+                : `AI i18n: Removed invalid/non-translatable key ${keyPath} from locale files.`;
+            vscode.window.showInformationMessage(message);
         } catch (err) {
             console.error('AI i18n: Failed to remove invalid key from file:', err);
             vscode.window.showErrorMessage('AI i18n: Failed to remove invalid key from file.');
@@ -1073,23 +1455,6 @@ export class UntranslatedCommands {
         key: string,
     ): Promise<void> {
         try {
-            if (!parseSync || !MagicString) {
-                try {
-                    // @ts-ignore - runtime dependency without TypeScript types
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    parseSync = require('oxc-parser').parseSync;
-                    // @ts-ignore - runtime dependency without TypeScript types
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    MagicString = require('magic-string');
-                } catch (err) {
-                    console.error('AI i18n: Failed to load oxc-parser or magic-string for restore quick fix:', err);
-                    vscode.window.showErrorMessage(
-                        'AI i18n: Failed to load parser dependencies (oxc-parser, magic-string) for restore quick fix. Install these dependencies in your extension environment to enable this quick fix.',
-                    );
-                    return;
-                }
-            }
-
             const doc = await vscode.workspace.openTextDocument(documentUri);
 
             let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
@@ -1184,179 +1549,46 @@ export class UntranslatedCommands {
                 shouldDeleteFromLocales = true;
             }
 
-            const code = doc.getText();
-            const fileName = path.basename(documentUri.fsPath);
-            const ext = path.extname(documentUri.fsPath).toLowerCase();
+            // Use regex-based replacement (no external dependencies needed)
+            const lineText = doc.lineAt(position.line).text;
+            const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-            let parsed: any;
-            try {
-                parsed = parseSync(fileName, code, {
-                    sourceType: 'module',
-                    lang:
-                        ext === '.tsx'
-                            ? 'tsx'
-                            : ext === '.ts'
-                            ? 'ts'
-                            : ext === '.jsx'
-                            ? 'jsx'
-                            : 'js',
-                });
-            } catch (err) {
-                console.error('AI i18n: Failed to parse source file for restore quick fix:', err);
-                vscode.window.showErrorMessage(
-                    'AI i18n: Failed to analyze source file for restore quick fix.',
-                );
-                return;
-            }
+            // Match t('key') or t("key") with optional second argument
+            const patterns = [
+                new RegExp(`t\\(\\s*['"]${escapedKey}['"]\\s*\\)`, 'g'),
+                new RegExp(`t\\(\\s*['"]${escapedKey}['"]\\s*,\\s*\\{[^}]*\\}\\s*\\)`, 'g'),
+            ];
 
-            if (!parsed || !parsed.program) {
-                vscode.window.showInformationMessage(
-                    'AI i18n: Could not analyze source file for restore quick fix.',
-                );
-                return;
-            }
-
-            const ast = parsed.program;
-            const s = new MagicString(code);
-            const docPosition = new vscode.Position(position.line, position.character);
-            const posOffset = doc.offsetAt(docPosition);
-
-            const isStringLiteralNode = (node: any): boolean => {
-                if (!node) return false;
-                if (node.type === 'StringLiteral') return true;
-                if (node.type === 'Literal' && typeof node.value === 'string') return true;
-                return false;
-            };
-
-            const getStringLiteralValue = (node: any): string | null => {
-                if (!node) return null;
-                if (node.type === 'StringLiteral') return node.value;
-                if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
-                return null;
-            };
-
-            const buildInlineFromCall = (callNode: any): string | null => {
-                const args = callNode.arguments || [];
-                if (!args.length || !isStringLiteralNode(args[0])) return null;
-                const keyPath = getStringLiteralValue(args[0]);
-                if (!keyPath || keyPath !== key) return null;
-
-                const placeholderRegex = /\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)\}/g;
-                const parts: { type: 'text' | 'placeholder'; value?: string; name?: string }[] = [];
-                let lastIndex = 0;
-                let match: RegExpExecArray | null;
-
-                while ((match = placeholderRegex.exec(baseValue)) !== null) {
-                    if (match.index > lastIndex) {
-                        parts.push({ type: 'text', value: baseValue.slice(lastIndex, match.index) });
-                    }
-                    parts.push({ type: 'placeholder', name: match[1] });
-                    lastIndex = match.index + match[0].length;
-                }
-                if (lastIndex < baseValue.length) {
-                    parts.push({ type: 'text', value: baseValue.slice(lastIndex) });
-                }
-
-                const hasPlaceholder = parts.some((p) => p.type === 'placeholder');
-                if (!hasPlaceholder) {
-                    const escaped = baseValue
-                        .replace(/\\/g, '\\\\')
-                        .replace(/'/g, "\\'")
-                        .replace(/\r?\n/g, '\\n');
-                    return `'${escaped}'`;
-                }
-
-                const placeholdersArg = args[1];
-                if (!placeholdersArg || placeholdersArg.type !== 'ObjectExpression') {
-                    return null;
-                }
-
-                const exprByName = new Map<string, string>();
-                for (const prop of placeholdersArg.properties || []) {
-                    if (!prop || prop.type !== 'Property') continue;
-                    if (prop.computed) continue;
-                    const keyNode = prop.key;
-                    let name: string | null = null;
-                    if (keyNode.type === 'Identifier') name = keyNode.name;
-                    else if (isStringLiteralNode(keyNode)) name = getStringLiteralValue(keyNode);
-                    if (!name) continue;
-                    const valueNode = prop.value;
-                    if (!valueNode) continue;
-                    const exprCode = code.slice(valueNode.start, valueNode.end);
-                    exprByName.set(name, exprCode);
-                }
-
-                let out = '`';
-                for (const part of parts) {
-                    if (part.type === 'text') {
-                        const safe = String(part.value || '')
-                            .replace(/`/g, '\\`')
-                            .replace(/\$/g, '\\$');
-                        out += safe;
-                    } else if (part.type === 'placeholder') {
-                        if (!part.name) {
-                            return null;
-                        }
-                        const expr = exprByName.get(part.name);
-                        if (!expr) {
-                            return null;
-                        }
-                        out += '${' + expr + '}';
-                    }
-                }
-                out += '`';
-                return out;
-            };
-
+            let newLineText = lineText;
             let replaced = false;
 
-            const walkAst = (node: any): void => {
-                if (!node || typeof node !== 'object') return;
-                const visit = (node as any).type === 'CallExpression';
-                if (visit) {
-                    const callNode: any = node;
-                    const callee = callNode.callee;
-                    const args = callNode.arguments || [];
-                    if (
-                        callee &&
-                        callee.type === 'Identifier' &&
-                        callee.name === 't' &&
-                        args.length &&
-                        isStringLiteralNode(args[0]) &&
-                        typeof callNode.start === 'number' &&
-                        typeof callNode.end === 'number'
-                    ) {
-                        if (posOffset >= callNode.start && posOffset <= callNode.end) {
-                            const inline = buildInlineFromCall(callNode);
-                            if (inline) {
-                                s.overwrite(callNode.start, callNode.end, inline);
-                                replaced = true;
-                                return;
-                            }
-                        }
-                    }
-                }
+            // Check if baseValue has placeholders
+            const placeholderRegex = /\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)\}/g;
+            const hasPlaceholders = placeholderRegex.test(baseValue);
 
-                for (const key of Object.keys(node)) {
-                    if (key === 'type' || key === 'loc' || key === 'range' || key === 'start' || key === 'end') {
-                        continue;
-                    }
-                    const child = (node as any)[key];
-                    if (Array.isArray(child)) {
-                        for (const c of child) {
-                            if (c && typeof c === 'object') {
-                                walkAst(c);
-                                if (replaced) return;
-                            }
-                        }
-                    } else if (child && typeof child === 'object') {
-                        walkAst(child);
-                        if (replaced) return;
-                    }
-                }
-            };
+            // Build the replacement string
+            let replacement: string;
+            if (hasPlaceholders) {
+                const escaped = baseValue
+                    .replace(/`/g, '\\`')
+                    .replace(/\$/g, '\\$');
+                replacement = `\`${escaped}\``;
+            } else {
+                const escaped = baseValue
+                    .replace(/\\/g, '\\\\')
+                    .replace(/'/g, "\\'")
+                    .replace(/\r?\n/g, '\\n');
+                replacement = `'${escaped}'`;
+            }
 
-            walkAst(ast);
+            // Try each pattern
+            for (const pattern of patterns) {
+                if (pattern.test(newLineText)) {
+                    newLineText = newLineText.replace(pattern, replacement);
+                    replaced = true;
+                    break;
+                }
+            }
 
             if (!replaced) {
                 vscode.window.showInformationMessage(
@@ -1365,13 +1597,10 @@ export class UntranslatedCommands {
                 return;
             }
 
-            const newCode = s.toString();
+            // Apply the edit
             const edit = new vscode.WorkspaceEdit();
-            const fullRange = new vscode.Range(
-                doc.positionAt(0),
-                doc.positionAt(code.length),
-            );
-            edit.replace(documentUri, fullRange, newCode);
+            const lineRange = doc.lineAt(position.line).range;
+            edit.replace(documentUri, lineRange, newLineText);
             const applied = await vscode.workspace.applyEdit(edit);
             if (!applied) {
                 vscode.window.showErrorMessage(
@@ -1463,5 +1692,142 @@ export class UntranslatedCommands {
         }
 
         return changedUris.length;
+    }
+
+    /**
+     * Add a key's default value to the auto-ignore list so it won't be flagged as untranslated.
+     */
+    async addKeyToIgnoreList(folderUri: vscode.Uri, key: string): Promise<void> {
+        try {
+            await this.i18nIndex.ensureInitialized();
+            const record = this.i18nIndex.getRecord(key);
+            if (!record) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: No translation record found for key ${key}.`,
+                );
+                return;
+            }
+
+            const defaultValue = record.locales.get(record.defaultLocale);
+            if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: No default value found for key ${key}.`,
+                );
+                return;
+            }
+
+            const scriptsDir = vscode.Uri.joinPath(folderUri, 'scripts');
+            const ignoreUri = vscode.Uri.joinPath(scriptsDir, '.i18n-auto-ignore.json');
+            const decoder = new TextDecoder('utf-8');
+            const encoder = new TextEncoder();
+
+            let ignoreData: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } = {
+                exact: [],
+                exactInsensitive: [],
+                contains: [],
+            };
+
+            try {
+                const data = await vscode.workspace.fs.readFile(ignoreUri);
+                const raw = decoder.decode(data);
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    ignoreData = {
+                        exact: Array.isArray(parsed.exact) ? parsed.exact : [],
+                        exactInsensitive: Array.isArray(parsed.exactInsensitive) ? parsed.exactInsensitive : [],
+                        contains: Array.isArray(parsed.contains) ? parsed.contains : [],
+                    };
+                }
+            } catch {
+                // File doesn't exist, use defaults
+            }
+
+            const normalizedValue = defaultValue.replace(/\s+/g, ' ').trim();
+            if (!ignoreData.exact!.includes(normalizedValue)) {
+                ignoreData.exact!.push(normalizedValue);
+            }
+
+            const payload = JSON.stringify(ignoreData, null, 2) + '\n';
+            await vscode.workspace.fs.writeFile(ignoreUri, encoder.encode(payload));
+
+            // Rescan to apply the new ignore pattern
+            await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+
+            vscode.window.showInformationMessage(
+                `AI i18n: Added "${normalizedValue}" to ignore list. Diagnostics will be refreshed.`,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to add key to ignore list:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to add key to ignore list.');
+        }
+    }
+
+    /**
+     * Fix placeholder mismatch by re-translating the value with correct placeholders.
+     */
+    async fixPlaceholderMismatch(documentUri: vscode.Uri, key: string, locale: string): Promise<void> {
+        try {
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+            const record = this.i18nIndex.getRecord(key);
+            if (!record) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: No translation record found for key ${key}.`,
+                );
+                return;
+            }
+
+            const defaultLocale = record.defaultLocale;
+            const defaultValue = record.locales.get(defaultLocale);
+            if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Default locale value not found for key ${key}.`,
+                );
+                return;
+            }
+
+            // Re-translate with AI to get correct placeholders
+            const translations = await this.translationService.translateToLocales(
+                defaultValue,
+                defaultLocale,
+                [locale],
+                'text',
+                true,
+            );
+
+            if (!translations || translations.size === 0) {
+                const choice = await vscode.window.showInformationMessage(
+                    'AI i18n: No translation generated (check API key and settings).',
+                    'Open OpenAI API Key Settings',
+                    'Dismiss',
+                );
+                if (choice === 'Open OpenAI API Key Settings') {
+                    await vscode.commands.executeCommand('ai-localizer.setOpenAiApiKeySecret');
+                }
+                return;
+            }
+
+            const newValue = translations.get(locale);
+            if (newValue) {
+                await setTranslationValue(folder, locale, key, newValue);
+                await this.i18nIndex.ensureInitialized(true);
+                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+
+                vscode.window.showInformationMessage(
+                    `AI i18n: Fixed placeholder mismatch for ${key} in ${locale}.`,
+                );
+            }
+        } catch (err) {
+            console.error('AI i18n: Failed to fix placeholder mismatch:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to fix placeholder mismatch.');
+        }
     }
 }

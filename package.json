@@ -312,7 +312,7 @@
             "info",
             "hint"
           ],
-          "default": "warning",
+          "default": "hint",
           "description": "Severity level used when a default-locale translation value looks like an invalid/non-translatable fragment (URLs, query strings, technical tokens, etc.)."
         },
         "ai-localizer.i18n.heuristics.abbreviationsCsv": {

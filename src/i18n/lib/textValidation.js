@@ -3,6 +3,13 @@
  * Uses linguistic patterns to detect legitimate English words vs random strings
  */
 
+// Precomputed sets for efficient vowel/consonant checks
+const vowels = new Set('aeiouy'.split(''));
+const consonants = new Set('bcdfghjklmnpqrstvwxz'.split(''));
+
+// Cache for common short words
+const commonShortCache = new Set(['a', 'i', 'an', 'at', 'be', 'by', 'do', 'go', 'he', 'if', 'in', 'is', 'it', 'me', 'my', 'no', 'of', 'on', 'or', 'so', 'to', 'up', 'us', 'we']);
+
 /**
  * Check if a word follows basic English phonetic patterns
  * Uses consonant-vowel patterns and common English letter combinations
@@ -14,52 +21,48 @@ function hasEnglishPhoneticPattern(word) {
 
   const lower = word.toLowerCase();
   
-  // Very short words - check against common English words
+  // Very short words - check against cached common English words
   if (lower.length <= 2) {
-    const commonShort = ['a', 'i', 'an', 'at', 'be', 'by', 'do', 'go', 'he', 'if', 'in', 'is', 'it', 'me', 'my', 'no', 'of', 'on', 'or', 'so', 'to', 'up', 'us', 'we'];
-    return commonShort.includes(lower);
+    return commonShortCache.has(lower);
   }
 
-  const vowels = 'aeiouy';
-  const consonants = 'bcdfghjklmnpqrstvwxz';
-  
   // Count vowels and consonants
   let vowelCount = 0;
   let consonantCount = 0;
   
   for (const char of lower) {
-    if (vowels.includes(char)) {
+    if (vowels.has(char)) {
       vowelCount++;
-    } else if (consonants.includes(char)) {
+    } else if (consonants.has(char)) {
       consonantCount++;
     }
   }
   
-  // Must have at least one vowel (except for abbreviations which we filter elsewhere)
+  // Must have at least one vowel
   if (vowelCount === 0) {
     return false;
   }
   
-  // Reject if too many consonants in a row (more than 3, except for common patterns)
-  const consonantClusters = lower.match(/[bcdfghjklmnpqrstvwxz]{4,}/g);
-  if (consonantClusters && consonantClusters.length > 0) {
-    // Allow common English consonant clusters
-    const validClusters = ['tch', 'sch', 'str', 'spr', 'spl', 'scr', 'thr', 'shr', 'phr'];
-    const hasValidCluster = consonantClusters.some(cluster => 
-      validClusters.some(valid => cluster.includes(valid))
-    );
-    if (!hasValidCluster) {
+  // For words >=4 chars, check consonant clusters
+  if (lower.length >= 4) {
+    const consonantClusters = lower.match(/[bcdfghjklmnpqrstvwxz]{4,}/g);
+    if (consonantClusters && consonantClusters.length > 0) {
+      const validClusters = ['tch', 'sch', 'str', 'spr', 'spl', 'scr', 'thr', 'shr', 'phr'];
+      const hasValidCluster = consonantClusters.some(cluster => 
+        validClusters.some(valid => cluster.includes(valid))
+      );
+      if (!hasValidCluster) {
+        return false;
+      }
+    }
+
+    // Reject if too many vowels in a row
+    if (/[aeiouy]{4,}/.test(lower)) {
       return false;
     }
   }
   
-  // Reject if too many vowels in a row (more than 3, rare in English)
-  if (/[aeiouy]{4,}/.test(lower)) {
-    return false;
-  }
-  
-  // Check for alternating consonant-vowel pattern (common in English)
-  // At least 30% of transitions should be consonant-vowel or vowel-consonant
+  // Check for alternating consonant-vowel pattern
   let transitions = 0;
   let cvTransitions = 0;
   
@@ -67,14 +70,11 @@ function hasEnglishPhoneticPattern(word) {
     const curr = lower[i];
     const next = lower[i + 1];
     
-    if ((vowels.includes(curr) || consonants.includes(curr)) && 
-        (vowels.includes(next) || consonants.includes(next))) {
+    if ((vowels.has(curr) || consonants.has(curr)) && 
+        (vowels.has(next) || consonants.has(next))) {
       transitions++;
       
-      const currIsVowel = vowels.includes(curr);
-      const nextIsVowel = vowels.includes(next);
-      
-      if (currIsVowel !== nextIsVowel) {
+      if (vowels.has(curr) !== vowels.has(next)) {
         cvTransitions++;
       }
     }
@@ -85,16 +85,16 @@ function hasEnglishPhoneticPattern(word) {
   }
   
   // Check for common English letter combinations
-  const commonBigrams = [
+  const commonBigrams = new Set([
     'th', 'he', 'in', 'er', 'an', 're', 'on', 'at', 'en', 'nd',
     'ti', 'es', 'or', 'te', 'of', 'ed', 'is', 'it', 'al', 'ar',
     'st', 'to', 'nt', 'ng', 'se', 'ha', 'as', 'ou', 'io', 'le'
-  ];
+  ]);
   
   let bigramMatches = 0;
   for (let i = 0; i < lower.length - 1; i++) {
     const bigram = lower.substring(i, i + 2);
-    if (commonBigrams.includes(bigram)) {
+    if (commonBigrams.has(bigram)) {
       bigramMatches++;
     }
   }
@@ -149,71 +149,70 @@ function isTranslatableText(text) {
 
   const trimmed = text.trim();
   
+  // Early exit for very short texts
+  if (trimmed.length < 2) {
+    return false;
+  }
+  
+  // UUID detection
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
     return false;
   }
 
-  if (!/\s/.test(trimmed) && /[:\[\]]/.test(trimmed) && /^[A-Za-z0-9:._\-\[\]]+$/.test(trimmed)) {
+  // Technical patterns (colons/brackets without spaces)
+  if (!/\s/.test(trimmed) && /[:\[\]]/.test(trimmed) && /^[\w:._\-\[\]]+$/.test(trimmed)) {
     return false;
   }
 
+  // Code-like patterns
   if (/[{};]/.test(trimmed) && /\b(const|let|var|function|return|if|else|for|while|class|async|await)\b/.test(trimmed)) {
     return false;
   }
 
   // Must have at least one letter
-  if (!/[A-Za-z]/.test(trimmed)) {
+  if (!/[a-z]/i.test(trimmed)) {
     return false;
   }
 
-  // Too short (less than 2 characters for single words, 3 for phrases)
-  if (trimmed.length < 2) {
-    return false;
-  }
-
-  // Exclude CSS class patterns (kebab-case, BEM, utility classes)
+  // CSS class patterns
   if (/^[a-z0-9-]+(?:\s+[a-z0-9-]+)*$/i.test(trimmed)) {
     if (trimmed.includes('-') || trimmed.split(/\s+/).length > 3) {
       return false;
     }
   }
 
-  // Exclude camelCase/PascalCase identifiers without spaces
-  if (/^[a-z][a-zA-Z0-9]*$/.test(trimmed) || /^[A-Z][a-zA-Z0-9]*$/.test(trimmed)) {
+  // CamelCase/PascalCase identifiers
+  if (/^[a-z][a-z0-9]*$|^[A-Z][A-Za-z0-9]*$/.test(trimmed)) {
     return false;
   }
 
-  // Exclude technical codes and abbreviations (all caps, 2-5 chars)
+  // Technical abbreviations (all caps, 2-5 chars)
   if (/^[A-Z]{2,5}$/.test(trimmed)) {
     return false;
   }
 
-  // Exclude URL-like strings
-  if (/^(https?:\/\/|www\.|\/)/.test(trimmed)) {
+  // URL detection (improved pattern)
+  if (/^(?:https?:\/\/|www\.|\/)[^\s]*$/.test(trimmed)) {
     return false;
   }
 
-  // Exclude standalone query-string or fragment-like segments
-  // Examples: "?duration=", "?lang=en", "foo=bar&baz=qux"
-  if (!/\s/.test(trimmed)) {
-    const queryLike = /^(?:[?#])?[A-Za-z0-9_.-]+(?:=[^&\s]*)?(?:&[A-Za-z0-9_.-]+(?:=[^&\s]*)?)*$/;
-    if (queryLike.test(trimmed)) {
-      return false;
-    }
-  }
-
-  // Exclude file paths and extensions
-  if (/\.(js|ts|tsx|jsx|vue|css|scss|json|png|jpg|svg|html|xml)$/i.test(trimmed)) {
+  // Query string patterns
+  if (!/\s/.test(trimmed) && /^(?:[?#][\w.=-]*(?:&[\w.=-]+)*|\w+=.*)$/.test(trimmed)) {
     return false;
   }
 
-  // Exclude hex colors
-  if (/^#[0-9a-fA-F]{3,8}$/.test(trimmed)) {
+  // File paths/extensions
+  if (/\.[a-z0-9]{2,4}$/i.test(trimmed)) {
     return false;
   }
 
-  // Exclude numbers-only or mostly numbers
-  if (/^\d+$/.test(trimmed) || /^\d[\d\s.,-]*\d$/.test(trimmed)) {
+  // Hex colors
+  if (/^#[0-9a-f]{3,8}$/i.test(trimmed)) {
+    return false;
+  }
+
+  // Numeric patterns
+  if (/^\d[\d\s.,-]*\d$/.test(trimmed)) {
     return false;
   }
 
@@ -242,36 +241,38 @@ function isTranslatableText(text) {
     return false;
   }
 
-  // Normalize whitespace for subsequent heuristics
-  const normalized = trimmed.replace(/\s+/g, ' ');
+  // Allow placeholder patterns (words separated by underscores) that contain at least one English word
+  if (trimmed.includes('_') && !trimmed.includes(' ')) {
+    const parts = trimmed.split('_');
+    const hasEnglishPart = parts.some(part => {
+      return part.length > 1 && hasEnglishPhoneticPattern(part);
+    });
+    if (hasEnglishPart) {
+      return true;
+    }
+  }
 
-  // Domain + optional port and qualifier, e.g. "imap.gmail.com:993 (SSL)"
-  if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:\d+)?(\s*\([A-Za-z0-9\s]+\))?$/.test(normalized)) {
+  // Domain patterns
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(:\d+)?(\s*\([a-z0-9\s]+\))?$/i.test(trimmed)) {
     return false;
   }
 
-  // Strings that are overwhelmingly CSS/utility classes plus placeholders
+  // CSS/utility class patterns
+  const normalized = trimmed.replace(/\s+/g, ' ');
   const words = normalized.split(/\s+/);
-  const nonPlaceholderWords = words.filter((w) => !/^\{[^}]+\}$/.test(w));
+  const nonPlaceholderWords = words.filter(w => !/^\{[^}]+\}$/.test(w));
+  
   if (nonPlaceholderWords.length > 0) {
     const cssishWords = nonPlaceholderWords.filter(
-      (w) => /[-:]/.test(w) && /^[A-Za-z0-9:._\-\[\]]+$/.test(w),
+      w => /[-:]/.test(w) && /^[\w:._\-\[\]]+$/.test(w)
     );
 
-    // If almost all non-placeholder words look like CSS/utility tokens, treat as non-translatable
-    if (
-      cssishWords.length >= 2 &&
-      cssishWords.length >= nonPlaceholderWords.length - 1
-    ) {
+    if (cssishWords.length >= 2 && cssishWords.length >= nonPlaceholderWords.length - 1) {
       return false;
     }
 
-    // Slug/utility patterns like "w-full {value1}" (single hyphenated token plus placeholders)
-    if (
-      nonPlaceholderWords.length === 1 &&
-      cssishWords.length === 1 &&
-      nonPlaceholderWords[0].includes('-')
-    ) {
+    if (nonPlaceholderWords.length === 1 && cssishWords.length === 1 && 
+        nonPlaceholderWords[0].includes('-')) {
       return false;
     }
   }
@@ -281,22 +282,14 @@ function isTranslatableText(text) {
     return false;
   }
 
-  // Prefer strings with multiple words or sentence structure
-  const wordCount = words.length;
-  if (wordCount === 1) {
-    // Single word: must be capitalized or have mixed case to be considered translatable
-    const firstChar = trimmed[0];
-    if (firstChar !== firstChar.toUpperCase()) {
-      return false;
-    }
+  // Capitalization check for single words
+  if (words.length === 1 && trimmed[0] !== trimmed[0].toUpperCase()) {
+    return false;
   }
 
-  // If it has spaces, ensure it's not just a list of CSS classes or technical tokens
-  if (wordCount > 1) {
-    // If all words contain hyphens, likely CSS classes
-    if (words.every(w => w.includes('-'))) {
-      return false;
-    }
+  // CSS class lists
+  if (words.length > 1 && words.every(w => w.includes('-'))) {
+    return false;
   }
 
   return true;

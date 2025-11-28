@@ -61,12 +61,7 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                 return undefined;
             }
 
-            // Don't show hover if cursor is anywhere inside the key text range
-            // This prevents hover from appearing when clicking or typing inside the key
             const range = keyInfo.range;
-            if (range.contains(position)) {
-                return undefined;
-            }
 
             const record = this.i18nIndex.getRecord(keyInfo.key);
             if (!record) {
@@ -84,13 +79,29 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             const md = new vscode.MarkdownString();
             md.appendMarkdown(`**i18n key** \`${record.key}\`\n\n`);
             
+            // Show missing locales count if any
+            const missingLocales = locales.filter(l => {
+                const v = record.locales.get(l);
+                return v === undefined || v === '';
+            });
+            if (missingLocales.length > 0) {
+                md.appendMarkdown(`⚠️ Missing in: ${missingLocales.join(', ')}\n\n`);
+            }
+            
             for (const locale of locales) {
                 const value = record.locales.get(locale);
-                if (value === undefined) continue;
+                if (value === undefined || value === '') {
+                    const isDefault = locale === record.defaultLocale;
+                    const localeLabel = isDefault ? `${locale} (default)` : locale;
+                    md.appendMarkdown(`- **${localeLabel}**: *(missing)*\n`);
+                    continue;
+                }
                 
                 const isDefault = locale === record.defaultLocale;
                 const localeLabel = isDefault ? `${locale} (default)` : locale;
-                md.appendMarkdown(`- **${localeLabel}**: ${escapeMarkdown(value)}\n`);
+                // Truncate long values for readability
+                const displayValue = value.length > 80 ? value.substring(0, 77) + '...' : value;
+                md.appendMarkdown(`- **${localeLabel}**: ${escapeMarkdown(displayValue)}\n`);
             }
 
             const args = {
@@ -502,10 +513,15 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         const actions: vscode.CodeAction[] = [];
 
         const relevant = context.diagnostics.filter(
-            (d) => d.code === 'ai-i18n.untranslated' || d.code === 'ai-i18n.style',
+            (d) =>
+                d.code === 'ai-i18n.untranslated' ||
+                d.code === 'ai-i18n.style' ||
+                d.code === 'ai-i18n.invalid' ||
+                d.code === 'ai-i18n.placeholders',
         );
 
         let addedBulkActions = false;
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
 
         for (const diagnostic of relevant) {
             if (!diagnostic.range.intersection(range)) {
@@ -524,12 +540,42 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 const title = `AI i18n: AI-translate ${localeLabel} for ${key}`;
                 const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                 action.diagnostics = [diagnostic];
+                action.isPreferred = true;
                 action.command = {
                     title,
                     command: 'ai-localizer.i18n.applyUntranslatedQuickFix',
                     arguments: [document.uri, key, uniqueLocales],
                 };
                 actions.push(action);
+
+                // Add "ignore this key" option for keys that shouldn't be translated
+                if (workspaceFolder) {
+                    const ignoreTitle = `AI i18n: Add "${key}" to ignore list`;
+                    const ignoreAction = new vscode.CodeAction(ignoreTitle, vscode.CodeActionKind.QuickFix);
+                    ignoreAction.diagnostics = [diagnostic];
+                    ignoreAction.command = {
+                        title: ignoreTitle,
+                        command: 'ai-localizer.i18n.addKeyToIgnoreList',
+                        arguments: [workspaceFolder.uri, key],
+                    };
+                    actions.push(ignoreAction);
+                }
+            } else if (diagnostic.code === 'ai-i18n.placeholders') {
+                // Placeholder mismatch - offer to copy placeholders from default
+                const placeholderParsed = this.parsePlaceholderDiagnostic(String(diagnostic.message || ''));
+                if (placeholderParsed) {
+                    const { key, locale } = placeholderParsed;
+                    const title = `AI i18n: Fix placeholder mismatch for ${key} in ${locale}`;
+                    const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                    action.diagnostics = [diagnostic];
+                    action.isPreferred = true;
+                    action.command = {
+                        title,
+                        command: 'ai-localizer.i18n.fixPlaceholderMismatch',
+                        arguments: [document.uri, key, locale],
+                    };
+                    actions.push(action);
+                }
             } else if (diagnostic.code === 'ai-i18n.style') {
                 const styleParsed = this.parseStyleDiagnostic(String(diagnostic.message || ''));
                 if (!styleParsed) continue;
@@ -544,10 +590,53 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                     arguments: [document.uri, key, locale, suggested],
                 };
                 actions.push(action);
+            } else if (diagnostic.code === 'ai-i18n.invalid') {
+                // Parse the invalid diagnostic to extract the key
+                const invalidParsed = this.parseInvalidDiagnostic(String(diagnostic.message || ''));
+                if (!invalidParsed) continue;
+                const { key } = invalidParsed;
+
+                // Offer per-key removal from this file
+                const title = `AI i18n: Remove invalid key "${key}" from this file`;
+                const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                action.diagnostics = [diagnostic];
+                action.isPreferred = true;
+                action.command = {
+                    title,
+                    command: 'ai-localizer.i18n.removeInvalidKeyInFile',
+                    arguments: [document.uri, key],
+                };
+                actions.push(action);
+
+                // Also offer bulk restore if we have a folder
+                if (workspaceFolder) {
+                    const bulkTitle = `AI i18n: Restore all invalid keys in code and remove from locales`;
+                    const bulkAction = new vscode.CodeAction(bulkTitle, vscode.CodeActionKind.QuickFix);
+                    bulkAction.diagnostics = [diagnostic];
+                    bulkAction.command = {
+                        title: bulkTitle,
+                        command: 'ai-localizer.i18n.restoreInvalidKeysInFile',
+                        arguments: [document.uri],
+                    };
+                    actions.push(bulkAction);
+                }
             }
 
             if (!addedBulkActions && (document.languageId === 'json' || document.languageId === 'jsonc')) {
                 addedBulkActions = true;
+
+                // Add bulk translate action for all untranslated keys in this file
+                const bulkTranslateTitle = 'AI i18n: AI-translate all untranslated keys in this file';
+                const bulkTranslateAction = new vscode.CodeAction(
+                    bulkTranslateTitle,
+                    vscode.CodeActionKind.QuickFix,
+                );
+                bulkTranslateAction.command = {
+                    title: bulkTranslateTitle,
+                    command: 'ai-localizer.i18n.translateAllUntranslatedInFile',
+                    arguments: [document.uri],
+                };
+                actions.push(bulkTranslateAction);
 
                 const cleanupTitle = 'AI i18n: Cleanup unused keys in this file (from report)';
                 const cleanupAction = new vscode.CodeAction(
@@ -656,6 +745,23 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
             return null;
         }
 
+        // New format: Missing translation for "key" [locale]
+        const missingNewMatch = message.match(/^Missing translation for "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
+        if (missingNewMatch) {
+            const key = missingNewMatch[1].trim();
+            const locale = missingNewMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        // New format: Untranslated (same as default) "key" [locale]
+        const untranslatedNewMatch = message.match(/^Untranslated \(same as default\) "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
+        if (untranslatedNewMatch) {
+            const key = untranslatedNewMatch[1].trim();
+            const locale = untranslatedNewMatch[2].trim();
+            return { key, locales: [locale] };
+        }
+
+        // Legacy format support
         const clean = message.replace(/^AI i18n:\s*/, '');
 
         const missingMatch = clean.match(
@@ -694,8 +800,21 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
 
     private parseStyleDiagnostic(message: string): { key: string; locale: string; suggested: string } | null {
         if (!message) return null;
+        
+        // New format: Style suggestion "key" [locale] (current: X | suggested: Y)
+        const newMatch = message.match(/^Style suggestion "(.+?)"\s*\[([A-Za-z0-9_-]+)\]\s*\(([^)]*)\)/);
+        if (newMatch) {
+            const key = newMatch[1].trim();
+            const locale = newMatch[2].trim();
+            const details = newMatch[3] || '';
+            const sugMatch = details.match(/suggested:\s*([^|)]+)/i);
+            const suggested = sugMatch ? sugMatch[1].trim() : '';
+            if (!key || !locale || !suggested) return null;
+            return { key, locale, suggested };
+        }
+
+        // Legacy format
         const clean = message.replace(/^AI i18n:\s*/, '');
-        // Format: Style suggestion for key <key> in locale <loc> (current: X | suggested: Y)
         const m = clean.match(/^Style suggestion for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)\s*\(([^)]*)\)/);
         if (!m) return null;
         const key = m[1].trim();
@@ -705,6 +824,48 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         const suggested = sugMatch ? sugMatch[1].trim() : '';
         if (!key || !locale || !suggested) return null;
         return { key, locale, suggested };
+    }
+
+    private parseInvalidDiagnostic(message: string): { key: string } | null {
+        if (!message) return null;
+        
+        // New format: Invalid/non-translatable value "key" [locale]
+        const newMatch = message.match(/^Invalid\/non-translatable value "(.+?)"\s*\[/);
+        if (newMatch) {
+            const key = newMatch[1].trim();
+            if (!key) return null;
+            return { key };
+        }
+
+        // Legacy format
+        const clean = message.replace(/^AI i18n:\s*/, '');
+        const m = clean.match(/^Invalid\/non-translatable default value for key\s+(.+?)\s+in locale\s+/);
+        if (!m) return null;
+        const key = m[1].trim();
+        if (!key) return null;
+        return { key };
+    }
+
+    private parsePlaceholderDiagnostic(message: string): { key: string; locale: string } | null {
+        if (!message) return null;
+        
+        // New format: Placeholder mismatch "key" [locale] (expected: ...)
+        const newMatch = message.match(/^Placeholder mismatch "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
+        if (newMatch) {
+            const key = newMatch[1].trim();
+            const locale = newMatch[2].trim();
+            if (!key || !locale) return null;
+            return { key, locale };
+        }
+
+        // Legacy format
+        const clean = message.replace(/^AI i18n:\s*/, '');
+        const m = clean.match(/^Placeholder mismatch for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/);
+        if (!m) return null;
+        const key = m[1].trim();
+        const locale = m[2].trim();
+        if (!key || !locale) return null;
+        return { key, locale };
     }
 
     private async loadReport(scriptsDir: vscode.Uri, fileName: string): Promise<any | null> {
