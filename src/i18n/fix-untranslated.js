@@ -4,8 +4,9 @@ const { existsSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 // Import shared utilities
-const { detectSrcRoot, getProjectLocales } = require('./lib/projectConfig');
-const { getIgnorePatterns } = require('./lib/ignorePatterns');
+const { detectSrcRoot } = require('./lib/projectConfig');
+const { getIgnorePatterns, isPlaceholderOnlyText } = require('./lib/ignorePatterns');
+const { listLocales } = require('./lib/localeUtils');
 
 const projectRoot = path.resolve(__dirname, '..');
 const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
@@ -14,21 +15,6 @@ const ignorePatternsPath = path.resolve(projectRoot, 'scripts', 'i18n-ignore-pat
 
 // Initialize ignore patterns from shared utility
 getIgnorePatterns(projectRoot);
-
-function isPlaceholderOnlyText(text) {
-  const trimmed = String(text || '').trim();
-  if (!trimmed) return false;
-  let stripped = trimmed
-    .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
-    .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
-  stripped = stripped.replace(/[\(\)\[\]\{\},.:;'"!?!\-_]/g, ' ');
-  stripped = stripped.replace(/\s+/g, ' ').trim();
-  if (!stripped) return true;
-  if (!/[A-Za-z]/.test(stripped)) return true;
-  const letters = stripped.replace(/[^A-Za-z]/g, '');
-  if (letters.length <= 1 && stripped.length <= 3) return true;
-  return false;
-}
 
 function addExactIgnorePattern(value) {
   if (!value) return;
@@ -47,20 +33,6 @@ function addExactIgnorePattern(value) {
   } catch {
     // ignore write errors to avoid breaking the main flow
   }
-}
-
-async function listLocales() {
-  const locales = [];
-  if (!existsSync(autoDir)) {
-    return locales;
-  }
-  const entries = await readdir(autoDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      locales.push(entry.name);
-    }
-  }
-  return locales;
 }
 
 async function collectJsonFiles(dir, out) {
@@ -390,7 +362,7 @@ async function main() {
     process.exit(1);
   }
 
-  const locales = await listLocales();
+  const locales = await listLocales(autoDir, { includeJsonFiles: false });
   if (!locales.includes('en')) {
     console.error('[fix-untranslated] No "en" locale found under', autoDir);
     process.exit(1);

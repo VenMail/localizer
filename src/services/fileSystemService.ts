@@ -109,6 +109,7 @@ export class FileSystemService {
             'translationStore.js',
             'textValidation.js',
             'vueTemplateParser.js',
+            'localeUtils.js',
         ];
 
         for (const name of libFiles) {

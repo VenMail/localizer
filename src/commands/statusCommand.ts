@@ -77,6 +77,12 @@ export class StatusCommand {
 
         if (isJson && editor) {
             items.unshift({
+                label: 'Bulk-translate untranslated keys in all locale files (project)',
+                description:
+                    'Use AI to translate all missing/untranslated keys across all locale JSON files in this workspace',
+                action: 'bulkTranslateProject',
+            });
+            items.unshift({
                 label: 'Apply all style suggestions in this file',
                 description: 'Apply all AI i18n style suggestions in the current locale JSON file',
                 action: 'applyAllStyleSuggestionsInFile',
@@ -194,6 +200,11 @@ export class StatusCommand {
                         editor.document.uri,
                     );
                 }
+                break;
+            case 'bulkTranslateProject':
+                await vscode.commands.executeCommand(
+                    'ai-localizer.i18n.translateAllUntranslatedInProject',
+                );
                 break;
             case 'bulkTranslateLocaleFile':
                 if (editor) {

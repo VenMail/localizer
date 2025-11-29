@@ -4,6 +4,7 @@ const { existsSync } = require('node:fs');
 const path = require('node:path');
 
 const { detectSrcRoot } = require('./lib/projectConfig');
+const { listLocales, deleteKeyPathInObject } = require('./lib/localeUtils');
 
 const projectRoot = path.resolve(__dirname, '..');
 const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
@@ -134,58 +135,8 @@ async function indexKeyUsage(fullKey) {
   }
   return cachedUsageIndex[fullKey] || [];
 }
-
-async function listLocales() {
-  const locales = [];
-  if (!existsSync(autoDir)) return locales;
-  const entries = await readdir(autoDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      locales.push(entry.name);
-    } else if (entry.isFile() && entry.name.endsWith('.json')) {
-      const name = entry.name.replace(/\.json$/i, '');
-      if (!locales.includes(name)) {
-        locales.push(name);
-      }
-    }
-  }
-  return locales;
-}
-
-function deleteKeyPathInObject(obj, keyPath) {
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
-  const segments = String(keyPath).split('.');
-  if (!segments.length) return false;
-
-  function helper(target, index) {
-    if (!target || typeof target !== 'object' || Array.isArray(target)) {
-      return false;
-    }
-    const key = segments[index];
-    if (index === segments.length - 1) {
-      if (!Object.prototype.hasOwnProperty.call(target, key)) {
-        return false;
-      }
-      delete target[key];
-      return Object.keys(target).length === 0;
-    }
-    if (!Object.prototype.hasOwnProperty.call(target, key)) {
-      return false;
-    }
-    const child = target[key];
-    const shouldDeleteChild = helper(child, index + 1);
-    if (shouldDeleteChild) {
-      delete target[key];
-    }
-    return Object.keys(target).length === 0;
-  }
-
-  helper(obj, 0);
-  return true;
-}
-
 async function applyDeletions(unusedKeys) {
-  const locales = await listLocales();
+  const locales = await listLocales(autoDir);
   if (!locales.length) return { filesChanged: 0 };
 
   // Map of absolute file path -> { json, changed }
@@ -208,10 +159,7 @@ async function applyDeletions(unusedKeys) {
         fileCache.set(abs, cached);
       }
 
-      const before = JSON.stringify(cached.json);
-      deleteKeyPathInObject(cached.json, keyPath);
-      const after = JSON.stringify(cached.json);
-      if (before !== after) {
+      if (deleteKeyPathInObject(cached.json, keyPath)) {
         cached.changed = true;
       }
     }

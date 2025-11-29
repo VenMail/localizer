@@ -198,6 +198,7 @@ module.exports = {
   loadIgnorePatterns,
   getIgnorePatterns,
   shouldIgnoreAttribute,
+  isPlaceholderOnlyText,
   isNonTranslatableText,
   shouldTranslateText,
   shouldIgnoreText,

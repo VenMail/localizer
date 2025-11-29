@@ -71,6 +71,8 @@ export class UntranslatedCommands {
         const segments = String(keyPath).split('.').filter(Boolean);
         if (!segments.length) return false;
 
+        let deleted = false;
+
         const helper = (target: any, index: number): boolean => {
             if (!target || typeof target !== 'object' || Array.isArray(target)) {
                 return false;
@@ -81,6 +83,7 @@ export class UntranslatedCommands {
                     return false;
                 }
                 delete target[key];
+                deleted = true;
                 return Object.keys(target).length === 0;
             }
             if (!Object.prototype.hasOwnProperty.call(target, key)) {
@@ -95,7 +98,7 @@ export class UntranslatedCommands {
         };
 
         helper(obj, 0);
-        return true;
+        return deleted;
     }
 
     private async setMultipleInFile(fileUri: vscode.Uri, updates: Map<string, string>): Promise<void> {
@@ -706,10 +709,12 @@ export class UntranslatedCommands {
             // Translate in a single batched call per locale (with internal limits)
             let translatedCount = 0;
 
+            const progressTitle = `AI i18n: Translating ${targetLocale}...`;
+
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
-                    title: 'AI i18n: Translating...',
+                    title: progressTitle,
                     cancellable: true,
                 },
                 async (progress, token) => {
@@ -754,7 +759,7 @@ export class UntranslatedCommands {
                         if (processed % 10 === 0 || processed === keysToTranslate.length) {
                             const percent = (processed / keysToTranslate.length) * 100;
                             progress.report({
-                                message: `${processed} of ${keysToTranslate.length}`,
+                                message: `${processed} of ${keysToTranslate.length} key(s) for ${targetLocale}`,
                                 increment: percent - lastReported,
                             });
                             lastReported = percent;
@@ -895,10 +900,12 @@ export class UntranslatedCommands {
 
         let translatedCount = 0;
 
+        const progressTitle = `AI i18n: Translating ${selectedLocale}...`;
+
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
-                title: 'AI i18n: Translating...',
+                title: progressTitle,
                 cancellable: true,
             },
             async (progress, token) => {
@@ -943,7 +950,7 @@ export class UntranslatedCommands {
                     if (processed % 10 === 0 || processed === keysToTranslate.length) {
                         const percent = (processed / keysToTranslate.length) * 100;
                         progress.report({
-                            message: `${processed} of ${keysToTranslate.length}`,
+                            message: `${processed} of ${keysToTranslate.length} key(s) for ${selectedLocale}`,
                             increment: percent - lastReported,
                         });
                         lastReported = percent;
@@ -970,15 +977,240 @@ export class UntranslatedCommands {
         }
     }
 
-    async generateAutoIgnore(): Promise<void> {
+    async translateAllUntranslatedInProject(): Promise<void> {
         try {
-            const active = vscode.window.activeTextEditor;
-            let folder = active
-                ? vscode.workspace.getWorkspaceFolder(active.document.uri) ?? undefined
-                : undefined;
+            const folders = vscode.workspace.workspaceFolders || [];
+            if (!folders.length) {
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            let folder: vscode.WorkspaceFolder | undefined;
+            if (folders.length === 1) {
+                folder = folders[0];
+            } else {
+                folder = await pickWorkspaceFolder();
+            }
 
             if (!folder) {
-                folder = await pickWorkspaceFolder();
+                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const globalDefaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+
+            const allKeys = this.i18nIndex.getAllKeys();
+            if (!allKeys.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No translation keys found to translate.',
+                );
+                return;
+            }
+
+            const allLocales = this.i18nIndex.getAllLocales();
+            if (!allLocales.length) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No locales detected in this workspace.',
+                );
+                return;
+            }
+
+            const missingPerLocale = new Map<
+                string,
+                { key: string; defaultValue: string; defaultLocale: string }[]
+            >();
+
+            for (const key of allKeys) {
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) {
+                    continue;
+                }
+
+                const defaultLocale = record.defaultLocale || globalDefaultLocale;
+                const defaultValue = record.locales.get(defaultLocale);
+                if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
+                    continue;
+                }
+                const base = defaultValue.trim();
+
+                for (const locale of allLocales) {
+                    if (!locale || locale === defaultLocale) {
+                        continue;
+                    }
+                    const currentValue = record.locales.get(locale);
+                    const current = typeof currentValue === 'string' ? currentValue.trim() : '';
+                    const needsTranslation = !current || current === base;
+                    if (!needsTranslation) {
+                        continue;
+                    }
+
+                    let list = missingPerLocale.get(locale);
+                    if (!list) {
+                        list = [];
+                        missingPerLocale.set(locale, list);
+                    }
+                    list.push({ key, defaultValue, defaultLocale });
+                }
+            }
+
+            if (!missingPerLocale.size) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No untranslated keys found for non-default locales in this workspace.',
+                );
+                return;
+            }
+
+            let totalKeys = 0;
+            for (const list of missingPerLocale.values()) {
+                totalKeys += list.length;
+            }
+
+            const confirm = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: `Translate ${totalKeys} key(s)` ,
+                        description: `Use AI to translate ${totalKeys} untranslated key(s) across ${missingPerLocale.size} locale(s)`,
+                    },
+                    { label: 'Cancel', description: 'Do not translate' },
+                ],
+                {
+                    placeHolder: `AI i18n: Translate ${totalKeys} untranslated key(s) across all locales in this workspace?`,
+                },
+            );
+
+            if (!confirm || confirm.label === 'Cancel') {
+                return;
+            }
+
+            const localeEntries = Array.from(missingPerLocale.entries());
+            const maxConcurrent = 4;
+            let completedLocales = 0;
+            let translatedTotal = 0;
+
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'AI i18n: Translating all locales...',
+                    cancellable: true,
+                },
+                async (progress, token) => {
+                    if (token.isCancellationRequested) {
+                        return;
+                    }
+
+                    let index = 0;
+                    let lastReported = 0;
+
+                    const worker = async () => {
+                        while (true) {
+                            const current = index;
+                            index += 1;
+                            if (current >= localeEntries.length || token.isCancellationRequested) {
+                                break;
+                            }
+
+                            const [locale, items] = localeEntries[current];
+
+                            try {
+                                const batchItems = items.map((item) => ({
+                                    id: item.key,
+                                    text: item.defaultValue,
+                                    defaultLocale: item.defaultLocale,
+                                }));
+
+                                const translations = await this.translationService.translateBatchToLocale(
+                                    batchItems,
+                                    locale,
+                                    'text',
+                                    true,
+                                );
+
+                                if (!translations || translations.size === 0 || token.isCancellationRequested) {
+                                    continue;
+                                }
+
+                                for (const item of items) {
+                                    if (token.isCancellationRequested) {
+                                        break;
+                                    }
+                                    const newValue = translations.get(item.key);
+                                    if (!newValue) {
+                                        continue;
+                                    }
+                                    try {
+                                        await setTranslationValue(folder!, locale, item.key, newValue);
+                                        translatedTotal += 1;
+                                    } catch (err) {
+                                        console.error(
+                                            `AI i18n: Failed to write translation for key ${item.key} in ${locale}:`,
+                                            err,
+                                        );
+                                    }
+                                }
+                            } catch (err) {
+                                console.error(
+                                    `AI i18n: Failed to translate keys for locale ${locale}:`,
+                                    err,
+                                );
+                            } finally {
+                                completedLocales += 1;
+                                const percent = (completedLocales / localeEntries.length) * 100;
+                                progress.report({
+                                    message: `${completedLocales} of ${localeEntries.length} locale(s)`,
+                                    increment: percent - lastReported,
+                                });
+                                lastReported = percent;
+                            }
+                        }
+                    };
+
+                    const workers: Promise<void>[] = [];
+                    const workerCount = Math.min(maxConcurrent, localeEntries.length);
+                    for (let i = 0; i < workerCount; i += 1) {
+                        workers.push(worker());
+                    }
+                    await Promise.all(workers);
+                },
+            );
+
+            if (translatedTotal > 0) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Translated ${translatedTotal} key(s) across ${missingPerLocale.size} locale(s).`,
+                );
+                await this.generateAutoIgnore(folder);
+            } else {
+                const apiChoice = await vscode.window.showInformationMessage(
+                    'AI i18n: No translations were generated (check API key and settings).',
+                    'Open OpenAI API Key Settings',
+                    'Dismiss',
+                );
+                if (apiChoice === 'Open OpenAI API Key Settings') {
+                    await vscode.commands.executeCommand('ai-localizer.setOpenAiApiKeySecret');
+                }
+            }
+        } catch (err) {
+            console.error('AI i18n: Failed to translate all untranslated keys in the project:', err);
+            vscode.window.showErrorMessage(
+                'AI i18n: Failed to translate all untranslated keys in the project.',
+            );
+        }
+    }
+
+    async generateAutoIgnore(folderArg?: vscode.WorkspaceFolder): Promise<void> {
+        try {
+            let folder = folderArg;
+            if (!folder) {
+                const active = vscode.window.activeTextEditor;
+                folder = active
+                    ? vscode.workspace.getWorkspaceFolder(active.document.uri) ?? undefined
+                    : undefined;
+
+                if (!folder) {
+                    folder = await pickWorkspaceFolder();
+                }
             }
 
             if (!folder) {
@@ -1502,10 +1734,7 @@ export class UntranslatedCommands {
             const deletedKeys = new Set<string>();
             for (const item of unused) {
                 if (!item || typeof item.keyPath !== 'string') continue;
-                const before = JSON.stringify(root);
-                this.deleteKeyPathInObject(root, item.keyPath);
-                const after = JSON.stringify(root);
-                if (before !== after) {
+                if (this.deleteKeyPathInObject(root, item.keyPath)) {
                     deletedKeys.add(item.keyPath);
                 }
             }
@@ -1696,10 +1925,7 @@ export class UntranslatedCommands {
             const deletedKeys = new Set<string>();
             for (const item of invalid) {
                 if (!item || typeof item.keyPath !== 'string') continue;
-                const before = JSON.stringify(root);
-                this.deleteKeyPathInObject(root, item.keyPath);
-                const after = JSON.stringify(root);
-                if (before !== after) {
+                if (this.deleteKeyPathInObject(root, item.keyPath)) {
                     deletedKeys.add(item.keyPath);
                 }
             }
@@ -1897,10 +2123,7 @@ export class UntranslatedCommands {
             } catch {}
             if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
 
-            const before = JSON.stringify(root);
-            this.deleteKeyPathInObject(root, keyPath);
-            const after = JSON.stringify(root);
-            if (before === after) {
+            if (!this.deleteKeyPathInObject(root, keyPath)) {
                 vscode.window.showInformationMessage(
                     `AI i18n: Key ${keyPath} was not found in this file.`,
                 );
@@ -2061,10 +2284,7 @@ export class UntranslatedCommands {
             } catch {}
             if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
 
-            const before = JSON.stringify(root);
-            this.deleteKeyPathInObject(root, keyPath);
-            const after = JSON.stringify(root);
-            if (before !== after) {
+            if (this.deleteKeyPathInObject(root, keyPath)) {
                 const encoder = new TextEncoder();
                 const payload = `${JSON.stringify(root, null, 2)}\n`;
                 await vscode.workspace.fs.writeFile(documentUri, encoder.encode(payload));
@@ -2313,10 +2533,7 @@ export class UntranslatedCommands {
                 }
                 if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
 
-                const before = JSON.stringify(root);
-                this.deleteKeyPathInObject(root, keyPath);
-                const after = JSON.stringify(root);
-                if (before === after) {
+                if (!this.deleteKeyPathInObject(root, keyPath)) {
                     continue;
                 }
 

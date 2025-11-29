@@ -58,12 +58,8 @@ export class CommandRegistry {
                     foldersForState.length > 0
                         ? foldersForState.map((f) => f.uri.fsPath).join('|')
                         : 'no-workspace';
-                const bootstrapKey = `ai-i18n:firstBootstrapDone:${folderKey}`;
                 const rewriteOfferedKey = `ai-i18n:firstRewriteOffered:${folderKey}`;
                 const languageSwitcherOfferedKey = `ai-i18n:languageSwitcherOffered:${folderKey}`;
-                const alreadyBootstrapped = this.context.workspaceState.get<boolean>(
-                    bootstrapKey,
-                );
                 const rewriteOffered = this.context.workspaceState.get<boolean>(
                     rewriteOfferedKey,
                 );
@@ -334,6 +330,10 @@ export class CommandRegistry {
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.translateAllUntranslatedInFile',
                 (documentUri?: vscode.Uri) => untranslatedCmds.translateAllUntranslatedInFile(documentUri),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.translateAllUntranslatedInProject',
+                () => untranslatedCmds.translateAllUntranslatedInProject(),
             ),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.removeUnusedKeyInFile',
