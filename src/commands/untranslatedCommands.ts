@@ -1274,7 +1274,7 @@ export class UntranslatedCommands {
                     }
                 }
 
-                const requiredSame = nonDefaultLocales.length <= 1 ? 1 : 2;
+                const requiredSame = 1;
                 if (sameCount < requiredSame) {
                     continue;
                 }

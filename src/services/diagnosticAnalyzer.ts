@@ -606,7 +606,7 @@ export class DiagnosticAnalyzer {
             }
         }
 
-        const requiredSame = nonDefaultLocales.length <= 1 ? 1 : 2;
+        const requiredSame = 1;
         return sameCount >= requiredSame;
     }
 
