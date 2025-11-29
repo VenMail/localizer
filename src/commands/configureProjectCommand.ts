@@ -26,7 +26,7 @@ export class ConfigureProjectCommand {
         }
 
         if (!folder) {
-            vscode.window.showInformationMessage('AI i18n: No workspace folder available to configure.');
+            vscode.window.showInformationMessage('AI Localizer: No workspace folder available to configure.');
             return;
         }
 
@@ -84,7 +84,7 @@ export class ConfigureProjectCommand {
             const existingCfgKey = (cfg.get<string>('openaiApiKey') || '').trim();
             if (!existingSecret && !existingCfgKey) {
                 const choice = await vscode.window.showInformationMessage(
-                    'AI i18n: To enable automatic AI translations, configure an OpenAI API key. You can obtain a key from https://platform.openai.com/api-keys.',
+                    'AI Localizer: To enable automatic AI translations, configure an OpenAI API key. You can obtain a key from https://platform.openai.com/api-keys.',
                     'Enter API key',
                     'Open signup page',
                     'Skip',
@@ -100,11 +100,11 @@ export class ConfigureProjectCommand {
             }
 
             vscode.window.showInformationMessage(
-                'AI i18n: Project i18n scripts and configuration have been set up.',
+                'AI Localizer: Project i18n scripts and configuration have been set up.',
             );
         } catch (err) {
             console.error('Failed to configure project:', err);
-            vscode.window.showErrorMessage(`AI i18n: Configuration failed. ${err}`);
+            vscode.window.showErrorMessage(`AI Localizer: Configuration failed. ${err}`);
         }
     }
 }

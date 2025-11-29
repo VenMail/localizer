@@ -182,7 +182,7 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
             const allKeys = this.i18nIndex.getAllKeys();
             if (!allKeys.length) {
                 const choice = await vscode.window.showInformationMessage(
-                    'AI i18n: No translations indexed for this workspace yet.',
+                    'AI Localizer: No translations indexed for this workspace yet.',
                     'Rescan Translations',
                     'Configure i18n',
                 );
@@ -537,7 +537,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 }
                 const uniqueLocales = Array.from(new Set(locales));
                 const localeLabel = uniqueLocales.join(', ');
-                const title = `AI i18n: AI-translate ${localeLabel} for ${key}`;
+                const title = `AI Localizer: AI-translate ${localeLabel} for ${key}`;
                 const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                 action.diagnostics = [diagnostic];
                 action.isPreferred = true;
@@ -550,7 +550,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
 
                 // Add "ignore this key" option for keys that shouldn't be translated
                 if (workspaceFolder) {
-                    const ignoreTitle = `AI i18n: Add "${key}" to ignore list`;
+                    const ignoreTitle = `AI Localizer: Add "${key}" to ignore list`;
                     const ignoreAction = new vscode.CodeAction(ignoreTitle, vscode.CodeActionKind.QuickFix);
                     ignoreAction.diagnostics = [diagnostic];
                     ignoreAction.command = {
@@ -565,7 +565,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 const placeholderParsed = this.parsePlaceholderDiagnostic(String(diagnostic.message || ''));
                 if (placeholderParsed) {
                     const { key, locale } = placeholderParsed;
-                    const title = `AI i18n: Fix placeholder mismatch for ${key} in ${locale}`;
+                    const title = `AI Localizer: Fix placeholder mismatch for ${key} in ${locale}`;
                     const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                     action.diagnostics = [diagnostic];
                     action.isPreferred = true;
@@ -581,7 +581,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 if (!styleParsed) continue;
                 const { key, locale, suggested } = styleParsed;
                 if (!key || !locale || !suggested) continue;
-                const title = `AI i18n: Apply suggested style (${locale}) for ${key}`;
+                const title = `AI Localizer: Apply suggested style (${locale}) for ${key}`;
                 const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                 action.diagnostics = [diagnostic];
                 action.command = {
@@ -597,7 +597,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 const { key } = invalidParsed;
 
                 // Offer per-key removal from this file
-                const title = `AI i18n: Remove invalid key "${key}" from this file`;
+                const title = `AI Localizer: Remove invalid key "${key}" from this file`;
                 const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                 action.diagnostics = [diagnostic];
                 action.isPreferred = true;
@@ -610,7 +610,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
 
                 // Also offer bulk restore if we have a folder
                 if (workspaceFolder) {
-                    const bulkTitle = `AI i18n: Restore all invalid keys in code and remove from locales`;
+                    const bulkTitle = `AI Localizer: Restore all invalid keys in code and remove from locales`;
                     const bulkAction = new vscode.CodeAction(bulkTitle, vscode.CodeActionKind.QuickFix);
                     bulkAction.diagnostics = [diagnostic];
                     bulkAction.command = {
@@ -626,7 +626,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 addedBulkActions = true;
 
                 // Add bulk translate action for all untranslated keys in this file
-                const bulkTranslateTitle = 'AI i18n: AI-translate all untranslated keys in this file';
+                const bulkTranslateTitle = 'AI Localizer: AI-translate all untranslated keys in this file';
                 const bulkTranslateAction = new vscode.CodeAction(
                     bulkTranslateTitle,
                     vscode.CodeActionKind.QuickFix,
@@ -638,7 +638,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 };
                 actions.push(bulkTranslateAction);
 
-                const cleanupTitle = 'AI i18n: Cleanup unused keys in this file (from report)';
+                const cleanupTitle = 'AI Localizer: Cleanup unused keys in this file (from report)';
                 const cleanupAction = new vscode.CodeAction(
                     cleanupTitle,
                     vscode.CodeActionKind.QuickFix,
@@ -651,7 +651,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 actions.push(cleanupAction);
 
                 const invalidTitle =
-                    'AI i18n: Remove invalid/non-translatable keys in this file (from report)';
+                    'AI Localizer: Remove invalid/non-translatable keys in this file (from report)';
                 const invalidAction = new vscode.CodeAction(
                     invalidTitle,
                     vscode.CodeActionKind.QuickFix,
@@ -685,7 +685,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 );
 
                 if (isUnused) {
-                    const title = `AI i18n: Remove this unused key (${keyPath}) from this file (from report)`;
+                    const title = `AI Localizer: Remove this unused key (${keyPath}) from this file (from report)`;
                     const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                     action.command = {
                         title,
@@ -696,7 +696,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 }
 
                 if (isInvalid) {
-                    const title = `AI i18n: Remove this invalid/non-translatable key (${keyPath}) from this file (from report)`;
+                    const title = `AI Localizer: Remove this invalid/non-translatable key (${keyPath}) from this file (from report)`;
                     const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                     action.isPreferred = true;
                     action.command = {
@@ -720,7 +720,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 );
 
                 if (hasInvalid) {
-                    const title = `AI i18n: Restore inline string and remove invalid key (${keyInfo.key}) (from report)`;
+                    const title = `AI Localizer: Restore inline string and remove invalid key (${keyInfo.key}) (from report)`;
                     const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                     action.isPreferred = true;
                     action.command = {

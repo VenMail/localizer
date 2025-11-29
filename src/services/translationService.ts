@@ -76,7 +76,7 @@ export class TranslationService {
         try {
             await this.context.globalState.update('ai-i18n.batchOutputMode', mode);
         } catch (err) {
-            console.error('AI i18n: Failed to persist batch output mode preference:', err);
+            console.error('AI Localizer: Failed to persist batch output mode preference:', err);
         }
     }
 
@@ -152,7 +152,7 @@ export class TranslationService {
 
         const apiKey = await this.getApiKey();
         if (!apiKey) {
-            console.warn('AI i18n: No API key configured for auto-translation');
+            console.warn('AI Localizer: No API key configured for auto-translation');
             return result;
         }
 
@@ -208,7 +208,7 @@ export class TranslationService {
                 }
                 return null;
             } catch (err) {
-                console.error('AI i18n: Failed to get AI translation:', err);
+                console.error('AI Localizer: Failed to get AI translation:', err);
                 return null;
             }
         });
@@ -242,7 +242,7 @@ export class TranslationService {
 
         const apiKey = await this.getApiKey();
         if (!apiKey) {
-            console.warn('AI i18n: No API key configured for auto-translation');
+            console.warn('AI Localizer: No API key configured for auto-translation');
             return result;
         }
 
@@ -340,7 +340,7 @@ export class TranslationService {
                     parsed = JSON.parse(content);
                 } catch (err) {
                     console.error(
-                        'AI i18n: Failed to parse batch translation JSON response (JSON mode):',
+                        'AI Localizer: Failed to parse batch translation JSON response (JSON mode):',
                         err,
                     );
                     return false;
@@ -372,7 +372,7 @@ export class TranslationService {
                     }
                 }
             } catch (err) {
-                console.error('AI i18n: Failed to get batch AI translations (JSON mode):', err);
+                console.error('AI Localizer: Failed to get batch AI translations (JSON mode):', err);
             }
             return added;
         };
@@ -449,7 +449,7 @@ export class TranslationService {
                     }
                 }
             } catch (err) {
-                console.error('AI i18n: Failed to get batch AI translations (line mode):', err);
+                console.error('AI Localizer: Failed to get batch AI translations (line mode):', err);
             }
             return added;
         };
@@ -490,7 +490,7 @@ export class TranslationService {
                         result.set(item.id, v.trim());
                     }
                 } catch (err) {
-                    console.error(`AI i18n: Fallback translation failed for key ${item.id}:`, err);
+                    console.error(`AI Localizer: Fallback translation failed for key ${item.id}:`, err);
                 }
             }
         }

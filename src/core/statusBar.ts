@@ -26,7 +26,7 @@ export class I18nStatusBar {
 
     setProcessing(isProcessing: boolean): void {
         if (isProcessing) {
-            this.statusBarItem.text = '$(sync~spin) AI i18n: Processing...';
+            this.statusBarItem.text = '$(sync~spin) AI Localizer: Processing...';
             this.statusBarItem.tooltip = 'Running extraction and rewrite scripts';
         } else {
             this.updateDisplay();
@@ -42,7 +42,7 @@ export class I18nStatusBar {
         }
 
         if (this.pendingCount > 0) {
-            this.statusBarItem.text = `$(eye) AI i18n: ${this.pendingCount} pending`;
+            this.statusBarItem.text = `$(eye) AI Localizer: ${this.pendingCount} pending`;
             this.statusBarItem.tooltip = `Monitoring ${this.pendingCount} file(s) with translatable content. Will process when committed to git.`;
         } else {
             this.statusBarItem.text = '$(eye) AI i18n';

@@ -243,7 +243,7 @@ export class AutoMonitor {
             if (!hasRunBefore) {
                 // First time setup - don't auto-run, just notify
                 vscode.window.showInformationMessage(
-                    `AI i18n: Detected ${cleanFiles.length} file(s) with translatable content. Run "AI i18n: Configure Project i18n" to set up auto-extraction.`,
+                    `AI Localizer: Detected ${cleanFiles.length} file(s) with translatable content. Run "AI Localizer: Configure Project i18n" to set up auto-extraction.`,
                     'Configure Now'
                 ).then(choice => {
                     if (choice === 'Configure Now') {
@@ -283,7 +283,7 @@ export class AutoMonitor {
                         },
                     ],
                     {
-                        placeHolder: `AI i18n: Run ${scriptsLabel} for ${cleanFiles.length} clean file(s)?`,
+                        placeHolder: `AI Localizer: Run ${scriptsLabel} for ${cleanFiles.length} clean file(s)?`,
                     },
                 );
 
@@ -304,7 +304,7 @@ export class AutoMonitor {
                         vscode.ConfigurationTarget.Workspace,
                     );
                     vscode.window.showInformationMessage(
-                        'AI i18n: Disabled automatic extract/rewrite for this workspace.',
+                        'AI Localizer: Disabled automatic extract/rewrite for this workspace.',
                     );
                     state.pendingFiles.clear();
                     return;
@@ -327,12 +327,12 @@ export class AutoMonitor {
             }
 
             vscode.window.showInformationMessage(
-                `AI i18n: Auto-processed ${cleanFiles.length} clean file(s).`
+                `AI Localizer: Auto-processed ${cleanFiles.length} clean file(s).`
             );
 
         } catch (err) {
             console.error('Failed to process pending files:', err);
-            vscode.window.showErrorMessage(`AI i18n: Auto-processing failed. ${err}`);
+            vscode.window.showErrorMessage(`AI Localizer: Auto-processing failed. ${err}`);
         } finally {
             state.isProcessing = false;
         }

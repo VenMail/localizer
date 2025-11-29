@@ -144,7 +144,7 @@ export class StatusCommand {
                 );
                 this.statusBar.setMonitoring(!autoMonitor);
                 vscode.window.showInformationMessage(
-                    `AI i18n: Auto-monitoring ${!autoMonitor ? 'enabled' : 'disabled'}.`,
+                    `AI Localizer: Auto-monitoring ${!autoMonitor ? 'enabled' : 'disabled'}.`,
                 );
                 break;
             case 'toggleExtract':
@@ -154,7 +154,7 @@ export class StatusCommand {
                     vscode.ConfigurationTarget.Workspace,
                 );
                 vscode.window.showInformationMessage(
-                    `AI i18n: Auto-extract ${!autoExtract ? 'enabled' : 'disabled'}.`,
+                    `AI Localizer: Auto-extract ${!autoExtract ? 'enabled' : 'disabled'}.`,
                 );
                 break;
             case 'toggleRewrite':
@@ -164,7 +164,7 @@ export class StatusCommand {
                     vscode.ConfigurationTarget.Workspace,
                 );
                 vscode.window.showInformationMessage(
-                    `AI i18n: Auto-rewrite ${!autoRewrite ? 'enabled' : 'disabled'}.`,
+                    `AI Localizer: Auto-rewrite ${!autoRewrite ? 'enabled' : 'disabled'}.`,
                 );
                 break;
             case 'configure':

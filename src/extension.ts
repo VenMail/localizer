@@ -15,7 +15,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         const i18nIndex = new I18nIndex();
         void i18nIndex.ensureInitialized().catch((err) => {
-            console.error('AI i18n: Failed to build translation index:', err);
+            console.error('AI Localizer: Failed to build translation index:', err);
             const details = err instanceof Error ? err.stack || err.message : String(err);
             output.appendLine(`[activate] Failed to build translation index: ${details}`);
         });
@@ -56,7 +56,7 @@ export function activate(context: vscode.ExtensionContext) {
         console.log('AI i18n extension activated successfully');
     } catch (error) {
         console.error('Failed to activate AI i18n extension:', error);
-        vscode.window.showErrorMessage(`AI i18n: Extension activation failed. ${error}`);
+        vscode.window.showErrorMessage(`AI Localizer: Extension activation failed. ${error}`);
         throw error;
     }
 }

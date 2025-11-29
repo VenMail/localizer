@@ -26,7 +26,7 @@ export class ComponentCommands {
         }
 
         if (!folder) {
-            vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+            vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
             return;
         }
 
@@ -50,7 +50,7 @@ export class ComponentCommands {
 
         if (found.length === 0) {
             vscode.window.showInformationMessage(
-                'AI i18n: Could not find an entry file in this workspace.',
+                'AI Localizer: Could not find an entry file in this workspace.',
             );
             return;
         }
@@ -86,7 +86,7 @@ export class ComponentCommands {
         }
 
         if (!folder) {
-            vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+            vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
             return;
         }
 
@@ -255,7 +255,7 @@ export class ComponentCommands {
         }
 
         vscode.window.showInformationMessage(
-            `AI i18n: LanguageSwitcher component created at ${relativePath}.`,
+            `AI Localizer: LanguageSwitcher component created at ${relativePath}.`,
         );
     }
 }

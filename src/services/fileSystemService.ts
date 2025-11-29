@@ -33,7 +33,7 @@ export class FileSystemService {
         try {
             await vscode.workspace.fs.createDirectory(targetDir);
         } catch (err) {
-            console.error('AI i18n: Failed to create scripts directory:', err);
+            console.error('AI Localizer: Failed to create scripts directory:', err);
             throw new Error('Failed to create scripts directory');
         }
 
@@ -73,9 +73,9 @@ export class FileSystemService {
                 const data = await vscode.workspace.fs.readFile(src);
                 await vscode.workspace.fs.writeFile(dest, data);
             } catch (err) {
-                console.error(`AI i18n: Failed to copy i18n script ${name}:`, err);
+                console.error(`AI Localizer: Failed to copy i18n script ${name}:`, err);
                 vscode.window.showWarningMessage(
-                    `AI i18n: Failed to copy script ${destName}. You may need to copy it manually.`,
+                    `AI Localizer: Failed to copy script ${destName}. You may need to copy it manually.`,
                 );
             }
         }
@@ -88,9 +88,9 @@ export class FileSystemService {
             const data = await vscode.workspace.fs.readFile(ignoreSrc);
             await vscode.workspace.fs.writeFile(ignoreDest, data);
         } catch (err) {
-            console.error('AI i18n: Failed to copy i18n-ignore-patterns.json:', err);
+            console.error('AI Localizer: Failed to copy i18n-ignore-patterns.json:', err);
             vscode.window.showWarningMessage(
-                'AI i18n: Failed to copy ignore patterns file. You may need to copy it manually.',
+                'AI Localizer: Failed to copy ignore patterns file. You may need to copy it manually.',
             );
         }
 
@@ -99,7 +99,7 @@ export class FileSystemService {
         try {
             await vscode.workspace.fs.createDirectory(libDir);
         } catch (err) {
-            console.error('AI i18n: Failed to create lib directory:', err);
+            console.error('AI Localizer: Failed to create lib directory:', err);
         }
 
         const libFiles = [
@@ -120,9 +120,9 @@ export class FileSystemService {
                 const data = await vscode.workspace.fs.readFile(src);
                 await vscode.workspace.fs.writeFile(dest, data);
             } catch (err) {
-                console.error(`AI i18n: Failed to copy lib file ${name}:`, err);
+                console.error(`AI Localizer: Failed to copy lib file ${name}:`, err);
                 vscode.window.showWarningMessage(
-                    `AI i18n: Failed to copy lib utility ${name}. You may need to copy it manually.`,
+                    `AI Localizer: Failed to copy lib utility ${name}. You may need to copy it manually.`,
                 );
             }
         }
@@ -169,9 +169,9 @@ export class FileSystemService {
                 const data = await vscode.workspace.fs.readFile(src);
                 await vscode.workspace.fs.writeFile(dest, data);
             } catch (err) {
-                console.error(`AI i18n: Failed to copy parser file ${name}:`, err);
+                console.error(`AI Localizer: Failed to copy parser file ${name}:`, err);
                 vscode.window.showWarningMessage(
-                    `AI i18n: Failed to copy parser utility ${name}. You may need to copy it manually.`,
+                    `AI Localizer: Failed to copy parser utility ${name}. You may need to copy it manually.`,
                 );
             }
         }
@@ -184,9 +184,9 @@ export class FileSystemService {
                 const data = await vscode.workspace.fs.readFile(src);
                 await vscode.workspace.fs.writeFile(dest, data);
             } catch (err) {
-                console.error(`AI i18n: Failed to copy validator file ${name}:`, err);
+                console.error(`AI Localizer: Failed to copy validator file ${name}:`, err);
                 vscode.window.showWarningMessage(
-                    `AI i18n: Failed to copy validator utility ${name}. You may need to copy it manually.`,
+                    `AI Localizer: Failed to copy validator utility ${name}. You may need to copy it manually.`,
                 );
             }
         }
@@ -215,7 +215,7 @@ export class FileSystemService {
         try {
             await this.writeJsonFile(scriptsPackageJson, content);
         } catch (err) {
-            console.error('AI i18n: Failed to create scripts/package.json:', err);
+            console.error('AI Localizer: Failed to create scripts/package.json:', err);
         }
     }
 
@@ -245,11 +245,11 @@ export class FileSystemService {
         if (choice === 'Install') {
             await installPackages(folder, missingDeps, true);
             vscode.window.showInformationMessage(
-                'AI i18n: Installing dependencies. Please wait for the installation to complete before running scripts.',
+                'AI Localizer: Installing dependencies. Please wait for the installation to complete before running scripts.',
             );
         } else {
             vscode.window.showWarningMessage(
-                `AI i18n: Scripts may not work without ${missingDeps.join(', ')}. You can install them manually.`,
+                `AI Localizer: Scripts may not work without ${missingDeps.join(', ')}. You can install them manually.`,
             );
         }
     }

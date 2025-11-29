@@ -176,7 +176,7 @@ export async function runI18nScript(scriptName: string): Promise<void> {
         folder = await pickWorkspaceFolder();
     }
     if (!folder) {
-        vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+        vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
         return;
     }
 
@@ -233,7 +233,7 @@ export async function runI18nScript(scriptName: string): Promise<void> {
             } else {
                 const message = `[ai-i18n] Script ${scriptName} exited with code ${code}.`;
                 output.appendLine(message);
-                vscode.window.showErrorMessage(`AI i18n: ${message}`);
+                vscode.window.showErrorMessage(`AI Localizer: ${message}`);
                 reject(new Error(message));
             }
         });

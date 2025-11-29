@@ -69,7 +69,7 @@ export class CommandRegistry {
 
                 if (count === 0) {
                     const choice = await vscode.window.showInformationMessage(
-                        'AI i18n: No translation keys were found. Run the first-time setup now to configure scripts, extract keys, sync locales, rewrite code, and (optionally) auto-translate missing entries?',
+                        'AI Localizer: No translation keys were found. Run the first-time setup now to configure scripts, extract keys, sync locales, rewrite code, and (optionally) auto-translate missing entries?',
                         'Run first-time setup',
                         'Cancel',
                     );
@@ -80,7 +80,7 @@ export class CommandRegistry {
                     if (!rewriteOffered) {
                         const localesAfterBootstrap = this.i18nIndex.getAllLocales();
                         const rewriteChoice = await vscode.window.showInformationMessage(
-                            `AI i18n: Indexed ${count} translation key(s)` +
+                            `AI Localizer: Indexed ${count} translation key(s)` +
                                 (localesAfterBootstrap.length
                                     ? ` across ${localesAfterBootstrap.length} locale(s): ${localesAfterBootstrap.join(', ')}`
                                     : ''
@@ -99,7 +99,7 @@ export class CommandRegistry {
 
                     if (!languageSwitcherOffered) {
                         const lsChoice = await vscode.window.showInformationMessage(
-                            'AI i18n: Install a LanguageSwitcher component into your app now?',
+                            'AI Localizer: Install a LanguageSwitcher component into your app now?',
                             'Install LanguageSwitcher',
                             'Skip for now',
                         );
@@ -111,7 +111,7 @@ export class CommandRegistry {
                         await this.context.workspaceState.update(languageSwitcherOfferedKey, true);
                     } else if (rewriteOffered) {
                         vscode.window.showInformationMessage(
-                            `AI i18n: Indexed ${count} translation keys.`,
+                            `AI Localizer: Indexed ${count} translation keys.`,
                         );
                     }
                 }
@@ -193,7 +193,7 @@ export class CommandRegistry {
                 await vscode.window.withProgress(
                     {
                         location: vscode.ProgressLocation.Notification,
-                        title: 'AI i18n: First-time project setup',
+                        title: 'AI Localizer: First-time project setup',
                         cancellable: false,
                     },
                     async (progress) => {
@@ -238,7 +238,7 @@ export class CommandRegistry {
 
                             if (!languageSwitcherOffered) {
                                 const lsChoice = await vscode.window.showInformationMessage(
-                                    'AI i18n: Install a LanguageSwitcher component into your app now?',
+                                    'AI Localizer: Install a LanguageSwitcher component into your app now?',
                                     'Install LanguageSwitcher',
                                     'Skip for now',
                                 );
@@ -265,7 +265,7 @@ export class CommandRegistry {
                         } catch (error) {
                             const msg = error instanceof Error ? error.message : String(error);
                             this.log.appendLine(`[FirstTimeSetup] Failed: ${msg}`);
-                            vscode.window.showErrorMessage(`AI i18n: First-time setup failed. ${msg}`);
+                            vscode.window.showErrorMessage(`AI Localizer: First-time setup failed. ${msg}`);
                         }
                     },
                 );
@@ -394,7 +394,7 @@ export class CommandRegistry {
                             vscode.TextEditorRevealType.InCenterIfOutsideViewport,
                         );
                     } catch (err) {
-                        console.error('AI i18n: Failed to go to translation from hover:', err);
+                        console.error('AI Localizer: Failed to go to translation from hover:', err);
                     }
                 },
             ),
@@ -425,7 +425,7 @@ export class CommandRegistry {
                     return;
                 }
                 await this.translationService.setApiKey(input);
-                vscode.window.showInformationMessage('AI i18n: OpenAI API key stored securely.');
+                vscode.window.showInformationMessage('AI Localizer: OpenAI API key stored securely.');
             }),
         );
 
@@ -519,7 +519,7 @@ export class CommandRegistry {
             const details =
                 error instanceof Error ? error.stack || error.message : String(error);
             this.log.appendLine(`[CommandRegistry] Failed to register commands: ${details}`);
-            vscode.window.showErrorMessage(`AI i18n: Failed to register commands. ${error}`);
+            vscode.window.showErrorMessage(`AI Localizer: Failed to register commands. ${error}`);
             throw error;
         }
 

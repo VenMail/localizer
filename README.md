@@ -53,13 +53,13 @@ AI-assisted translations.
 1. Install **Localizer – AI i18n for React, Vue & Laravel** in VS Code or your
    VS Code–compatible IDE.
 2. Open your React/Next.js, Vue/Nuxt, or Laravel project.
-3. Run **AI i18n: Configure Project i18n** to set up locales, source roots, and
+3. Run **AI Localizer: Configure Project i18n** to set up locales, source roots, and
    i18n scripts.
-4. Run **AI i18n: Rescan Translations** to index your locale JSON files.
+4. Run **AI Localizer: Rescan Translations** to index your locale JSON files.
 5. In your code:
    - Hover over translation keys for quick previews.
    - Use **Go to Definition** to jump to the underlying JSON file.
-   - Use **AI i18n: Apply translations to selection** to turn UI text into
+   - Use **AI Localizer: Apply translations to selection** to turn UI text into
      i18n keys with AI-assisted translations.
 
 ## Basic Usage
@@ -83,13 +83,13 @@ keys in the following languages:
 
 You can rescan keys at any time via the command:
 
-- **AI i18n: Rescan Translations** (`ai-localizer.i18n.rescan`)
+- **AI Localizer: Rescan Translations** (`ai-localizer.i18n.rescan`)
 
 ### Configure a project for i18n scripts
 
 Run the command:
 
-- **AI i18n: Configure Project i18n** (`ai-localizer.i18n.configureProject`)
+- **AI Localizer: Configure Project i18n** (`ai-localizer.i18n.configureProject`)
 
 This will:
 
@@ -121,7 +121,7 @@ npm run i18n:fix-untranslated
 
 ### React / Next.js
 
-1. Configure the project (**AI i18n: Configure Project i18n**).
+1. Configure the project (**AI Localizer: Configure Project i18n**).
 2. Run `npm run i18n:extract` to build grouped `en` locale files under
    `resources/js/i18n/auto/en` or `src/i18n/auto/en` (depending on `srcRoot`).
 3. Optionally run `npm run i18n:rewrite` to replace hard-coded JSX strings with
@@ -133,7 +133,7 @@ npm run i18n:fix-untranslated
    - `F12` / "Go to Definition" jumps to the locale JSON file.
    - Autocomplete suggests known keys.
 
-You can also use **AI i18n: Copy React Language Switcher Component** to scaffold
+You can also use **AI Localizer: Copy React Language Switcher Component** to scaffold
 an example `LanguageSwitcher` and React i18n runtime/hooks.
 
 ### Vue / Nuxt
@@ -159,7 +159,7 @@ an example `LanguageSwitcher` and React i18n runtime/hooks.
    - Rewrites matching view literals to `{{ __("Namespace.kind.slug") }}`
      when a key exists in the base `en` locale tree.
 4. In Blade/PHP files you can also use:
-   - **AI i18n: Convert Selection to Translation Key** to turn selected text
+   - **AI Localizer: Convert Selection to Translation Key** to turn selected text
      into a `__('...')` call and automatically create the key in JSON files.
 
 ## Settings

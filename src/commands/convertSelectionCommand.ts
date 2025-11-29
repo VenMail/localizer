@@ -21,7 +21,7 @@ export class ConvertSelectionCommand {
     async execute(): Promise<void> {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
-            vscode.window.showInformationMessage('AI i18n: No active editor.');
+            vscode.window.showInformationMessage('AI Localizer: No active editor.');
             return;
         }
 
@@ -36,7 +36,7 @@ export class ConvertSelectionCommand {
 
         if (!isJsLike && !isVueLike && !isBladeLike) {
             vscode.window.showInformationMessage(
-                'AI i18n: Selection to key is only supported in JavaScript/TypeScript, Vue, and Blade/PHP files.',
+                'AI Localizer: Selection to key is only supported in JavaScript/TypeScript, Vue, and Blade/PHP files.',
             );
             return;
         }
@@ -45,14 +45,14 @@ export class ConvertSelectionCommand {
         const selection = editor.selection;
         if (selection.isEmpty) {
             vscode.window.showInformationMessage(
-                'AI i18n: Please select the text you want to convert to a translation key.',
+                'AI Localizer: Please select the text you want to convert to a translation key.',
             );
             return;
         }
 
         const selectedText = document.getText(selection).trim();
         if (!selectedText) {
-            vscode.window.showInformationMessage('AI i18n: Selected text is empty.');
+            vscode.window.showInformationMessage('AI Localizer: Selected text is empty.');
             return;
         }
 
@@ -60,7 +60,7 @@ export class ConvertSelectionCommand {
         const candidates = this.findCandidateStrings(document, selection, langId);
         if (!candidates.length) {
             vscode.window.showInformationMessage(
-                'AI i18n: No translatable strings detected in the current selection.',
+                'AI Localizer: No translatable strings detected in the current selection.',
             );
             return;
         }
@@ -70,7 +70,7 @@ export class ConvertSelectionCommand {
         const folder =
             vscode.workspace.getWorkspaceFolder(document.uri) || (await pickWorkspaceFolder());
         if (!folder) {
-            vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+            vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
             return;
         }
 
@@ -193,7 +193,7 @@ export class ConvertSelectionCommand {
                 edit.replace(document.uri, single.range, `{{ __('${finalKey}') }}`);
                 await vscode.workspace.applyEdit(edit);
                 vscode.window.showInformationMessage(
-                    `AI i18n: Created key ${finalKey} for selection.`,
+                    `AI Localizer: Created key ${finalKey} for selection.`,
                 );
                 await this.runSyncIfConfigured(folder);
                 return;
@@ -203,7 +203,7 @@ export class ConvertSelectionCommand {
                 edit.replace(document.uri, single.range, `{{$t('${finalKey}')}}`);
                 await vscode.workspace.applyEdit(edit);
                 vscode.window.showInformationMessage(
-                    `AI i18n: Created key ${finalKey} for selection.`,
+                    `AI Localizer: Created key ${finalKey} for selection.`,
                 );
                 await this.runSyncIfConfigured(folder);
                 return;
@@ -237,7 +237,7 @@ export class ConvertSelectionCommand {
             editSingle.replace(document.uri, single.range, replacement);
             await vscode.workspace.applyEdit(editSingle);
             vscode.window.showInformationMessage(
-                `AI i18n: Created key ${finalKey} for selection.`,
+                `AI Localizer: Created key ${finalKey} for selection.`,
             );
             await this.runSyncIfConfigured(folder);
             return;
@@ -368,7 +368,7 @@ export class ConvertSelectionCommand {
         // Locale file writes trigger watchers which update index + diagnostics incrementally
         await vscode.workspace.applyEdit(edit);
         vscode.window.showInformationMessage(
-            `AI i18n: Applied translations to ${segments.length} selected text segment(s).`,
+            `AI Localizer: Applied translations to ${segments.length} selected text segment(s).`,
         );
         await this.runSyncIfConfigured(folder);
     }
@@ -582,7 +582,7 @@ export class ConvertSelectionCommand {
         }
 
         const existing = this.untranslatedDiagnostics.get(document.uri) || [];
-        const message = `AI i18n: Missing translations for ${key} in locales: ${missingLocales.join(", ")}`;
+        const message = `AI Localizer: Missing translations for ${key} in locales: ${missingLocales.join(", ")}`;
 
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
         const setting = cfg.get<string>('i18n.diagnostics.missingLocaleSeverity') || 'warning';
@@ -750,7 +750,7 @@ export class ConvertSelectionCommand {
                     },
                 ],
                 {
-                    placeHolder: 'AI i18n: Run i18n:sync after applying translations?',
+                    placeHolder: 'AI Localizer: Run i18n:sync after applying translations?',
                 },
             );
 
@@ -771,7 +771,7 @@ export class ConvertSelectionCommand {
                 return;
             }
         } catch (err) {
-            console.error('AI i18n: Failed to run i18n:sync after applying translations:', err);
+            console.error('AI Localizer: Failed to run i18n:sync after applying translations:', err);
         }
     }
 }

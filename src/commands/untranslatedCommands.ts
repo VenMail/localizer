@@ -27,7 +27,7 @@ export class UntranslatedCommands {
             folder = await pickWorkspaceFolder();
         }
         if (!folder) {
-            vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+            vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
             return;
         }
 
@@ -40,7 +40,7 @@ export class UntranslatedCommands {
             await vscode.window.showTextDocument(doc, { preview: false });
         } catch {
             vscode.window.showInformationMessage(
-                'AI i18n: Untranslated report not found. Run the fix-untranslated script first.',
+                'AI Localizer: Untranslated report not found. Run the fix-untranslated script first.',
             );
         }
     }
@@ -151,7 +151,7 @@ export class UntranslatedCommands {
         }
 
         if (!folder) {
-            vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+            vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
             return;
         }
 
@@ -167,7 +167,7 @@ export class UntranslatedCommands {
             raw = decoder.decode(data);
         } catch {
             vscode.window.showInformationMessage(
-                'AI i18n: Untranslated report not found. Run the fix-untranslated script before applying AI fixes.',
+                'AI Localizer: Untranslated report not found. Run the fix-untranslated script before applying AI fixes.',
             );
             return;
         }
@@ -176,13 +176,13 @@ export class UntranslatedCommands {
         try {
             report = JSON.parse(raw);
         } catch {
-            vscode.window.showErrorMessage('AI i18n: Untranslated report is not valid JSON.');
+            vscode.window.showErrorMessage('AI Localizer: Untranslated report is not valid JSON.');
             return;
         }
 
         const issues = Array.isArray(report.issues) ? report.issues : [];
         if (!issues.length) {
-            vscode.window.showInformationMessage('AI i18n: No issues found in untranslated report.');
+            vscode.window.showInformationMessage('AI Localizer: No issues found in untranslated report.');
             return;
         }
 
@@ -194,7 +194,7 @@ export class UntranslatedCommands {
 
             if (!updates.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No valid translation updates returned by AI.',
+                    'AI Localizer: No valid translation updates returned by AI.',
                 );
                 return;
             }
@@ -231,11 +231,11 @@ export class UntranslatedCommands {
 
             // Locale file writes trigger watchers which update index + diagnostics incrementally
             vscode.window.showInformationMessage(
-                `AI i18n: Applied ${updates.length} AI translation updates.`,
+                `AI Localizer: Applied ${updates.length} AI translation updates.`,
             );
         } catch (err) {
             console.error('Failed to apply AI fixes:', err);
-            vscode.window.showErrorMessage(`AI i18n: Failed to apply AI fixes. ${err}`);
+            vscode.window.showErrorMessage(`AI Localizer: Failed to apply AI fixes. ${err}`);
         }
     }
 
@@ -251,7 +251,7 @@ export class UntranslatedCommands {
             }
 
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -259,7 +259,7 @@ export class UntranslatedCommands {
             const record = this.i18nIndex.getRecord(key);
             if (!record) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: No translation record found for key ${key}.`,
+                    `AI Localizer: No translation record found for key ${key}.`,
                 );
                 return;
             }
@@ -268,7 +268,7 @@ export class UntranslatedCommands {
             const defaultValue = record.locales.get(defaultLocale);
             if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Default locale value not found for key ${key}.`,
+                    `AI Localizer: Default locale value not found for key ${key}.`,
                 );
                 return;
             }
@@ -276,7 +276,7 @@ export class UntranslatedCommands {
             const targetLocales = locales.filter((l) => l && l !== defaultLocale);
             if (!targetLocales.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No target locales to translate for this key.',
+                    'AI Localizer: No target locales to translate for this key.',
                 );
                 return;
             }
@@ -301,7 +301,7 @@ export class UntranslatedCommands {
 
             if (!translations || translations.size === 0) {
                 const choice = await vscode.window.showInformationMessage(
-                    'AI i18n: No translations were generated for this quick fix (check API key and settings).',
+                    'AI Localizer: No translations were generated for this quick fix (check API key and settings).',
                     'Open OpenAI API Key Settings',
                     'Dismiss',
                 );
@@ -319,12 +319,12 @@ export class UntranslatedCommands {
 
             // Locale file writes trigger watchers which update index + diagnostics incrementally
             vscode.window.showInformationMessage(
-                `AI i18n: Applied AI translations for ${key} in ${translations.size} locale(s).`,
+                `AI Localizer: Applied AI translations for ${key} in ${translations.size} locale(s).`,
             );
         } catch (err) {
-            console.error('AI i18n: Failed to apply quick fix for untranslated key:', err);
+            console.error('AI Localizer: Failed to apply quick fix for untranslated key:', err);
             vscode.window.showErrorMessage(
-                'AI i18n: Failed to apply AI quick fix for untranslated key.',
+                'AI Localizer: Failed to apply AI quick fix for untranslated key.',
             );
         }
     }
@@ -333,7 +333,7 @@ export class UntranslatedCommands {
         try {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
-                vscode.window.showInformationMessage('AI i18n: No active editor.');
+                vscode.window.showInformationMessage('AI Localizer: No active editor.');
                 return;
             }
 
@@ -350,7 +350,7 @@ export class UntranslatedCommands {
 
             if (!isCode) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Selection review only applies to JS/TS, Vue, and Blade/PHP files.',
+                    'AI Localizer: Selection review only applies to JS/TS, Vue, and Blade/PHP files.',
                 );
                 return;
             }
@@ -358,7 +358,7 @@ export class UntranslatedCommands {
             const selection = editor.selection;
             if (selection.isEmpty) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Please select the code containing i18n keys to review.',
+                    'AI Localizer: Please select the code containing i18n keys to review.',
                 );
                 return;
             }
@@ -384,7 +384,7 @@ export class UntranslatedCommands {
 
             if (!keysInSelection.size) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No known i18n keys found in the current selection.',
+                    'AI Localizer: No known i18n keys found in the current selection.',
                 );
                 return;
             }
@@ -424,7 +424,7 @@ export class UntranslatedCommands {
 
             if (!unresolvedByKey.size) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No untranslated diagnostics found for keys in the current selection.',
+                    'AI Localizer: No untranslated diagnostics found for keys in the current selection.',
                 );
                 return;
             }
@@ -448,7 +448,7 @@ export class UntranslatedCommands {
                 ],
                 {
                     placeHolder:
-                        'AI i18n: Apply AI translations for i18n issues in this selection?',
+                        'AI Localizer: Apply AI translations for i18n issues in this selection?',
                 },
             );
 
@@ -468,13 +468,13 @@ export class UntranslatedCommands {
 
             if (translatedRequests > 0) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Requested AI translations for ${translatedRequests} value(s) across ${unresolvedByKey.size} key(s) in this selection.`,
+                    `AI Localizer: Requested AI translations for ${translatedRequests} value(s) across ${unresolvedByKey.size} key(s) in this selection.`,
                 );
             }
         } catch (err) {
-            console.error('AI i18n: Failed to review selection for i18n issues:', err);
+            console.error('AI Localizer: Failed to review selection for i18n issues:', err);
             vscode.window.showErrorMessage(
-                'AI i18n: Failed to review selection for i18n issues.',
+                'AI Localizer: Failed to review selection for i18n issues.',
             );
         }
     }
@@ -519,7 +519,7 @@ export class UntranslatedCommands {
 
             if (!codeTotals.size || !fileTotals.size) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No i18n diagnostics found for this workspace.',
+                    'AI Localizer: No i18n diagnostics found for this workspace.',
                 );
                 return;
             }
@@ -581,8 +581,8 @@ export class UntranslatedCommands {
             } as any);
             await vscode.window.showTextDocument(doc, { preview: false });
         } catch (err) {
-            console.error('AI i18n: Failed to generate workspace health report:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to generate workspace health report.');
+            console.error('AI Localizer: Failed to generate workspace health report:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to generate workspace health report.');
         }
     }
 
@@ -594,7 +594,7 @@ export class UntranslatedCommands {
             const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
             if (!targetUri) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No active document to translate.',
+                    'AI Localizer: No active document to translate.',
                 );
                 return;
             }
@@ -602,7 +602,7 @@ export class UntranslatedCommands {
             const doc = await vscode.workspace.openTextDocument(targetUri);
             if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Bulk translate only applies to locale JSON files.',
+                    'AI Localizer: Bulk translate only applies to locale JSON files.',
                 );
                 return;
             }
@@ -612,7 +612,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -638,7 +638,7 @@ export class UntranslatedCommands {
 
             if (!fileLocale) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Could not determine locale for this file.',
+                    'AI Localizer: Could not determine locale for this file.',
                 );
                 return;
             }
@@ -684,7 +684,7 @@ export class UntranslatedCommands {
 
             if (!keysToTranslate.length) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: No untranslated keys found for locale ${targetLocale}.`,
+                    `AI Localizer: No untranslated keys found for locale ${targetLocale}.`,
                 );
                 return;
             }
@@ -699,7 +699,7 @@ export class UntranslatedCommands {
                     { label: 'Cancel', description: 'Do not translate' },
                 ],
                 {
-                    placeHolder: `AI i18n: Translate ${keysToTranslate.length} untranslated key(s) in this file?`,
+                    placeHolder: `AI Localizer: Translate ${keysToTranslate.length} untranslated key(s) in this file?`,
                 },
             );
             if (!choice || choice.label === 'Cancel') {
@@ -709,7 +709,7 @@ export class UntranslatedCommands {
             // Translate in a single batched call per locale (with internal limits)
             let translatedCount = 0;
 
-            const progressTitle = `AI i18n: Translating ${targetLocale}...`;
+            const progressTitle = `AI Localizer: Translating ${targetLocale}...`;
 
             await vscode.window.withProgress(
                 {
@@ -753,7 +753,7 @@ export class UntranslatedCommands {
                             await setTranslationValue(folder!, targetLocale, item.key, newValue);
                             translatedCount++;
                         } catch (err) {
-                            console.error(`AI i18n: Failed to write translation for key ${item.key}:`, err);
+                            console.error(`AI Localizer: Failed to write translation for key ${item.key}:`, err);
                         }
                         processed += 1;
                         if (processed % 10 === 0 || processed === keysToTranslate.length) {
@@ -772,11 +772,11 @@ export class UntranslatedCommands {
 
             if (translatedCount > 0) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Translated ${translatedCount} key(s) in ${targetLocale}.`,
+                    `AI Localizer: Translated ${translatedCount} key(s) in ${targetLocale}.`,
                 );
             } else {
                 const apiChoice = await vscode.window.showInformationMessage(
-                    'AI i18n: No translations were generated (check API key and settings).',
+                    'AI Localizer: No translations were generated (check API key and settings).',
                     'Open OpenAI API Key Settings',
                     'Dismiss',
                 );
@@ -785,8 +785,8 @@ export class UntranslatedCommands {
                 }
             }
         } catch (err) {
-            console.error('AI i18n: Failed to translate all untranslated keys:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to translate all untranslated keys.');
+            console.error('AI Localizer: Failed to translate all untranslated keys:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to translate all untranslated keys.');
         }
     }
 
@@ -799,7 +799,7 @@ export class UntranslatedCommands {
         const keysInFile = fileInfo?.keys || [];
         if (!keysInFile.length) {
             vscode.window.showInformationMessage(
-                'AI i18n: No translation keys found in this file.',
+                'AI Localizer: No translation keys found in this file.',
             );
             return;
         }
@@ -841,7 +841,7 @@ export class UntranslatedCommands {
 
         if (!missingPerLocale.size) {
             vscode.window.showInformationMessage(
-                'AI i18n: No untranslated keys found for non-default locales in this file.',
+                'AI Localizer: No untranslated keys found for non-default locales in this file.',
             );
             return;
         }
@@ -865,7 +865,7 @@ export class UntranslatedCommands {
 
             const choice = await vscode.window.showQuickPick(items, {
                 placeHolder:
-                    'AI i18n: Select target locale to translate missing keys for this file',
+                    'AI Localizer: Select target locale to translate missing keys for this file',
             });
             if (!choice) {
                 return;
@@ -877,7 +877,7 @@ export class UntranslatedCommands {
 
         if (!keysToTranslate || !keysToTranslate.length) {
             vscode.window.showInformationMessage(
-                `AI i18n: No untranslated keys found for locale ${selectedLocale} in this file.`,
+                `AI Localizer: No untranslated keys found for locale ${selectedLocale} in this file.`,
             );
             return;
         }
@@ -891,7 +891,7 @@ export class UntranslatedCommands {
                 { label: 'Cancel', description: 'Do not translate' },
             ],
             {
-                placeHolder: `AI i18n: Translate ${keysToTranslate.length} untranslated key(s) in this file?`,
+                placeHolder: `AI Localizer: Translate ${keysToTranslate.length} untranslated key(s) in this file?`,
             },
         );
         if (!confirm || confirm.label === 'Cancel') {
@@ -900,7 +900,7 @@ export class UntranslatedCommands {
 
         let translatedCount = 0;
 
-        const progressTitle = `AI i18n: Translating ${selectedLocale}...`;
+        const progressTitle = `AI Localizer: Translating ${selectedLocale}...`;
 
         await vscode.window.withProgress(
             {
@@ -944,7 +944,7 @@ export class UntranslatedCommands {
                         await setTranslationValue(folder, selectedLocale, item.key, newValue);
                         translatedCount += 1;
                     } catch (err) {
-                        console.error(`AI i18n: Failed to write translation for key ${item.key}:`, err);
+                        console.error(`AI Localizer: Failed to write translation for key ${item.key}:`, err);
                     }
                     processed += 1;
                     if (processed % 10 === 0 || processed === keysToTranslate.length) {
@@ -963,11 +963,11 @@ export class UntranslatedCommands {
 
         if (translatedCount > 0) {
             vscode.window.showInformationMessage(
-                `AI i18n: Translated ${translatedCount} key(s) in ${selectedLocale}.`,
+                `AI Localizer: Translated ${translatedCount} key(s) in ${selectedLocale}.`,
             );
         } else {
             const apiChoice = await vscode.window.showInformationMessage(
-                'AI i18n: No translations were generated (check API key and settings).',
+                'AI Localizer: No translations were generated (check API key and settings).',
                 'Open OpenAI API Key Settings',
                 'Dismiss',
             );
@@ -981,7 +981,7 @@ export class UntranslatedCommands {
         try {
             const folders = vscode.workspace.workspaceFolders || [];
             if (!folders.length) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -993,7 +993,7 @@ export class UntranslatedCommands {
             }
 
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -1005,7 +1005,7 @@ export class UntranslatedCommands {
             const allKeys = this.i18nIndex.getAllKeys();
             if (!allKeys.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No translation keys found to translate.',
+                    'AI Localizer: No translation keys found to translate.',
                 );
                 return;
             }
@@ -1013,7 +1013,7 @@ export class UntranslatedCommands {
             const allLocales = this.i18nIndex.getAllLocales();
             if (!allLocales.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No locales detected in this workspace.',
+                    'AI Localizer: No locales detected in this workspace.',
                 );
                 return;
             }
@@ -1058,7 +1058,7 @@ export class UntranslatedCommands {
 
             if (!missingPerLocale.size) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No untranslated keys found for non-default locales in this workspace.',
+                    'AI Localizer: No untranslated keys found for non-default locales in this workspace.',
                 );
                 return;
             }
@@ -1077,7 +1077,7 @@ export class UntranslatedCommands {
                     { label: 'Cancel', description: 'Do not translate' },
                 ],
                 {
-                    placeHolder: `AI i18n: Translate ${totalKeys} untranslated key(s) across all locales in this workspace?`,
+                    placeHolder: `AI Localizer: Translate ${totalKeys} untranslated key(s) across all locales in this workspace?`,
                 },
             );
 
@@ -1093,7 +1093,7 @@ export class UntranslatedCommands {
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
-                    title: 'AI i18n: Translating all locales...',
+                    title: 'AI Localizer: Translating all locales...',
                     cancellable: true,
                 },
                 async (progress, token) => {
@@ -1145,14 +1145,14 @@ export class UntranslatedCommands {
                                         translatedTotal += 1;
                                     } catch (err) {
                                         console.error(
-                                            `AI i18n: Failed to write translation for key ${item.key} in ${locale}:`,
+                                            `AI Localizer: Failed to write translation for key ${item.key} in ${locale}:`,
                                             err,
                                         );
                                     }
                                 }
                             } catch (err) {
                                 console.error(
-                                    `AI i18n: Failed to translate keys for locale ${locale}:`,
+                                    `AI Localizer: Failed to translate keys for locale ${locale}:`,
                                     err,
                                 );
                             } finally {
@@ -1178,12 +1178,12 @@ export class UntranslatedCommands {
 
             if (translatedTotal > 0) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Translated ${translatedTotal} key(s) across ${missingPerLocale.size} locale(s).`,
+                    `AI Localizer: Translated ${translatedTotal} key(s) across ${missingPerLocale.size} locale(s).`,
                 );
                 await this.generateAutoIgnore(folder);
             } else {
                 const apiChoice = await vscode.window.showInformationMessage(
-                    'AI i18n: No translations were generated (check API key and settings).',
+                    'AI Localizer: No translations were generated (check API key and settings).',
                     'Open OpenAI API Key Settings',
                     'Dismiss',
                 );
@@ -1192,9 +1192,9 @@ export class UntranslatedCommands {
                 }
             }
         } catch (err) {
-            console.error('AI i18n: Failed to translate all untranslated keys in the project:', err);
+            console.error('AI Localizer: Failed to translate all untranslated keys in the project:', err);
             vscode.window.showErrorMessage(
-                'AI i18n: Failed to translate all untranslated keys in the project.',
+                'AI Localizer: Failed to translate all untranslated keys in the project.',
             );
         }
     }
@@ -1214,7 +1214,7 @@ export class UntranslatedCommands {
             }
 
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -1223,7 +1223,7 @@ export class UntranslatedCommands {
             const allKeys = this.i18nIndex.getAllKeys();
             if (!allKeys.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No translation keys found to analyze for auto-ignore.',
+                    'AI Localizer: No translation keys found to analyze for auto-ignore.',
                 );
                 return;
             }
@@ -1284,7 +1284,7 @@ export class UntranslatedCommands {
 
             if (!candidates.size) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No constant-like values found to add to auto-ignore.',
+                    'AI Localizer: No constant-like values found to add to auto-ignore.',
                 );
                 return;
             }
@@ -1318,7 +1318,7 @@ export class UntranslatedCommands {
 
             if (!newValues.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No new auto-ignore patterns to add (all are already present).',
+                    'AI Localizer: No new auto-ignore patterns to add (all are already present).',
                 );
                 return;
             }
@@ -1353,13 +1353,13 @@ export class UntranslatedCommands {
             await vscode.workspace.fs.writeFile(autoUri, encoder.encode(payload));
 
             vscode.window.showInformationMessage(
-                `AI i18n: Updated scripts/.i18n-auto-ignore.json with ${newValues.length} pattern(s).`,
+                `AI Localizer: Updated scripts/.i18n-auto-ignore.json with ${newValues.length} pattern(s).`,
             );
 
             await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
         } catch (err) {
-            console.error('AI i18n: Failed to generate auto-ignore patterns:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to generate auto-ignore patterns.');
+            console.error('AI Localizer: Failed to generate auto-ignore patterns:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to generate auto-ignore patterns.');
         }
     }
 
@@ -1465,12 +1465,12 @@ export class UntranslatedCommands {
             await vscode.commands.executeCommand('ai-localizer.i18n.refreshFileDiagnostics', documentUri, [key]);
 
             vscode.window.showInformationMessage(
-                `AI i18n: Applied style suggestion for ${key} in ${locale}.`,
+                `AI Localizer: Applied style suggestion for ${key} in ${locale}.`,
             );
         } catch (err) {
-            console.error('AI i18n: Failed to apply style suggestion quick fix:', err);
+            console.error('AI Localizer: Failed to apply style suggestion quick fix:', err);
             vscode.window.showErrorMessage(
-                'AI i18n: Failed to apply style suggestion quick fix.',
+                'AI Localizer: Failed to apply style suggestion quick fix.',
             );
         }
     }
@@ -1479,7 +1479,7 @@ export class UntranslatedCommands {
         try {
             const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
             if (!targetUri) {
-                vscode.window.showInformationMessage('AI i18n: No active document to apply style suggestions.');
+                vscode.window.showInformationMessage('AI Localizer: No active document to apply style suggestions.');
                 return;
             }
 
@@ -1488,7 +1488,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -1497,7 +1497,7 @@ export class UntranslatedCommands {
                 .filter((d) => String(d.code) === 'ai-i18n.style');
 
             if (!diags.length) {
-                vscode.window.showInformationMessage('AI i18n: No style suggestions found for this file.');
+                vscode.window.showInformationMessage('AI Localizer: No style suggestions found for this file.');
                 return;
             }
 
@@ -1508,7 +1508,7 @@ export class UntranslatedCommands {
             }
 
             if (!suggestions.length) {
-                vscode.window.showInformationMessage('AI i18n: No parsable style suggestions in diagnostics.');
+                vscode.window.showInformationMessage('AI Localizer: No parsable style suggestions in diagnostics.');
                 return;
             }
 
@@ -1542,11 +1542,11 @@ export class UntranslatedCommands {
             await vscode.commands.executeCommand('ai-localizer.i18n.refreshFileDiagnostics', targetUri, Array.from(updatesMap.keys()));
 
             vscode.window.showInformationMessage(
-                `AI i18n: Applied ${unique.length} style suggestion(s) for this file.`,
+                `AI Localizer: Applied ${unique.length} style suggestion(s) for this file.`,
             );
         } catch (err) {
-            console.error('AI i18n: Failed to apply all style suggestions:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to apply all style suggestions for file.');
+            console.error('AI Localizer: Failed to apply all style suggestions:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to apply all style suggestions for file.');
         }
     }
 
@@ -1555,7 +1555,7 @@ export class UntranslatedCommands {
             const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
             if (!targetUri) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No active document to fix i18n issues.',
+                    'AI Localizer: No active document to fix i18n issues.',
                 );
                 return;
             }
@@ -1563,7 +1563,7 @@ export class UntranslatedCommands {
             const doc = await vscode.workspace.openTextDocument(targetUri);
             if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Fix-all only applies to locale JSON files.',
+                    'AI Localizer: Fix-all only applies to locale JSON files.',
                 );
                 return;
             }
@@ -1582,7 +1582,7 @@ export class UntranslatedCommands {
                 ],
                 {
                     placeHolder:
-                        'AI i18n: Run all per-file i18n fixes for this locale file?',
+                        'AI Localizer: Run all per-file i18n fixes for this locale file?',
                 },
             );
             if (!choice || choice.label !== 'Run all per-file fixes') {
@@ -1606,8 +1606,8 @@ export class UntranslatedCommands {
                 targetUri,
             );
         } catch (err) {
-            console.error('AI i18n: Failed to run all per-file fixes for file:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to run all per-file fixes for file.');
+            console.error('AI Localizer: Failed to run all per-file fixes for file:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to run all per-file fixes for file.');
         }
     }
 
@@ -1616,7 +1616,7 @@ export class UntranslatedCommands {
             const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
             if (!targetUri) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No active document to cleanup unused keys.',
+                    'AI Localizer: No active document to cleanup unused keys.',
                 );
                 return;
             }
@@ -1624,7 +1624,7 @@ export class UntranslatedCommands {
             const doc = await vscode.workspace.openTextDocument(targetUri);
             if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Cleanup unused keys only applies to locale JSON files.',
+                    'AI Localizer: Cleanup unused keys only applies to locale JSON files.',
                 );
                 return;
             }
@@ -1634,7 +1634,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -1658,7 +1658,7 @@ export class UntranslatedCommands {
                     ],
                     {
                         placeHolder:
-                            'AI i18n: Unused keys report not found. Generate it by running the cleanup script?',
+                            'AI Localizer: Unused keys report not found. Generate it by running the cleanup script?',
                     },
                 );
                 if (!choice || choice.label !== 'Generate report') {
@@ -1666,7 +1666,7 @@ export class UntranslatedCommands {
                 }
                 await runI18nScript('i18n:cleanup-unused');
                 vscode.window.showInformationMessage(
-                    'AI i18n: Running i18n:cleanup-unused script in a terminal. Re-run this quick fix after it completes.',
+                    'AI Localizer: Running i18n:cleanup-unused script in a terminal. Re-run this quick fix after it completes.',
                 );
                 return;
             }
@@ -1676,7 +1676,7 @@ export class UntranslatedCommands {
                 report = JSON.parse(rawReport);
             } catch {
                 vscode.window.showErrorMessage(
-                    'AI i18n: Unused keys report is not valid JSON.',
+                    'AI Localizer: Unused keys report is not valid JSON.',
                 );
                 return;
             }
@@ -1684,7 +1684,7 @@ export class UntranslatedCommands {
             const allUnused = Array.isArray(report.unused) ? report.unused : [];
             if (!allUnused.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No unused keys found in unused keys report.',
+                    'AI Localizer: No unused keys found in unused keys report.',
                 );
                 return;
             }
@@ -1706,7 +1706,7 @@ export class UntranslatedCommands {
 
             if (!unused.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No unused keys from report were found in this file.',
+                    'AI Localizer: No unused keys from report were found in this file.',
                 );
                 return;
             }
@@ -1724,7 +1724,7 @@ export class UntranslatedCommands {
                     },
                 ],
                 {
-                    placeHolder: `AI i18n: Remove ${unused.length} unused key(s) found in this file?`,
+                    placeHolder: `AI Localizer: Remove ${unused.length} unused key(s) found in this file?`,
                 },
             );
             if (!choice || choice.label === 'Cancel') {
@@ -1741,7 +1741,7 @@ export class UntranslatedCommands {
 
             if (!deletedKeys.size) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No unused keys were removed from this file.',
+                    'AI Localizer: No unused keys were removed from this file.',
                 );
                 return;
             }
@@ -1758,11 +1758,11 @@ export class UntranslatedCommands {
             );
 
             vscode.window.showInformationMessage(
-                `AI i18n: Removed ${deletedKeys.size} unused key(s) from this file.`,
+                `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file.`,
             );
         } catch (err) {
-            console.error('AI i18n: Failed to cleanup unused keys for file:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to cleanup unused keys for file.');
+            console.error('AI Localizer: Failed to cleanup unused keys for file:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to cleanup unused keys for file.');
         }
     }
 
@@ -1771,7 +1771,7 @@ export class UntranslatedCommands {
             const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
             if (!targetUri) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No active document to cleanup invalid keys.',
+                    'AI Localizer: No active document to cleanup invalid keys.',
                 );
                 return;
             }
@@ -1779,7 +1779,7 @@ export class UntranslatedCommands {
             const doc = await vscode.workspace.openTextDocument(targetUri);
             if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Restore invalid keys only applies to locale JSON files.',
+                    'AI Localizer: Restore invalid keys only applies to locale JSON files.',
                 );
                 return;
             }
@@ -1789,7 +1789,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -1813,7 +1813,7 @@ export class UntranslatedCommands {
                     ],
                     {
                         placeHolder:
-                            'AI i18n: Invalid keys report not found. Generate it by running the restore-invalid script?',
+                            'AI Localizer: Invalid keys report not found. Generate it by running the restore-invalid script?',
                     },
                 );
                 if (!choice || choice.label !== 'Generate report') {
@@ -1821,7 +1821,7 @@ export class UntranslatedCommands {
                 }
                 await runI18nScript('i18n:restore-invalid');
                 vscode.window.showInformationMessage(
-                    'AI i18n: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
+                    'AI Localizer: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
                 );
                 return;
             }
@@ -1831,7 +1831,7 @@ export class UntranslatedCommands {
                 report = JSON.parse(rawReport);
             } catch {
                 vscode.window.showErrorMessage(
-                    'AI i18n: Invalid keys report is not valid JSON.',
+                    'AI Localizer: Invalid keys report is not valid JSON.',
                 );
                 return;
             }
@@ -1839,7 +1839,7 @@ export class UntranslatedCommands {
             const allInvalid = Array.isArray(report.invalid) ? report.invalid : [];
             if (!allInvalid.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No invalid/non-translatable keys found in invalid keys report.',
+                    'AI Localizer: No invalid/non-translatable keys found in invalid keys report.',
                 );
                 return;
             }
@@ -1861,7 +1861,7 @@ export class UntranslatedCommands {
 
             if (!invalid.length) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No invalid/non-translatable keys from report were found in this file.',
+                    'AI Localizer: No invalid/non-translatable keys from report were found in this file.',
                 );
                 return;
             }
@@ -1879,7 +1879,7 @@ export class UntranslatedCommands {
                     },
                 ],
                 {
-                    placeHolder: `AI i18n: Restore ${invalid.length} invalid key(s) found in this file to inline strings?`,
+                    placeHolder: `AI Localizer: Restore ${invalid.length} invalid key(s) found in this file to inline strings?`,
                 },
             );
             if (!choice || choice.label === 'Cancel') {
@@ -1907,7 +1907,7 @@ export class UntranslatedCommands {
                             codeRestoreCount++;
                         }
                     } catch (err) {
-                        console.error(`AI i18n: Failed to restore code reference for ${item.keyPath} in ${usage.file}:`, err);
+                        console.error(`AI Localizer: Failed to restore code reference for ${item.keyPath} in ${usage.file}:`, err);
                     }
                 }
             }
@@ -1947,12 +1947,12 @@ export class UntranslatedCommands {
             // This is a single-file operation. Use the project-wide script for bulk cleanup.
 
             const message = codeRestoreCount > 0
-                ? `AI i18n: Restored ${codeRestoreCount} code reference(s) and removed ${deletedKeys.size} invalid key(s) from this file.`
-                : `AI i18n: Removed ${deletedKeys.size} invalid/non-translatable key(s) from this file.`;
+                ? `AI Localizer: Restored ${codeRestoreCount} code reference(s) and removed ${deletedKeys.size} invalid key(s) from this file.`
+                : `AI Localizer: Removed ${deletedKeys.size} invalid/non-translatable key(s) from this file.`;
             vscode.window.showInformationMessage(message);
         } catch (err) {
-            console.error('AI i18n: Failed to cleanup invalid keys for file:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to cleanup invalid keys for file.');
+            console.error('AI Localizer: Failed to cleanup invalid keys for file:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to cleanup invalid keys for file.');
         }
     }
 
@@ -2031,7 +2031,7 @@ export class UntranslatedCommands {
             }
             return applied;
         } catch (err) {
-            console.error(`AI i18n: Failed to restore inline string in ${fileUri.fsPath}:`, err);
+            console.error(`AI Localizer: Failed to restore inline string in ${fileUri.fsPath}:`, err);
             return false;
         }
     }
@@ -2040,7 +2040,7 @@ export class UntranslatedCommands {
         try {
             if (!documentUri) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No document provided to remove unused key.',
+                    'AI Localizer: No document provided to remove unused key.',
                 );
                 return;
             }
@@ -2048,7 +2048,7 @@ export class UntranslatedCommands {
             const doc = await vscode.workspace.openTextDocument(documentUri);
             if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Remove unused key only applies to locale JSON files.',
+                    'AI Localizer: Remove unused key only applies to locale JSON files.',
                 );
                 return;
             }
@@ -2058,7 +2058,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -2082,7 +2082,7 @@ export class UntranslatedCommands {
                     ],
                     {
                         placeHolder:
-                            'AI i18n: Unused keys report not found. Generate it by running the cleanup script?',
+                            'AI Localizer: Unused keys report not found. Generate it by running the cleanup script?',
                     },
                 );
                 if (!choice || choice.label !== 'Generate report') {
@@ -2090,7 +2090,7 @@ export class UntranslatedCommands {
                 }
                 await runI18nScript('i18n:cleanup-unused');
                 vscode.window.showInformationMessage(
-                    'AI i18n: Running i18n:cleanup-unused script in a terminal. Re-run this quick fix after it completes.',
+                    'AI Localizer: Running i18n:cleanup-unused script in a terminal. Re-run this quick fix after it completes.',
                 );
                 return;
             }
@@ -2100,7 +2100,7 @@ export class UntranslatedCommands {
                 report = JSON.parse(rawReport);
             } catch {
                 vscode.window.showErrorMessage(
-                    'AI i18n: Unused keys report is not valid JSON.',
+                    'AI Localizer: Unused keys report is not valid JSON.',
                 );
                 return;
             }
@@ -2111,7 +2111,7 @@ export class UntranslatedCommands {
             );
             if (!hasEntry) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Key ${keyPath} is not marked as unused in unused keys report.`,
+                    `AI Localizer: Key ${keyPath} is not marked as unused in unused keys report.`,
                 );
             }
 
@@ -2125,7 +2125,7 @@ export class UntranslatedCommands {
 
             if (!this.deleteKeyPathInObject(root, keyPath)) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Key ${keyPath} was not found in this file.`,
+                    `AI Localizer: Key ${keyPath} was not found in this file.`,
                 );
                 return;
             }
@@ -2142,11 +2142,11 @@ export class UntranslatedCommands {
             );
 
             vscode.window.showInformationMessage(
-                `AI i18n: Removed unused key ${keyPath} from this file.`,
+                `AI Localizer: Removed unused key ${keyPath} from this file.`,
             );
         } catch (err) {
-            console.error('AI i18n: Failed to remove unused key from file:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to remove unused key from file.');
+            console.error('AI Localizer: Failed to remove unused key from file:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to remove unused key from file.');
         }
     }
 
@@ -2154,7 +2154,7 @@ export class UntranslatedCommands {
         try {
             if (!documentUri) {
                 vscode.window.showInformationMessage(
-                    'AI i18n: No document provided to remove invalid key.',
+                    'AI Localizer: No document provided to remove invalid key.',
                 );
                 return;
             }
@@ -2162,7 +2162,7 @@ export class UntranslatedCommands {
             const doc = await vscode.workspace.openTextDocument(documentUri);
             if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
                 vscode.window.showInformationMessage(
-                    'AI i18n: Remove invalid key only applies to locale JSON files.',
+                    'AI Localizer: Remove invalid key only applies to locale JSON files.',
                 );
                 return;
             }
@@ -2172,7 +2172,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -2196,7 +2196,7 @@ export class UntranslatedCommands {
                     ],
                     {
                         placeHolder:
-                            'AI i18n: Invalid keys report not found. Generate it by running the restore-invalid script?',
+                            'AI Localizer: Invalid keys report not found. Generate it by running the restore-invalid script?',
                     },
                 );
                 if (!choice || choice.label !== 'Generate report') {
@@ -2204,7 +2204,7 @@ export class UntranslatedCommands {
                 }
                 await runI18nScript('i18n:restore-invalid');
                 vscode.window.showInformationMessage(
-                    'AI i18n: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
+                    'AI Localizer: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
                 );
                 return;
             }
@@ -2214,7 +2214,7 @@ export class UntranslatedCommands {
                 report = JSON.parse(rawReport);
             } catch {
                 vscode.window.showErrorMessage(
-                    'AI i18n: Invalid keys report is not valid JSON.',
+                    'AI Localizer: Invalid keys report is not valid JSON.',
                 );
                 return;
             }
@@ -2225,7 +2225,7 @@ export class UntranslatedCommands {
             );
             if (!entry) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Key ${keyPath} is not marked as invalid/non-translatable in invalid keys report.`,
+                    `AI Localizer: Key ${keyPath} is not marked as invalid/non-translatable in invalid keys report.`,
                 );
                 return;
             }
@@ -2243,7 +2243,7 @@ export class UntranslatedCommands {
                     },
                 ],
                 {
-                    placeHolder: `AI i18n: Restore invalid key ${keyPath} to inline string and remove from locale files?`,
+                    placeHolder: `AI Localizer: Restore invalid key ${keyPath} to inline string and remove from locale files?`,
                 },
             );
             if (!choice || choice.label === 'Cancel') {
@@ -2269,7 +2269,7 @@ export class UntranslatedCommands {
                         codeRestoreCount++;
                     }
                 } catch (err) {
-                    console.error(`AI i18n: Failed to restore code reference for ${keyPath} in ${usage.file}:`, err);
+                    console.error(`AI Localizer: Failed to restore code reference for ${keyPath} in ${usage.file}:`, err);
                 }
             }
 
@@ -2310,12 +2310,12 @@ export class UntranslatedCommands {
             }
 
             const message = codeRestoreCount > 0
-                ? `AI i18n: Restored ${codeRestoreCount} code reference(s) and removed invalid key ${keyPath} from locale files.`
-                : `AI i18n: Removed invalid/non-translatable key ${keyPath} from locale files.`;
+                ? `AI Localizer: Restored ${codeRestoreCount} code reference(s) and removed invalid key ${keyPath} from locale files.`
+                : `AI Localizer: Removed invalid/non-translatable key ${keyPath} from locale files.`;
             vscode.window.showInformationMessage(message);
         } catch (err) {
-            console.error('AI i18n: Failed to remove invalid key from file:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to remove invalid key from file.');
+            console.error('AI Localizer: Failed to remove invalid key from file:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to remove invalid key from file.');
         }
     }
 
@@ -2332,7 +2332,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -2356,7 +2356,7 @@ export class UntranslatedCommands {
                     ],
                     {
                         placeHolder:
-                            'AI i18n: Invalid keys report not found. Generate it by running the restore-invalid script?',
+                            'AI Localizer: Invalid keys report not found. Generate it by running the restore-invalid script?',
                     },
                 );
                 if (!choice || choice.label !== 'Generate report') {
@@ -2364,7 +2364,7 @@ export class UntranslatedCommands {
                 }
                 await runI18nScript('i18n:restore-invalid');
                 vscode.window.showInformationMessage(
-                    'AI i18n: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
+                    'AI Localizer: Running i18n:restore-invalid script in a terminal. Re-run this quick fix after it completes.',
                 );
                 return;
             }
@@ -2374,7 +2374,7 @@ export class UntranslatedCommands {
                 report = JSON.parse(rawReport);
             } catch {
                 vscode.window.showErrorMessage(
-                    'AI i18n: Invalid keys report is not valid JSON.',
+                    'AI Localizer: Invalid keys report is not valid JSON.',
                 );
                 return;
             }
@@ -2385,7 +2385,7 @@ export class UntranslatedCommands {
             );
             if (!entry || typeof entry.baseValue !== 'string') {
                 vscode.window.showInformationMessage(
-                    `AI i18n: No invalid/non-translatable entry found in invalid keys report for key ${key}.`,
+                    `AI Localizer: No invalid/non-translatable entry found in invalid keys report for key ${key}.`,
                 );
                 return;
             }
@@ -2410,7 +2410,7 @@ export class UntranslatedCommands {
                         },
                     ],
                     {
-                        placeHolder: `AI i18n: Restore invalid key ${key} and delete it from locale files?`,
+                        placeHolder: `AI Localizer: Restore invalid key ${key} and delete it from locale files?`,
                     },
                 );
                 if (!choice || choice.label === 'Cancel') {
@@ -2462,7 +2462,7 @@ export class UntranslatedCommands {
 
             if (!replaced) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: No matching t('${key}') call found at this location to restore.`,
+                    `AI Localizer: No matching t('${key}') call found at this location to restore.`,
                 );
                 return;
             }
@@ -2474,7 +2474,7 @@ export class UntranslatedCommands {
             const applied = await vscode.workspace.applyEdit(edit);
             if (!applied) {
                 vscode.window.showErrorMessage(
-                    'AI i18n: Failed to apply restore quick fix edit to source file.',
+                    'AI Localizer: Failed to apply restore quick fix edit to source file.',
                 );
                 return;
             }
@@ -2490,16 +2490,16 @@ export class UntranslatedCommands {
 
             if (deletedFromLocales > 0) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Restored inline string for invalid/non-translatable key ${key} at this location and removed it from ${deletedFromLocales} locale file(s).`,
+                    `AI Localizer: Restored inline string for invalid/non-translatable key ${key} at this location and removed it from ${deletedFromLocales} locale file(s).`,
                 );
             } else {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Restored inline string for invalid/non-translatable key ${key} at this location.`,
+                    `AI Localizer: Restored inline string for invalid/non-translatable key ${key} at this location.`,
                 );
             }
         } catch (err) {
-            console.error('AI i18n: Failed to restore invalid key in code:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to restore invalid key in code.');
+            console.error('AI Localizer: Failed to restore invalid key in code:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to restore invalid key in code.');
         }
     }
 
@@ -2570,7 +2570,7 @@ export class UntranslatedCommands {
             const record = this.i18nIndex.getRecord(key);
             if (!record) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: No translation record found for key ${key}.`,
+                    `AI Localizer: No translation record found for key ${key}.`,
                 );
                 return;
             }
@@ -2578,7 +2578,7 @@ export class UntranslatedCommands {
             const defaultValue = record.locales.get(record.defaultLocale);
             if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: No default value found for key ${key}.`,
+                    `AI Localizer: No default value found for key ${key}.`,
                 );
                 return;
             }
@@ -2621,11 +2621,11 @@ export class UntranslatedCommands {
             await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
 
             vscode.window.showInformationMessage(
-                `AI i18n: Added "${normalizedValue}" to ignore list. Diagnostics will be refreshed.`,
+                `AI Localizer: Added "${normalizedValue}" to ignore list. Diagnostics will be refreshed.`,
             );
         } catch (err) {
-            console.error('AI i18n: Failed to add key to ignore list:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to add key to ignore list.');
+            console.error('AI Localizer: Failed to add key to ignore list:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to add key to ignore list.');
         }
     }
 
@@ -2639,7 +2639,7 @@ export class UntranslatedCommands {
                 folder = await pickWorkspaceFolder();
             }
             if (!folder) {
-                vscode.window.showInformationMessage('AI i18n: No workspace folder available.');
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
 
@@ -2647,7 +2647,7 @@ export class UntranslatedCommands {
             const record = this.i18nIndex.getRecord(key);
             if (!record) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: No translation record found for key ${key}.`,
+                    `AI Localizer: No translation record found for key ${key}.`,
                 );
                 return;
             }
@@ -2656,7 +2656,7 @@ export class UntranslatedCommands {
             const defaultValue = record.locales.get(defaultLocale);
             if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
                 vscode.window.showInformationMessage(
-                    `AI i18n: Default locale value not found for key ${key}.`,
+                    `AI Localizer: Default locale value not found for key ${key}.`,
                 );
                 return;
             }
@@ -2672,7 +2672,7 @@ export class UntranslatedCommands {
 
             if (!translations || translations.size === 0) {
                 const choice = await vscode.window.showInformationMessage(
-                    'AI i18n: No translation generated (check API key and settings).',
+                    'AI Localizer: No translation generated (check API key and settings).',
                     'Open OpenAI API Key Settings',
                     'Dismiss',
                 );
@@ -2688,12 +2688,12 @@ export class UntranslatedCommands {
                 // Locale file writes trigger watchers which update index + diagnostics incrementally
 
                 vscode.window.showInformationMessage(
-                    `AI i18n: Fixed placeholder mismatch for ${key} in ${locale}.`,
+                    `AI Localizer: Fixed placeholder mismatch for ${key} in ${locale}.`,
                 );
             }
         } catch (err) {
-            console.error('AI i18n: Failed to fix placeholder mismatch:', err);
-            vscode.window.showErrorMessage('AI i18n: Failed to fix placeholder mismatch.');
+            console.error('AI Localizer: Failed to fix placeholder mismatch:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to fix placeholder mismatch.');
         }
     }
 }
