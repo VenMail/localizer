@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { spawn } from 'child_process';
 
 export async function pickWorkspaceFolder(): Promise<vscode.WorkspaceFolder | undefined> {
     const folders = vscode.workspace.workspaceFolders;
@@ -197,11 +198,44 @@ export async function runI18nScript(scriptName: string): Promise<void> {
             break;
     }
 
-    const terminalName = `AI i18n (${folder.name})`;
-    let terminal = vscode.window.terminals.find((t) => t.name === terminalName);
-    if (!terminal) {
-        terminal = vscode.window.createTerminal({ name: terminalName, cwd: folder.uri.fsPath });
-    }
-    terminal.show(true);
-    terminal.sendText(command);
+    const output = vscode.window.createOutputChannel('AI i18n Scripts');
+    output.show(true);
+    output.appendLine(`> (${folder.name}) ${command}`);
+
+    await new Promise<void>((resolve, reject) => {
+        const child = spawn(command, {
+            cwd: folder!.uri.fsPath,
+            shell: true,
+        });
+
+        if (child.stdout) {
+            child.stdout.on('data', (data: Buffer) => {
+                output.append(data.toString());
+            });
+        }
+
+        if (child.stderr) {
+            child.stderr.on('data', (data: Buffer) => {
+                output.append(data.toString());
+            });
+        }
+
+        child.on('error', (err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            output.appendLine(`\n[ai-i18n] Failed to start script ${scriptName}: ${msg}`);
+            reject(err);
+        });
+
+        child.on('close', (code) => {
+            if (code === 0) {
+                output.appendLine(`[ai-i18n] Script ${scriptName} completed successfully.`);
+                resolve();
+            } else {
+                const message = `[ai-i18n] Script ${scriptName} exited with code ${code}.`;
+                output.appendLine(message);
+                vscode.window.showErrorMessage(`AI i18n: ${message}`);
+                reject(new Error(message));
+            }
+        });
+    });
 }

@@ -45,36 +45,23 @@ export class FileSystemService {
         const detectedNodeVersion = await this.detectProjectNodeVersion(projectRoot);
         const useOxc = detectedNodeVersion ? this.supportsOxc(detectedNodeVersion) : false;
 
-        const scriptNames = useOxc
-            ? [
-                  'oxc-extract-i18n.js',
-                  'oxc-replace-i18n.js',
-                  'sync-i18n.js',
-                  'fix-untranslated.js',
-                  'rewrite-i18n-blade.js',
-                  'cleanup-i18n-unused.js',
-                  'restore-i18n-invalid.js',
-              ]
-            : [
-                  'babel-extract-i18n.js',
-                  'babel-replace-i18n.js',
-                  'sync-i18n.js',
-                  'fix-untranslated.js',
-                  'rewrite-i18n-blade.js',
-                  'cleanup-i18n-unused.js',
-                  'restore-i18n-invalid.js',
-              ];
+        // Unified extract script plus stack-specific rewrite/utility scripts
+        const scriptNames = [
+            'extract-i18n.js',
+            useOxc ? 'oxc-replace-i18n.js' : 'babel-replace-i18n.js',
+            'sync-i18n.js',
+            'fix-untranslated.js',
+            'rewrite-i18n-blade.js',
+            'cleanup-i18n-unused.js',
+            'restore-i18n-invalid.js',
+        ];
 
         // Map internal script names to standard names in target project
-        const scriptNameMap: Record<string, string> = useOxc
-            ? {
-                  'oxc-extract-i18n.js': 'extract-i18n.js',
-                  'oxc-replace-i18n.js': 'replace-i18n.js',
-              }
-            : {
-                  'babel-extract-i18n.js': 'extract-i18n.js',
-                  'babel-replace-i18n.js': 'replace-i18n.js',
-              };
+        const scriptNameMap: Record<string, string> = {
+            'extract-i18n.js': 'extract-i18n.js',
+            'oxc-replace-i18n.js': 'replace-i18n.js',
+            'babel-replace-i18n.js': 'replace-i18n.js',
+        };
 
         for (const name of scriptNames) {
             const src = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n', name);
@@ -121,6 +108,7 @@ export class FileSystemService {
             'ignorePatterns.js',
             'translationStore.js',
             'textValidation.js',
+            'vueTemplateParser.js',
         ];
 
         for (const name of libFiles) {
@@ -134,6 +122,70 @@ export class FileSystemService {
                 console.error(`AI i18n: Failed to copy lib file ${name}:`, err);
                 vscode.window.showWarningMessage(
                     `AI i18n: Failed to copy lib utility ${name}. You may need to copy it manually.`,
+                );
+            }
+        }
+
+        // Copy parser and validator helpers used by extract-i18n.js
+        const parserFiles = [
+            'index.js',
+            'baseParser.js',
+            'jsxParser.js',
+            'vueParser.js',
+            'bladeParser.js',
+            'svelteParser.js',
+            'genericParser.js',
+        ];
+
+        const validatorsFiles = [
+            'index.js',
+            'cssValidator.js',
+            'codeValidator.js',
+            'htmlValidator.js',
+            'technicalValidator.js',
+        ];
+
+        const parsersDir = vscode.Uri.joinPath(libDir, 'parsers');
+        const validatorsDir = vscode.Uri.joinPath(libDir, 'validators');
+
+        try {
+            await vscode.workspace.fs.createDirectory(parsersDir);
+        } catch {
+            // ignore
+        }
+
+        try {
+            await vscode.workspace.fs.createDirectory(validatorsDir);
+        } catch {
+            // ignore
+        }
+
+        for (const name of parserFiles) {
+            const src = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n', 'lib', 'parsers', name);
+            const dest = vscode.Uri.joinPath(parsersDir, name);
+
+            try {
+                const data = await vscode.workspace.fs.readFile(src);
+                await vscode.workspace.fs.writeFile(dest, data);
+            } catch (err) {
+                console.error(`AI i18n: Failed to copy parser file ${name}:`, err);
+                vscode.window.showWarningMessage(
+                    `AI i18n: Failed to copy parser utility ${name}. You may need to copy it manually.`,
+                );
+            }
+        }
+
+        for (const name of validatorsFiles) {
+            const src = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n', 'lib', 'validators', name);
+            const dest = vscode.Uri.joinPath(validatorsDir, name);
+
+            try {
+                const data = await vscode.workspace.fs.readFile(src);
+                await vscode.workspace.fs.writeFile(dest, data);
+            } catch (err) {
+                console.error(`AI i18n: Failed to copy validator file ${name}:`, err);
+                vscode.window.showWarningMessage(
+                    `AI i18n: Failed to copy validator utility ${name}. You may need to copy it manually.`,
                 );
             }
         }

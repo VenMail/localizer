@@ -1,7 +1,7 @@
 {
   "name": "ai-localizer",
-  "displayName": "Localizer – AI i18n for React, Vue & Laravel",
-  "description": "AI-assisted localization for React/Next, Vue/Nuxt, and Laravel or Laravel with Breeze or Inertia projects. Extract strings, manage locale JSON, and scaffold translation providers and hooks automatically.",
+  "displayName": "Localizer – AI i18n for React, Vue, Laravel & more",
+  "description": "AI-assisted localization for React/Next/React Native, Vue/Nuxt, Svelte/SvelteKit, and Laravel (Blade + Inertia). Uses AST-aware parsers and smart validators to extract strings, manage locale JSON, run extract/rewrite/sync scripts, and scaffold drop-in LanguageSwitcher components with a guided first-time setup.",
   "version": "0.0.7",
   "publisher": "venmail",
   "repository": {
@@ -20,6 +20,7 @@
     "onCommand:ai-localizer.setOpenAiApiKeySecret",
     "onCommand:ai-localizer.i18n.rescan",
     "onCommand:ai-localizer.i18n.configureProject",
+    "onCommand:ai-localizer.i18n.firstTimeSetup",
     "onCommand:ai-localizer.i18n.openRootApp",
     "onCommand:ai-localizer.i18n.copyLanguageSwitcher",
     "onCommand:ai-localizer.i18n.convertSelectionToKey",
@@ -51,6 +52,11 @@
     "onLanguage:go",
     "onLanguage:rust",
     "onLanguage:vue",
+    "onLanguage:svelte",
+    "onLanguage:csharp",
+    "onLanguage:ruby",
+    "onLanguage:swift",
+    "onLanguage:kotlin",
     "onLanguage:blade",
     "onLanguage:php",
     "onLanguage:json",
@@ -73,6 +79,10 @@
         "title": "AI i18n: Configure Project i18n"
       },
       {
+        "command": "ai-localizer.i18n.firstTimeSetup",
+        "title": "AI i18n: First-time Project Setup"
+      },
+      {
         "command": "ai-localizer.i18n.openRootApp",
         "title": "AI i18n: Open Root App Entry"
       },
@@ -86,7 +96,7 @@
       },
       {
         "command": "ai-localizer.i18n.runExtractScript",
-        "title": "AI i18n: Run Extract Script"
+        "title": "AI i18n: Extract Translatable Strings"
       },
       {
         "command": "ai-localizer.i18n.runRewriteScript",
@@ -180,7 +190,7 @@
         {
           "command": "ai-localizer.i18n.runExtractScript",
           "group": "ai@2",
-          "when": "editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue || editorLangId == php || editorLangId == blade"
+          "when": "editorLangId == javascript || editorLangId == typescript || editorLangId == javascriptreact || editorLangId == typescriptreact || editorLangId == vue || editorLangId == svelte || editorLangId == php || editorLangId == blade || editorLangId == python || editorLangId == go || editorLangId == csharp || editorLangId == java || editorLangId == ruby || editorLangId == rust || editorLangId == swift || editorLangId == kotlin"
         },
         {
           "command": "ai-localizer.i18n.runRewriteScript",
@@ -355,13 +365,18 @@
     "l10n",
     "translation",
     "react",
+    "react-native",
     "nextjs",
     "inertia",
     "vue",
     "nuxt",
     "laravel",
     "blade",
-    "vite",
+    "svelte",
+    "sveltekit",
+    "python",
+    "go",
+    "csharp",
     "typescript",
     "javascript"
   ],

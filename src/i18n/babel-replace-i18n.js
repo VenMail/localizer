@@ -14,15 +14,15 @@ const generate = typeof generateModule === 'function' ? generateModule : generat
 // Import shared utilities
 const { detectSrcRoot } = require('./lib/projectConfig');
 const { getNamespaceFromFile } = require('./lib/stringUtils');
-const { getIgnorePatterns, shouldIgnoreAttribute } = require('./lib/ignorePatterns');
+const { getIgnorePatterns, shouldIgnoreAttribute, shouldTranslateText: ignoreShouldTranslate } = require('./lib/ignorePatterns');
 
 const projectRoot = path.resolve(__dirname, '..');
 
 const srcRoot = detectSrcRoot(projectRoot);
 const translationsPath = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto', 'en.json');
 
-// Initialize ignore patterns from shared utility
-getIgnorePatterns(projectRoot);
+// Initialize and cache ignore patterns from shared utility
+const ignorePatterns = getIgnorePatterns(projectRoot);
 
 function inferKindFromJsxElementName(name) {
   if (!name) return 'text';
@@ -157,48 +157,12 @@ function normalizeText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-function isNonTranslatableExample(text) {
-  const trimmed = String(text || '').trim();
-  if (!trimmed) return false;
-  const normalized = trimmed.replace(/\s+/g, ' ');
-  const ignore = getIgnorePatterns();
-  if (ignore && Array.isArray(ignore.exact) && ignore.exact.includes(normalized)) {
-    return true;
-  }
-  if (ignore && Array.isArray(ignore.exactInsensitive)) {
-    const lowerNorm = normalized.toLowerCase();
-    for (const v of ignore.exactInsensitive) {
-      if (String(v).toLowerCase() === lowerNorm) {
-        return true;
-      }
-    }
-  }
-  if (ignore && Array.isArray(ignore.contains)) {
-    for (const part of ignore.contains) {
-      if (part && normalized.includes(String(part))) {
-        return true;
-      }
-    }
-  }
-  const alphaNum = normalized.replace(/[^A-Za-z0-9]/g, '');
-  if (alphaNum && alphaNum.length <= 4 && alphaNum.toUpperCase() === alphaNum) {
-    return true;
-  }
-  if (/\d{2,}/.test(normalized)) {
-    const lower = normalized.toLowerCase();
-    if (lower.includes('main street') && lower.includes('city') && lower.includes('state')) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function shouldTranslateText(text) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
   if (!/[A-Za-z]/.test(trimmed)) return false;
-  if (isNonTranslatableExample(trimmed)) return false;
-  return true;
+  // Delegate to shared ignorePatterns + validators logic
+  return ignoreShouldTranslate(trimmed, ignorePatterns);
 }
 
 function inferPlaceholderNameFromExpression(expr, index) {

@@ -73,33 +73,12 @@ export class CommandRegistry {
 
                 if (count === 0) {
                     const choice = await vscode.window.showInformationMessage(
-                        'AI i18n: No translation keys were found. Run i18n:extract now to scan source files and build the translation index?',
-                        'Run extract now',
+                        'AI i18n: No translation keys were found. Run the first-time setup now to configure scripts, extract keys, sync locales, rewrite code, and (optionally) auto-translate missing entries?',
+                        'Run first-time setup',
                         'Cancel',
                     );
-                    if (choice === 'Run extract now') {
-                        if (!alreadyBootstrapped) {
-                            await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');
-                            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
-
-                            const apiKey = (await this.translationService.getApiKey())?.trim();
-                            if (apiKey) {
-                                await vscode.commands.executeCommand(
-                                    'ai-localizer.i18n.runFixUntranslatedScript',
-                                );
-                                await vscode.commands.executeCommand(
-                                    'ai-localizer.i18n.applyUntranslatedAiFixes',
-                                );
-                            }
-
-                            await this.context.workspaceState.update(bootstrapKey, true);
-
-                            vscode.window.showInformationMessage(
-                                'AI i18n: Started initial i18n:extract and i18n:sync in the AI i18n terminal. After they finish and translation files are written, run AI i18n: ReScan to build the index and optionally run the rewrite step.',
-                            );
-                        } else {
-                            await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');
-                        }
+                    if (choice === 'Run first-time setup') {
+                        await vscode.commands.executeCommand('ai-localizer.i18n.firstTimeSetup');
                     }
                 } else {
                     if (!rewriteOffered) {
@@ -188,12 +167,23 @@ export class CommandRegistry {
             vscode.commands.registerCommand('ai-localizer.i18n.runRewriteScript', () =>
                 scriptCmds.runRewrite(),
             ),
-            vscode.commands.registerCommand('ai-localizer.i18n.runSyncScript', () =>
-                scriptCmds.runSync(),
-            ),
-            vscode.commands.registerCommand('ai-localizer.i18n.runFixUntranslatedScript', () =>
-                scriptCmds.runFixUntranslated(),
-            ),
+            vscode.commands.registerCommand('ai-localizer.i18n.runSyncScript', async () => {
+                await scriptCmds.runSync();
+
+                const apiKey = (await this.translationService.getApiKey())?.trim();
+                if (apiKey) {
+                    await scriptCmds.runFixUntranslated();
+                    await vscode.commands.executeCommand('ai-localizer.i18n.applyUntranslatedAiFixes');
+                }
+            }),
+            vscode.commands.registerCommand('ai-localizer.i18n.runFixUntranslatedScript', async () => {
+                await scriptCmds.runFixUntranslated();
+
+                const apiKey = (await this.translationService.getApiKey())?.trim();
+                if (apiKey) {
+                    await vscode.commands.executeCommand('ai-localizer.i18n.applyUntranslatedAiFixes');
+                }
+            }),
             vscode.commands.registerCommand('ai-localizer.i18n.runRewriteBladeScript', () =>
                 scriptCmds.runRewriteBlade(),
             ),
@@ -203,6 +193,87 @@ export class CommandRegistry {
             vscode.commands.registerCommand('ai-localizer.i18n.runRestoreInvalidScript', () =>
                 scriptCmds.runRestoreInvalid(),
             ),
+            vscode.commands.registerCommand('ai-localizer.i18n.firstTimeSetup', async () => {
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: 'AI i18n: First-time project setup',
+                        cancellable: false,
+                    },
+                    async (progress) => {
+                        try {
+                            progress.report({ message: 'Configuring project i18n (scripts, locales, srcRoot)...' });
+                            await configureCmd.execute();
+
+                            progress.report({ message: 'Running initial extract (i18n:extract)...' });
+                            await scriptCmds.runExtract();
+
+                            progress.report({ message: 'Syncing locales (i18n:sync)...' });
+                            await scriptCmds.runSync();
+
+                            const apiKey = (await this.translationService.getApiKey())?.trim();
+                            let ranAiFixes = false;
+                            if (apiKey) {
+                                progress.report({ message: 'Filling missing translations with AI (i18n:fix-untranslated)...' });
+                                await scriptCmds.runFixUntranslated();
+                                await vscode.commands.executeCommand('ai-localizer.i18n.applyUntranslatedAiFixes');
+                                ranAiFixes = true;
+                            }
+
+                            progress.report({ message: 'Rewriting source code to use t() calls (i18n:rewrite)...' });
+                            await scriptCmds.runRewrite();
+
+                            progress.report({ message: 'Building translation index and diagnostics...' });
+                            await this.i18nIndex.ensureInitialized(true);
+                            const keyCount = this.i18nIndex.getAllKeys().length;
+                            const locales = this.i18nIndex.getAllLocales();
+
+                            await this.refreshAllDiagnostics(untranslatedDiagnostics);
+
+                            const foldersForState = vscode.workspace.workspaceFolders || [];
+                            const folderKey =
+                                foldersForState.length > 0
+                                    ? foldersForState.map((f) => f.uri.fsPath).join('|')
+                                    : 'no-workspace';
+                            const languageSwitcherOfferedKey = `ai-i18n:languageSwitcherOffered:${folderKey}`;
+                            const languageSwitcherOffered = this.context.workspaceState.get<boolean>(
+                                languageSwitcherOfferedKey,
+                            );
+
+                            if (!languageSwitcherOffered) {
+                                const lsChoice = await vscode.window.showInformationMessage(
+                                    'AI i18n: Install a LanguageSwitcher component into your app now?',
+                                    'Install LanguageSwitcher',
+                                    'Skip for now',
+                                );
+
+                                if (lsChoice === 'Install LanguageSwitcher') {
+                                    await vscode.commands.executeCommand('ai-localizer.i18n.copyLanguageSwitcher');
+                                }
+
+                                await this.context.workspaceState.update(languageSwitcherOfferedKey, true);
+                            }
+
+                            const parts: string[] = [];
+                            parts.push(`AI i18n setup complete: ${keyCount} key(s)`);
+                            if (locales.length) {
+                                parts.push(`across ${locales.length} locale(s): ${locales.join(', ')}`);
+                            }
+                            if (!apiKey) {
+                                parts.push('No OpenAI API key configured; you can add one later to enable automatic translations.');
+                            } else if (ranAiFixes) {
+                                parts.push('AI attempted to fill missing translations; review locale files as needed.');
+                            }
+
+                            vscode.window.showInformationMessage(parts.join(' '));
+                        } catch (error) {
+                            const msg = error instanceof Error ? error.message : String(error);
+                            this.log.appendLine(`[FirstTimeSetup] Failed: ${msg}`);
+                            vscode.window.showErrorMessage(`AI i18n: First-time setup failed. ${msg}`);
+                        }
+                    },
+                );
+            }),
         );
 
         // Untranslated commands

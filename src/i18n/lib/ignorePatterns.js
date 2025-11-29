@@ -1,9 +1,19 @@
 /**
  * Shared ignore patterns utilities for i18n scripts
+ * 
+ * This module integrates with the validators system for optimal accuracy.
  */
 const { existsSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 const { isTranslatableText } = require('./textValidation');
+
+// Try to load new validators
+let newValidators = null;
+try {
+  newValidators = require('./validators');
+} catch (e) {
+  //TODO: Remove legacy fallback
+}
 
 let cachedPatterns = null;
 let cachedPatternsPath = null;
@@ -137,8 +147,14 @@ function isNonTranslatableText(text, patterns) {
     }
   }
 
-  // Apply comprehensive linguistic validation (includes phonetic patterns)
-  if (!isTranslatableText(normalized)) {
+  // Apply comprehensive linguistic validation (includes phonetic patterns and new validators when available)
+  // Prefer the unified shouldTranslateText (which uses validators) when available,
+  // otherwise fall back to the legacy isTranslatableText heuristic.
+  if (newValidators && newValidators.shouldTranslate) {
+    if (!newValidators.shouldTranslate(normalized, { ignorePatterns: patterns })) {
+      return true;
+    }
+  } else if (!isTranslatableText(normalized)) {
     return true;
   }
 
@@ -152,6 +168,13 @@ function shouldTranslateText(text, patterns) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
   if (!/[A-Za-z]/.test(trimmed)) return false;
+  
+  // Use new validators if available for improved accuracy
+  if (newValidators && newValidators.shouldTranslate) {
+    return newValidators.shouldTranslate(trimmed, { ignorePatterns: patterns });
+  }
+  
+  // Legacy behavior
   const pats = patterns || getIgnorePatterns();
   if (isNonTranslatableText(trimmed, pats)) return false;
   
