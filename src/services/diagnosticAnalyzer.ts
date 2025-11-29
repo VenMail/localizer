@@ -437,6 +437,31 @@ export class DiagnosticAnalyzer {
             return true;
         }
 
+        if (
+            normalized.includes('class="') ||
+            normalized.includes("class='") ||
+            normalized.includes('style="') ||
+            normalized.includes("style='") ||
+            /@\w+\s*=/.test(normalized)
+        ) {
+            return true;
+        }
+
+        if (/^\s*(height|width|margin|padding|font(?:-family)?|color|background|border)[^;{]*;?\s*$/.test(normalized)) {
+            return true;
+        }
+
+        if (/^\s*(sans|serif|mono|monospace|system)\s*\([^)]+\)\s*$/i.test(normalized)) {
+            return true;
+        }
+
+        if (
+            /\{\{\s*[^}]+\s*\}\}/.test(normalized) &&
+            (/[?:]/.test(normalized) || /\|\|/.test(normalized) || /&&/.test(normalized) || /\.length\b/.test(normalized))
+        ) {
+            return true;
+        }
+
         // UUID-like strings
         if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
             return true;
@@ -463,7 +488,7 @@ export class DiagnosticAnalyzer {
         // Obvious URLs
         if (/^https?:\/\//i.test(normalized) || /^www\./i.test(normalized)) return true;
 
-        // Filesystem-like paths (e.g. "/schedule/", "/api/v1", "C:\path")
+        // Filesystem-like paths (e.g. "/schedule/", "/api/v1", "C:\\path")
         if (/^\/[A-Za-z0-9_/-]+\/?$/.test(normalized)) return true;
         if (/^\\\\[^\s]+/.test(normalized) || /^[A-Za-z]:[\\/][^\s]*$/.test(normalized)) return true;
 

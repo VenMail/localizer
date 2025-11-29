@@ -367,4 +367,26 @@ export class FileSystemService {
         }
         return fileName;
     }
+
+    async suggestFilePaths(
+        folder: vscode.WorkspaceFolder,
+        fileName: string,
+        preferredDirs: string[],
+        maxSuggestions: number = 3,
+    ): Promise<string[]> {
+        const suggestions: string[] = [];
+        for (const dir of preferredDirs) {
+            const matches = await this.findFiles(folder, `${dir}/**/*.*`, undefined, 1);
+            if (matches.length > 0) {
+                suggestions.push(path.join(dir, fileName));
+                if (suggestions.length >= maxSuggestions) {
+                    break;
+                }
+            }
+        }
+        if (!suggestions.length) {
+            suggestions.push(fileName);
+        }
+        return suggestions;
+    }
 }

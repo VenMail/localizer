@@ -575,6 +575,8 @@ async function processVueFile(filePath) {
   while ((m = regex.exec(template)) !== null) {
     const tagName = m[1];
     const rawText = m[2];
+    if (!rawText || typeof rawText !== 'string') continue;
+    if (rawText.includes('{{')) continue;
     const text = String(rawText || '').replace(/\s+/g, ' ').trim();
     if (!text) continue;
     const kind = inferKindFromJsxElementName(tagName);

@@ -195,6 +195,10 @@ function isNonTranslatableExample(text) {
     addExactIgnorePattern(normalized);
     return true;
   }
+  if (/\{\{\s*[^}]+\s*\}\}/.test(normalized) && (/[?:]/.test(normalized) || /\|\|/.test(normalized) || /&&/.test(normalized) || /\.length\b/.test(normalized))) {
+    addExactIgnorePattern(normalized);
+    return true;
+  }
   // Strings that are overwhelmingly CSS/utility classes plus placeholders
   {
     const words = normalized.split(/\s+/);

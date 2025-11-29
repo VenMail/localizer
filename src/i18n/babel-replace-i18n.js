@@ -966,7 +966,7 @@ async function processVueFile(filePath, keyMap) {
 
   inner = inner.replace(tagRegex, (whole, tagName, attrs, rawText) => {
     if (!rawText || typeof rawText !== 'string') return whole;
-    // Skip if this snippet already contains a translation call.
+    if (rawText.includes('{{')) return whole;
     if (rawText.includes('$t(') || rawText.includes('{{$t')) return whole;
 
     const cleaned = String(rawText).replace(/\s+/g, ' ').trim();

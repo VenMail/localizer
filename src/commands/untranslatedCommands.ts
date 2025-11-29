@@ -735,6 +735,7 @@ export class UntranslatedCommands {
                     }
 
                     let processed = 0;
+                    let lastReported = 0;
                     for (const item of keysToTranslate) {
                         if (token.isCancellationRequested) {
                             break;
@@ -751,10 +752,12 @@ export class UntranslatedCommands {
                         }
                         processed += 1;
                         if (processed % 10 === 0 || processed === keysToTranslate.length) {
+                            const percent = (processed / keysToTranslate.length) * 100;
                             progress.report({
                                 message: `${processed} of ${keysToTranslate.length}`,
-                                increment: (processed / keysToTranslate.length) * 100,
+                                increment: percent - lastReported,
                             });
+                            lastReported = percent;
                         }
                     }
                 },
@@ -795,42 +798,32 @@ export class UntranslatedCommands {
             );
             return;
         }
-
-        const keySet = new Set(keysInFile);
-        const diagnostics = vscode.languages
-            .getDiagnostics(documentUri)
-            .filter((d) => String(d.code) === 'ai-i18n.untranslated');
-
-        if (!diagnostics.length) {
-            vscode.window.showInformationMessage(
-                'AI i18n: No untranslated diagnostics found for this file.',
-            );
-            return;
-        }
-
         const missingPerLocale = new Map<
             string,
             { key: string; defaultValue: string; defaultLocale: string }[]
         >();
-        const localeSet = new Set<string>();
 
-        for (const diag of diagnostics) {
-            const parsed = this.parseUntranslatedDiagnostic(String(diag.message || ''));
-            if (!parsed) continue;
-            const { key, locales } = parsed;
-            if (!key || !locales || !locales.length) continue;
-            if (!keySet.has(key)) continue;
-
+        for (const key of keysInFile) {
             const record = this.i18nIndex.getRecord(key);
-            if (!record) continue;
+            if (!record) {
+                continue;
+            }
 
             const defaultLocale = record.defaultLocale || globalDefaultLocale;
             const defaultValue = record.locales.get(defaultLocale);
-            if (typeof defaultValue !== 'string' || !defaultValue.trim()) continue;
+            if (typeof defaultValue !== 'string' || !defaultValue.trim()) {
+                continue;
+            }
 
-            for (const locale of locales) {
-                if (!locale || locale === defaultLocale) continue;
-                localeSet.add(locale);
+            for (const [locale, currentValue] of record.locales.entries()) {
+                if (!locale || locale === defaultLocale) {
+                    continue;
+                }
+                const current = typeof currentValue === 'string' ? currentValue.trim() : '';
+                const needsTranslation = !current || current === defaultValue.trim();
+                if (!needsTranslation) {
+                    continue;
+                }
 
                 let list = missingPerLocale.get(locale);
                 if (!list) {
@@ -841,7 +834,7 @@ export class UntranslatedCommands {
             }
         }
 
-        if (!missingPerLocale.size || !localeSet.size) {
+        if (!missingPerLocale.size) {
             vscode.window.showInformationMessage(
                 'AI i18n: No untranslated keys found for non-default locales in this file.',
             );
@@ -931,6 +924,7 @@ export class UntranslatedCommands {
                 }
 
                 let processed = 0;
+                let lastReported = 0;
                 for (const item of keysToTranslate) {
                     if (token.isCancellationRequested) {
                         break;
@@ -947,10 +941,12 @@ export class UntranslatedCommands {
                     }
                     processed += 1;
                     if (processed % 10 === 0 || processed === keysToTranslate.length) {
+                        const percent = (processed / keysToTranslate.length) * 100;
                         progress.report({
                             message: `${processed} of ${keysToTranslate.length}`,
-                            increment: (processed / keysToTranslate.length) * 100,
+                            increment: percent - lastReported,
                         });
+                        lastReported = percent;
                     }
                 }
             },

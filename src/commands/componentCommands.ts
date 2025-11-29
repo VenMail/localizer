@@ -113,22 +113,57 @@ export class ComponentCommands {
         const preferredDirs = isVue && profile?.kind === 'nuxt'
             ? ['components', 'src/components']
             : ['resources/js/components', 'src/components'];
-        const suggested = await this.fileSystemService.suggestFilePath(
+        const suggestions = await this.fileSystemService.suggestFilePaths(
             folder,
             targetFileName,
             preferredDirs,
+            3,
         );
 
-        const input = await vscode.window.showInputBox({
-            value: suggested,
-            prompt: 'Enter relative path for the LanguageSwitcher component',
-        });
+        let relativePathInput: string | undefined;
 
-        if (!input) {
-            return;
+        if (suggestions.length === 1) {
+            const input = await vscode.window.showInputBox({
+                value: suggestions[0],
+                prompt: 'Enter relative path for the LanguageSwitcher component',
+            });
+            if (!input) {
+                return;
+            }
+            relativePathInput = input;
+        } else {
+            const items = suggestions.map((p) => ({
+                label: p,
+                description: 'Suggested location',
+                value: p,
+            } as vscode.QuickPickItem & { value: string }));
+            items.push({
+                label: 'Custom location...',
+                description: 'Enter a custom component path',
+                value: '',
+            } as vscode.QuickPickItem & { value: string });
+
+            const pick = await vscode.window.showQuickPick(items, {
+                placeHolder: 'Select target path for the LanguageSwitcher component',
+            });
+            if (!pick) {
+                return;
+            }
+            if ((pick as any).value) {
+                relativePathInput = (pick as any).value as string;
+            } else {
+                const input = await vscode.window.showInputBox({
+                    value: suggestions[0],
+                    prompt: 'Enter relative path for the LanguageSwitcher component',
+                });
+                if (!input) {
+                    return;
+                }
+                relativePathInput = input;
+            }
         }
 
-        const relativePath = input.replace(/^[\\/]+/, '');
+        const relativePath = relativePathInput.replace(/^[\\/]+/, '');
         const targetUri = vscode.Uri.file(path.join(folder.uri.fsPath, relativePath));
         
         const exists = await this.fileSystemService.fileExists(targetUri);

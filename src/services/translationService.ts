@@ -9,6 +9,7 @@ const DEFAULT_MAX_BATCH_CHARS = Number(process.env.AI_I18N_MAX_BATCH_CHARS || 80
  */
 export class TranslationService {
     private context: vscode.ExtensionContext;
+    private shortTextCache = new Map<string, string>();
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
@@ -79,6 +80,33 @@ export class TranslationService {
         }
     }
 
+    private isCacheableShortText(text: string): boolean {
+        const trimmed = (text || '').trim();
+        if (!trimmed) {
+            return false;
+        }
+        const words = trimmed.split(/\s+/);
+        if (words.length > 3) {
+            return false;
+        }
+        if (trimmed.length > 40) {
+            return false;
+        }
+        return true;
+    }
+
+    private makeShortTextCacheKey(
+        text: string,
+        defaultLocale: string,
+        targetLocale: string,
+    ): string {
+        const normalized = (text || '')
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ');
+        return `${defaultLocale}::${targetLocale}::${normalized}`;
+    }
+
     /**
      * Get OpenAI API key from secure storage or configuration
      */
@@ -131,7 +159,26 @@ export class TranslationService {
         const model = this.getOpenAiModel(config);
         const client = new OpenAI({ apiKey });
 
-        const tasks = targetLocales.map(async (locale) => {
+        const cacheable = this.isCacheableShortText(text);
+        const localesToTranslate: string[] = [];
+
+        for (const locale of targetLocales) {
+            if (cacheable) {
+                const cacheKey = this.makeShortTextCacheKey(text, defaultLocale, locale);
+                const cached = this.shortTextCache.get(cacheKey);
+                if (cached) {
+                    result.set(locale, cached);
+                    continue;
+                }
+            }
+            localesToTranslate.push(locale);
+        }
+
+        if (!localesToTranslate.length) {
+            return result;
+        }
+
+        const tasks = localesToTranslate.map(async (locale) => {
             try {
                 const completion = await client.chat.completions.create({
                     model,
@@ -153,6 +200,10 @@ export class TranslationService {
                 const translated = content.trim();
                 
                 if (translated) {
+                    if (cacheable) {
+                        const cacheKey = this.makeShortTextCacheKey(text, defaultLocale, locale);
+                        this.shortTextCache.set(cacheKey, translated);
+                    }
                     return { locale, translated };
                 }
                 return null;
@@ -200,11 +251,27 @@ export class TranslationService {
 
         const { maxItems, maxChars } = this.getBatchLimits(config);
 
+        const filteredItems: { id: string; text: string; defaultLocale: string }[] = [];
+        for (const item of items) {
+            const text = item.text || '';
+            if (this.isCacheableShortText(text)) {
+                const cacheKey = this.makeShortTextCacheKey(text, item.defaultLocale, targetLocale);
+                const cached = this.shortTextCache.get(cacheKey);
+                if (cached) {
+                    result.set(item.id, cached);
+                    continue;
+                }
+            }
+            filteredItems.push(item);
+        }
+
+        const workItems = filteredItems;
+
         const batches: { id: string; text: string; defaultLocale: string }[][] = [];
         let currentBatch: { id: string; text: string; defaultLocale: string }[] = [];
         let currentChars = 0;
 
-        for (const item of items) {
+        for (const item of workItems) {
             const text = item.text || '';
             const length = text.length;
             if (
@@ -292,6 +359,15 @@ export class TranslationService {
                     const translated = translatedRaw.trim();
                     if (id && translated) {
                         result.set(id, translated);
+                        const original = batch.find((it) => it.id === id);
+                        if (original && this.isCacheableShortText(original.text)) {
+                            const cacheKey = this.makeShortTextCacheKey(
+                                original.text,
+                                original.defaultLocale,
+                                targetLocale,
+                            );
+                            this.shortTextCache.set(cacheKey, translated);
+                        }
                         added = true;
                     }
                 }
@@ -360,6 +436,15 @@ export class TranslationService {
                     const translated = line.slice(idx + 1).trim();
                     if (id && translated) {
                         result.set(id, translated);
+                        const original = batch.find((it) => it.id === id);
+                        if (original && this.isCacheableShortText(original.text)) {
+                            const cacheKey = this.makeShortTextCacheKey(
+                                original.text,
+                                original.defaultLocale,
+                                targetLocale,
+                            );
+                            this.shortTextCache.set(cacheKey, translated);
+                        }
                         added = true;
                     }
                 }

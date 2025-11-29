@@ -1,7 +1,7 @@
 {
   "name": "ai-localizer",
   "displayName": "Localizer – AI i18n for React, Vue & Laravel",
-  "description": "AI-assisted localization for React, Vue/Nuxt, and Laravel projects. Extract strings, manage locale JSON, and scaffold translation providers and hooks automatically.",
+  "description": "AI-assisted localization for React/Next, Vue/Nuxt, and Laravel or Laravel with Breeze or Inertia projects. Extract strings, manage locale JSON, and scaffold translation providers and hooks automatically.",
   "version": "0.0.7",
   "publisher": "venmail",
   "repository": {

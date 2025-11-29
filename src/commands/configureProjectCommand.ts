@@ -77,6 +77,28 @@ export class ConfigureProjectCommand {
                 folder.uri.fsPath,
             );
 
+            // Prompt for OpenAI API key if not already configured so automatic
+            // AI translations can work out of the box.
+            const existingSecret = (await this.context.secrets.get('openaiApiKey')) || '';
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const existingCfgKey = (cfg.get<string>('openaiApiKey') || '').trim();
+            if (!existingSecret && !existingCfgKey) {
+                const choice = await vscode.window.showInformationMessage(
+                    'AI i18n: To enable automatic AI translations, configure an OpenAI API key. You can obtain a key from https://platform.openai.com/api-keys.',
+                    'Enter API key',
+                    'Open signup page',
+                    'Skip',
+                );
+
+                if (choice === 'Enter API key') {
+                    await vscode.commands.executeCommand('ai-localizer.setOpenAiApiKeySecret');
+                } else if (choice === 'Open signup page') {
+                    await vscode.env.openExternal(
+                        vscode.Uri.parse('https://platform.openai.com/api-keys'),
+                    );
+                }
+            }
+
             vscode.window.showInformationMessage(
                 'AI i18n: Project i18n scripts and configuration have been set up.',
             );

@@ -241,6 +241,27 @@ function isTranslatableText(text) {
     return false;
   }
 
+  const htmlAttributeLike = /(class|style)\s*=\s*["'][^"']*["']/.test(trimmed) || /@\w+\s*=\s*["'][^"']*["']/.test(trimmed);
+  if (htmlAttributeLike) {
+    return false;
+  }
+
+  if (/^\s*(height|width|margin|padding|font(?:-family)?|color|background|border)[^;{]*;?\s*$/.test(trimmed)) {
+    return false;
+  }
+
+  if (/^\s*(sans|serif|mono|monospace|system)\s*\([^)]+\)\s*$/i.test(trimmed)) {
+    return false;
+  }
+
+  const moustacheMatch = trimmed.match(/\{\{\s*([^}]+)\s*\}\}/);
+  if (moustacheMatch) {
+    const inner = moustacheMatch[1] || '';
+    if (/\.\s*length\b/.test(inner)) {
+      return false;
+    }
+  }
+
   // Allow placeholder patterns (words separated by underscores) that contain at least one English word
   if (trimmed.includes('_') && !trimmed.includes(' ')) {
     const parts = trimmed.split('_');

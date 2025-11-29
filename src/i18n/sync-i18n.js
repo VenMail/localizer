@@ -3,6 +3,7 @@ const { readdir, readFile, writeFile, mkdir } = require('node:fs/promises');
 const { existsSync } = require('node:fs');
 const path = require('node:path');
 const process = require('node:process');
+const { getProjectLocales } = require('./lib/projectConfig');
 
 const projectRoot = path.resolve(__dirname, '..');
 const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
@@ -104,14 +105,21 @@ async function writeJson(filePath, data) {
       // Grouped base: mirror file structure into each locale
       const baseFiles = await listJsonFiles(baseGroupedDir);
 
-      // Determine locales from files and directories under autoDir
-      const topEntries = await readdir(autoDir, { withFileTypes: true });
-      const locales = new Set();
-      for (const e of topEntries) {
-        if (e.isDirectory() && e.name !== baseLocale) locales.add(e.name);
-        if (e.isFile() && isJsonFile(e.name)) {
-          const name = e.name.replace(/\.json$/i, '');
-          if (name !== baseLocale) locales.add(name);
+      // Determine locales primarily from configured project locales; fall back
+      // to scanning the auto directory if none are configured.
+      const configuredLocales = getProjectLocales(projectRoot).filter(
+        (locale) => locale && locale !== baseLocale,
+      );
+      const locales = new Set(configuredLocales);
+
+      if (locales.size === 0) {
+        const topEntries = await readdir(autoDir, { withFileTypes: true });
+        for (const e of topEntries) {
+          if (e.isDirectory() && e.name !== baseLocale) locales.add(e.name);
+          if (e.isFile() && isJsonFile(e.name)) {
+            const name = e.name.replace(/\.json$/i, '');
+            if (name !== baseLocale) locales.add(name);
+          }
         }
       }
 
@@ -147,17 +155,33 @@ async function writeJson(filePath, data) {
       }
 
       const entries = await readdir(autoDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isFile() || !isJsonFile(entry.name)) continue;
-        const localeName = entry.name.replace(/\.json$/i, '');
-        if (localeName === baseLocale) continue;
-        const localePath = path.resolve(autoDir, entry.name);
-        const localeData = (await readJson(localePath)) || {};
-        const merged = deepFillFromBase(baseData, localeData);
-        const sorted = sortObjectDeep(merged);
-        await writeJson(localePath, sorted);
-        updatedCount += 1;
-        console.log(`[i18n-sync] Synced keys into ${entry.name}`);
+      const configuredLocales = getProjectLocales(projectRoot).filter(
+        (locale) => locale && locale !== baseLocale,
+      );
+
+      if (configuredLocales.length > 0) {
+        for (const localeName of configuredLocales) {
+          const localePath = path.resolve(autoDir, `${localeName}.json`);
+          const localeData = (await readJson(localePath)) || {};
+          const merged = deepFillFromBase(baseData, localeData);
+          const sorted = sortObjectDeep(merged);
+          await writeJson(localePath, sorted);
+          updatedCount += 1;
+          console.log(`[i18n-sync] Synced keys into ${localeName}.json`);
+        }
+      } else {
+        for (const entry of entries) {
+          if (!entry.isFile() || !isJsonFile(entry.name)) continue;
+          const localeName = entry.name.replace(/\.json$/i, '');
+          if (localeName === baseLocale) continue;
+          const localePath = path.resolve(autoDir, entry.name);
+          const localeData = (await readJson(localePath)) || {};
+          const merged = deepFillFromBase(baseData, localeData);
+          const sorted = sortObjectDeep(merged);
+          await writeJson(localePath, sorted);
+          updatedCount += 1;
+          console.log(`[i18n-sync] Synced keys into ${entry.name}`);
+        }
       }
     }
 

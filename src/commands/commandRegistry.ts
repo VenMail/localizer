@@ -52,7 +52,95 @@ export class CommandRegistry {
             vscode.commands.registerCommand('ai-localizer.i18n.rescan', async () => {
                 await this.i18nIndex.ensureInitialized(true);
                 const count = this.i18nIndex.getAllKeys().length;
-                vscode.window.showInformationMessage(`AI i18n: Indexed ${count} translation keys.`);
+
+                const foldersForState = vscode.workspace.workspaceFolders || [];
+                const folderKey =
+                    foldersForState.length > 0
+                        ? foldersForState.map((f) => f.uri.fsPath).join('|')
+                        : 'no-workspace';
+                const bootstrapKey = `ai-i18n:firstBootstrapDone:${folderKey}`;
+                const rewriteOfferedKey = `ai-i18n:firstRewriteOffered:${folderKey}`;
+                const languageSwitcherOfferedKey = `ai-i18n:languageSwitcherOffered:${folderKey}`;
+                const alreadyBootstrapped = this.context.workspaceState.get<boolean>(
+                    bootstrapKey,
+                );
+                const rewriteOffered = this.context.workspaceState.get<boolean>(
+                    rewriteOfferedKey,
+                );
+                const languageSwitcherOffered = this.context.workspaceState.get<boolean>(
+                    languageSwitcherOfferedKey,
+                );
+
+                if (count === 0) {
+                    const choice = await vscode.window.showInformationMessage(
+                        'AI i18n: No translation keys were found. Run i18n:extract now to scan source files and build the translation index?',
+                        'Run extract now',
+                        'Cancel',
+                    );
+                    if (choice === 'Run extract now') {
+                        if (!alreadyBootstrapped) {
+                            await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');
+                            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
+
+                            const apiKey = (await this.translationService.getApiKey())?.trim();
+                            if (apiKey) {
+                                await vscode.commands.executeCommand(
+                                    'ai-localizer.i18n.runFixUntranslatedScript',
+                                );
+                                await vscode.commands.executeCommand(
+                                    'ai-localizer.i18n.applyUntranslatedAiFixes',
+                                );
+                            }
+
+                            await this.context.workspaceState.update(bootstrapKey, true);
+
+                            vscode.window.showInformationMessage(
+                                'AI i18n: Started initial i18n:extract and i18n:sync in the AI i18n terminal. After they finish and translation files are written, run AI i18n: ReScan to build the index and optionally run the rewrite step.',
+                            );
+                        } else {
+                            await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');
+                        }
+                    }
+                } else {
+                    if (!rewriteOffered) {
+                        const localesAfterBootstrap = this.i18nIndex.getAllLocales();
+                        const rewriteChoice = await vscode.window.showInformationMessage(
+                            `AI i18n: Indexed ${count} translation key(s)` +
+                                (localesAfterBootstrap.length
+                                    ? ` across ${localesAfterBootstrap.length} locale(s): ${localesAfterBootstrap.join(', ')}`
+                                    : ''
+                                ) +
+                                '. Run the rewrite step now to replace inline strings with t() calls?',
+                            'Run rewrite now',
+                            'Skip for now',
+                        );
+
+                        if (rewriteChoice === 'Run rewrite now') {
+                            await vscode.commands.executeCommand('ai-localizer.i18n.runRewriteScript');
+                        }
+
+                        await this.context.workspaceState.update(rewriteOfferedKey, true);
+                    }
+
+                    if (!languageSwitcherOffered) {
+                        const lsChoice = await vscode.window.showInformationMessage(
+                            'AI i18n: Install a LanguageSwitcher component into your app now?',
+                            'Install LanguageSwitcher',
+                            'Skip for now',
+                        );
+
+                        if (lsChoice === 'Install LanguageSwitcher') {
+                            await vscode.commands.executeCommand('ai-localizer.i18n.copyLanguageSwitcher');
+                        }
+
+                        await this.context.workspaceState.update(languageSwitcherOfferedKey, true);
+                    } else if (rewriteOffered) {
+                        vscode.window.showInformationMessage(
+                            `AI i18n: Indexed ${count} translation keys.`,
+                        );
+                    }
+                }
+
                 await this.refreshAllDiagnostics(untranslatedDiagnostics);
             }),
         );
