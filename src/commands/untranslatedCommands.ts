@@ -326,6 +326,263 @@ export class UntranslatedCommands {
         }
     }
 
+    async reviewSelection(documentUri?: vscode.Uri): Promise<void> {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                vscode.window.showInformationMessage('AI i18n: No active editor.');
+                return;
+            }
+
+            const document = editor.document;
+            const langId = document.languageId;
+            const isCode =
+                langId === 'javascript' ||
+                langId === 'typescript' ||
+                langId === 'javascriptreact' ||
+                langId === 'typescriptreact' ||
+                langId === 'vue' ||
+                langId === 'blade' ||
+                langId === 'php';
+
+            if (!isCode) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Selection review only applies to JS/TS, Vue, and Blade/PHP files.',
+                );
+                return;
+            }
+
+            const selection = editor.selection;
+            if (selection.isEmpty) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Please select the code containing i18n keys to review.',
+                );
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+
+            const selectionText = document.getText(selection);
+            const keyRegex = /['"`]([A-Za-z0-9_.]+)['"`]/g;
+            const keysInSelection = new Set<string>();
+
+            let match: RegExpExecArray | null;
+            while ((match = keyRegex.exec(selectionText)) !== null) {
+                const key = match[1];
+                if (!key) {
+                    continue;
+                }
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) {
+                    continue;
+                }
+                keysInSelection.add(key);
+            }
+
+            if (!keysInSelection.size) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No known i18n keys found in the current selection.',
+                );
+                return;
+            }
+
+            const unresolvedByKey = new Map<string, Set<string>>();
+            const allDiagnostics = vscode.languages.getDiagnostics();
+
+            for (const entry of allDiagnostics) {
+                const diags = entry[1];
+                if (!diags || !diags.length) {
+                    continue;
+                }
+
+                for (const d of diags) {
+                    if (String(d.code) !== 'ai-i18n.untranslated') {
+                        continue;
+                    }
+                    const parsed = this.parseUntranslatedDiagnostic(String(d.message || ''));
+                    if (!parsed || !parsed.key || !parsed.locales || !parsed.locales.length) {
+                        continue;
+                    }
+                    if (!keysInSelection.has(parsed.key)) {
+                        continue;
+                    }
+                    let set = unresolvedByKey.get(parsed.key);
+                    if (!set) {
+                        set = new Set<string>();
+                        unresolvedByKey.set(parsed.key, set);
+                    }
+                    for (const locale of parsed.locales) {
+                        if (locale) {
+                            set.add(locale);
+                        }
+                    }
+                }
+            }
+
+            if (!unresolvedByKey.size) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No untranslated diagnostics found for keys in the current selection.',
+                );
+                return;
+            }
+
+            let totalIssues = 0;
+            for (const set of unresolvedByKey.values()) {
+                totalIssues += set.size;
+            }
+
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: `Translate ${totalIssues} value(s) for ${unresolvedByKey.size} key(s)`,
+                        description:
+                            'Use AI to translate missing or untranslated locales for all keys in this selection.',
+                    },
+                    {
+                        label: 'Cancel',
+                        description: 'Do not change translations for this selection.',
+                    },
+                ],
+                {
+                    placeHolder:
+                        'AI i18n: Apply AI translations for i18n issues in this selection?',
+                },
+            );
+
+            if (!choice || choice.label === 'Cancel') {
+                return;
+            }
+
+            let translatedRequests = 0;
+            for (const [key, localeSet] of unresolvedByKey.entries()) {
+                const locales = Array.from(localeSet);
+                if (!locales.length) {
+                    continue;
+                }
+                await this.applyQuickFix(document.uri, key, locales);
+                translatedRequests += locales.length;
+            }
+
+            if (translatedRequests > 0) {
+                vscode.window.showInformationMessage(
+                    `AI i18n: Requested AI translations for ${translatedRequests} value(s) across ${unresolvedByKey.size} key(s) in this selection.`,
+                );
+            }
+        } catch (err) {
+            console.error('AI i18n: Failed to review selection for i18n issues:', err);
+            vscode.window.showErrorMessage(
+                'AI i18n: Failed to review selection for i18n issues.',
+            );
+        }
+    }
+
+    async showHealthReport(): Promise<void> {
+        try {
+            const allDiagnostics = vscode.languages.getDiagnostics();
+            const codeTotals = new Map<string, number>();
+            const fileTotals = new Map<
+                string,
+                { uri: vscode.Uri; count: number; byCode: Map<string, number> }
+            >();
+
+            for (const [uri, diags] of allDiagnostics) {
+                if (!diags || !diags.length) {
+                    continue;
+                }
+                const fileKey = uri.toString();
+                let fileEntry = fileTotals.get(fileKey);
+                if (!fileEntry) {
+                    fileEntry = { uri, count: 0, byCode: new Map<string, number>() };
+                    fileTotals.set(fileKey, fileEntry);
+                }
+
+                for (const d of diags) {
+                    const rawCode = d.code;
+                    const code = typeof rawCode === 'string' || typeof rawCode === 'number'
+                        ? String(rawCode)
+                        : '';
+                    if (!code || !code.startsWith('ai-i18n.')) {
+                        continue;
+                    }
+
+                    const prevGlobal = codeTotals.get(code) || 0;
+                    codeTotals.set(code, prevGlobal + 1);
+
+                    fileEntry.count += 1;
+                    const prevFile = fileEntry.byCode.get(code) || 0;
+                    fileEntry.byCode.set(code, prevFile + 1);
+                }
+            }
+
+            if (!codeTotals.size || !fileTotals.size) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No i18n diagnostics found for this workspace.',
+                );
+                return;
+            }
+
+            const labelForCode = (code: string): string => {
+                if (code === 'ai-i18n.untranslated') return 'Missing/untranslated';
+                if (code === 'ai-i18n.invalid') return 'Invalid/non-translatable default value';
+                if (code === 'ai-i18n.placeholders') return 'Placeholder mismatch';
+                if (code === 'ai-i18n.style') return 'Style suggestion';
+                return code;
+            };
+
+            const globalLines: string[] = [];
+            globalLines.push('# AI i18n – Workspace Health Report');
+            globalLines.push('');
+            globalLines.push(`Generated at ${new Date().toISOString()}`);
+            globalLines.push('');
+
+            globalLines.push('## Overall issue counts');
+            globalLines.push('');
+            globalLines.push('| Issue type | Count |');
+            globalLines.push('| --- | ---: |');
+            const sortedCodes = Array.from(codeTotals.entries()).sort((a, b) => b[1] - a[1]);
+            for (const [code, count] of sortedCodes) {
+                const label = labelForCode(code);
+                globalLines.push(`| ${label} | ${count} |`);
+            }
+            globalLines.push('');
+
+            const sortedFiles = Array.from(fileTotals.values()).sort((a, b) => b.count - a.count);
+            globalLines.push('## Files with i18n issues');
+            globalLines.push('');
+            globalLines.push('| File | Total | Missing/untranslated | Invalid | Placeholders | Style |');
+            globalLines.push('| --- | ---: | ---: | ---: | ---: | ---: |');
+            const maxFiles = 100;
+            for (let i = 0; i < sortedFiles.length && i < maxFiles; i += 1) {
+                const entry = sortedFiles[i];
+                const missing = entry.byCode.get('ai-i18n.untranslated') || 0;
+                const invalid = entry.byCode.get('ai-i18n.invalid') || 0;
+                const placeholders = entry.byCode.get('ai-i18n.placeholders') || 0;
+                const style = entry.byCode.get('ai-i18n.style') || 0;
+                const rel = vscode.workspace.asRelativePath(entry.uri);
+                globalLines.push(
+                    `| ${rel} | ${entry.count} | ${missing} | ${invalid} | ${placeholders} | ${style} |`,
+                );
+            }
+
+            if (sortedFiles.length > maxFiles) {
+                globalLines.push('');
+                globalLines.push(
+                    `Showing top ${maxFiles} file(s) by issue count out of ${sortedFiles.length} total.`,
+                );
+            }
+
+            const content = globalLines.join('\n');
+            const doc = await vscode.workspace.openTextDocument({
+                language: 'markdown',
+                content,
+            } as any);
+            await vscode.window.showTextDocument(doc, { preview: false });
+        } catch (err) {
+            console.error('AI i18n: Failed to generate workspace health report:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to generate workspace health report.');
+        }
+    }
+
     /**
      * Translate all untranslated keys in a locale file using AI.
      */
@@ -398,7 +655,7 @@ export class UntranslatedCommands {
 
             // Find ALL keys in this file that need translation for this locale
             // This includes keys that exist in default locale but are missing/untranslated in this locale
-            const keysToTranslate: { key: string; defaultValue: string }[] = [];
+            const keysToTranslate: { key: string; defaultValue: string; defaultLocale: string }[] = [];
             const keysInFile = fileInfo?.keys || [];
 
             for (const key of keysInFile) {
@@ -418,7 +675,7 @@ export class UntranslatedCommands {
                     currentValue.trim() === defaultValue.trim();
 
                 if (needsTranslation) {
-                    keysToTranslate.push({ key, defaultValue });
+                    keysToTranslate.push({ key, defaultValue, defaultLocale });
                 }
             }
 
@@ -446,9 +703,8 @@ export class UntranslatedCommands {
                 return;
             }
 
-            // Translate in batches
+            // Translate in a single batched call per locale (with internal limits)
             let translatedCount = 0;
-            const batchSize = 10;
 
             await vscode.window.withProgress(
                 {
@@ -457,40 +713,48 @@ export class UntranslatedCommands {
                     cancellable: true,
                 },
                 async (progress, token) => {
-                    for (let i = 0; i < keysToTranslate.length; i += batchSize) {
-                        if (token.isCancellationRequested) break;
+                    if (token.isCancellationRequested) {
+                        return;
+                    }
 
-                        const batch = keysToTranslate.slice(i, i + batchSize);
-                        progress.report({
-                            message: `${i + 1}-${Math.min(i + batchSize, keysToTranslate.length)} of ${keysToTranslate.length}`,
-                            increment: (batch.length / keysToTranslate.length) * 100,
-                        });
+                    const batchItems = keysToTranslate.map((item) => ({
+                        id: item.key,
+                        text: item.defaultValue,
+                        defaultLocale: item.defaultLocale,
+                    }));
 
-                        for (const { key, defaultValue } of batch) {
-                            if (token.isCancellationRequested) break;
+                    const translations = await this.translationService.translateBatchToLocale(
+                        batchItems,
+                        targetLocale,
+                        'text',
+                        true,
+                    );
 
-                            try {
-                                const record = this.i18nIndex.getRecord(key);
-                                const defaultLocale = record?.defaultLocale || globalDefaultLocale;
+                    if (!translations || translations.size === 0 || token.isCancellationRequested) {
+                        return;
+                    }
 
-                                const translations = await this.translationService.translateToLocales(
-                                    defaultValue,
-                                    defaultLocale,
-                                    [targetLocale],
-                                    'text',
-                                    true,
-                                );
-
-                                if (translations && translations.size > 0) {
-                                    const newValue = translations.get(targetLocale);
-                                    if (newValue) {
-                                        await setTranslationValue(folder!, targetLocale, key, newValue);
-                                        translatedCount++;
-                                    }
-                                }
-                            } catch (err) {
-                                console.error(`AI i18n: Failed to translate key ${key}:`, err);
-                            }
+                    let processed = 0;
+                    for (const item of keysToTranslate) {
+                        if (token.isCancellationRequested) {
+                            break;
+                        }
+                        const newValue = translations.get(item.key);
+                        if (!newValue) {
+                            continue;
+                        }
+                        try {
+                            await setTranslationValue(folder!, targetLocale, item.key, newValue);
+                            translatedCount++;
+                        } catch (err) {
+                            console.error(`AI i18n: Failed to write translation for key ${item.key}:`, err);
+                        }
+                        processed += 1;
+                        if (processed % 10 === 0 || processed === keysToTranslate.length) {
+                            progress.report({
+                                message: `${processed} of ${keysToTranslate.length}`,
+                                increment: (processed / keysToTranslate.length) * 100,
+                            });
                         }
                     }
                 },
@@ -544,7 +808,10 @@ export class UntranslatedCommands {
             return;
         }
 
-        const missingPerLocale = new Map<string, { key: string; defaultValue: string }[]>();
+        const missingPerLocale = new Map<
+            string,
+            { key: string; defaultValue: string; defaultLocale: string }[]
+        >();
         const localeSet = new Set<string>();
 
         for (const diag of diagnostics) {
@@ -570,7 +837,7 @@ export class UntranslatedCommands {
                     list = [];
                     missingPerLocale.set(locale, list);
                 }
-                list.push({ key, defaultValue });
+                list.push({ key, defaultValue, defaultLocale });
             }
         }
 
@@ -583,7 +850,7 @@ export class UntranslatedCommands {
 
         const localeEntries = Array.from(missingPerLocale.entries());
         let selectedLocale: string;
-        let keysToTranslate: { key: string; defaultValue: string }[];
+        let keysToTranslate: { key: string; defaultValue: string; defaultLocale: string }[];
 
         if (localeEntries.length === 1) {
             [selectedLocale, keysToTranslate] = localeEntries[0];
@@ -634,7 +901,6 @@ export class UntranslatedCommands {
         }
 
         let translatedCount = 0;
-        const batchSize = 10;
 
         await vscode.window.withProgress(
             {
@@ -643,41 +909,48 @@ export class UntranslatedCommands {
                 cancellable: true,
             },
             async (progress, token) => {
-                for (let i = 0; i < keysToTranslate.length; i += batchSize) {
-                    if (token.isCancellationRequested) break;
+                if (token.isCancellationRequested) {
+                    return;
+                }
 
-                    const batch = keysToTranslate.slice(i, i + batchSize);
-                    progress.report({
-                        message: `${i + 1}-${Math.min(i + batchSize, keysToTranslate.length)} of ${keysToTranslate.length}`,
-                        increment: (batch.length / keysToTranslate.length) * 100,
-                    });
+                const batchItems = keysToTranslate.map((item) => ({
+                    id: item.key,
+                    text: item.defaultValue,
+                    defaultLocale: item.defaultLocale,
+                }));
 
-                    for (const { key, defaultValue } of batch) {
-                        if (token.isCancellationRequested) break;
+                const translations = await this.translationService.translateBatchToLocale(
+                    batchItems,
+                    selectedLocale,
+                    'text',
+                    true,
+                );
 
-                        try {
-                            const record = this.i18nIndex.getRecord(key);
-                            const defaultLocale = record?.defaultLocale || globalDefaultLocale;
+                if (!translations || translations.size === 0 || token.isCancellationRequested) {
+                    return;
+                }
 
-                            const translations =
-                                await this.translationService.translateToLocales(
-                                    defaultValue,
-                                    defaultLocale,
-                                    [selectedLocale],
-                                    'text',
-                                    true,
-                                );
-
-                            if (translations && translations.size > 0) {
-                                const newValue = translations.get(selectedLocale);
-                                if (newValue) {
-                                    await setTranslationValue(folder, selectedLocale, key, newValue);
-                                    translatedCount += 1;
-                                }
-                            }
-                        } catch (err) {
-                            console.error(`AI i18n: Failed to translate key ${key}:`, err);
-                        }
+                let processed = 0;
+                for (const item of keysToTranslate) {
+                    if (token.isCancellationRequested) {
+                        break;
+                    }
+                    const newValue = translations.get(item.key);
+                    if (!newValue) {
+                        continue;
+                    }
+                    try {
+                        await setTranslationValue(folder, selectedLocale, item.key, newValue);
+                        translatedCount += 1;
+                    } catch (err) {
+                        console.error(`AI i18n: Failed to write translation for key ${item.key}:`, err);
+                    }
+                    processed += 1;
+                    if (processed % 10 === 0 || processed === keysToTranslate.length) {
+                        progress.report({
+                            message: `${processed} of ${keysToTranslate.length}`,
+                            increment: (processed / keysToTranslate.length) * 100,
+                        });
                     }
                 }
             },
@@ -923,12 +1196,26 @@ export class UntranslatedCommands {
 
     private parseStyleDiagnostic(message: string): { key: string; locale: string; suggested: string } | null {
         if (!message) return null;
+
+        const newMatch = message.match(/^Style suggestion "(.+?)"\s*\[([A-Za-z0-9_-]+)\]\s*\(([^)]*)\)/);
+        if (newMatch) {
+            const key = newMatch[1].trim();
+            const locale = newMatch[2].trim();
+            const details = newMatch[3] || '';
+            const sugMatch = details.match(/suggested:\s*([^|)]+)/i);
+            const suggested = sugMatch ? sugMatch[1].trim() : '';
+            if (!key || !locale || !suggested) return null;
+            return { key, locale, suggested };
+        }
+
         const clean = String(message).replace(/^AI i18n:\s*/, '');
-        const m = clean.match(/^Style suggestion for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)\s*\(([^)]*)\)/);
-        if (!m) return null;
-        const key = m[1].trim();
-        const locale = m[2].trim();
-        const details = m[3] || '';
+        const legacyMatch = clean.match(
+            /^Style suggestion for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)\s*\(([^)]*)\)/,
+        );
+        if (!legacyMatch) return null;
+        const key = legacyMatch[1].trim();
+        const locale = legacyMatch[2].trim();
+        const details = legacyMatch[3] || '';
         const sugMatch = details.match(/suggested:\s*([^|)]+)/i);
         const suggested = sugMatch ? sugMatch[1].trim() : '';
         if (!key || !locale || !suggested) return null;
@@ -1032,6 +1319,67 @@ export class UntranslatedCommands {
         } catch (err) {
             console.error('AI i18n: Failed to apply all style suggestions:', err);
             vscode.window.showErrorMessage('AI i18n: Failed to apply all style suggestions for file.');
+        }
+    }
+
+    async fixAllIssuesInFile(documentUri?: vscode.Uri): Promise<void> {
+        try {
+            const targetUri = documentUri || vscode.window.activeTextEditor?.document.uri;
+            if (!targetUri) {
+                vscode.window.showInformationMessage(
+                    'AI i18n: No active document to fix i18n issues.',
+                );
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(targetUri);
+            if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                vscode.window.showInformationMessage(
+                    'AI i18n: Fix-all only applies to locale JSON files.',
+                );
+                return;
+            }
+
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: 'Run all per-file fixes',
+                        description:
+                            'Bulk-translate, cleanup unused keys, remove invalid keys, and apply style suggestions (each step will confirm).',
+                    },
+                    {
+                        label: 'Cancel',
+                        description: 'Do not change this file.',
+                    },
+                ],
+                {
+                    placeHolder:
+                        'AI i18n: Run all per-file i18n fixes for this locale file?',
+                },
+            );
+            if (!choice || choice.label !== 'Run all per-file fixes') {
+                return;
+            }
+
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.translateAllUntranslatedInFile',
+                targetUri,
+            );
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.cleanupUnusedKeysInFile',
+                targetUri,
+            );
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.restoreInvalidKeysInFile',
+                targetUri,
+            );
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.applyAllStyleSuggestionsInFile',
+                targetUri,
+            );
+        } catch (err) {
+            console.error('AI i18n: Failed to run all per-file fixes for file:', err);
+            vscode.window.showErrorMessage('AI i18n: Failed to run all per-file fixes for file.');
         }
     }
 

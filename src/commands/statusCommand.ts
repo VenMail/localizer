@@ -46,6 +46,11 @@ export class StatusCommand {
                 description: 'Rebuild translation index',
                 action: 'rescan',
             },
+            {
+                label: '$(pulse) Show Workspace i18n Health Report',
+                description: 'View a summary of i18n diagnostics across the workspace',
+                action: 'showHealthReport',
+            },
         ];
 
         // Context-aware actions for current file
@@ -68,6 +73,37 @@ export class StatusCommand {
         const isCode = lang === 'javascript' || lang === 'typescript' || lang === 'javascriptreact' || lang === 'typescriptreact' || lang === 'vue';
         const isBlade = lang === 'blade' || lang === 'php';
 
+        const isJson = lang === 'json' || lang === 'jsonc';
+
+        if (isJson && editor) {
+            items.unshift({
+                label: 'Apply all style suggestions in this file',
+                description: 'Apply all AI i18n style suggestions in the current locale JSON file',
+                action: 'applyAllStyleSuggestionsInFile',
+            });
+            items.unshift({
+                label: 'Remove invalid/non-translatable keys in this locale file',
+                description: 'Remove invalid or non-translatable keys from this locale JSON file (from report)',
+                action: 'removeInvalidLocaleFile',
+            });
+            items.unshift({
+                label: 'Cleanup unused keys in this locale file',
+                description: 'Remove unused keys in this locale JSON file (from unused keys report)',
+                action: 'cleanupUnusedLocaleFile',
+            });
+            items.unshift({
+                label: 'Bulk-translate untranslated keys in this locale file',
+                description: 'Use AI to translate all missing/untranslated keys in this locale JSON file',
+                action: 'bulkTranslateLocaleFile',
+            });
+            items.unshift({
+                label: 'Fix all i18n issues in this locale file',
+                description:
+                    'Run bulk-translate, cleanup unused keys, remove invalid keys, and apply all style suggestions (each step will confirm).',
+                action: 'fixAllIssuesLocaleFile',
+            });
+        }
+
         if (isCode) {
             items.unshift({ label: '$(edit) Run Rewrite (JS/TS/Vue)', action: 'runRewrite' });
             items.unshift({ label: '$(search) Run Extract (JS/TS/Vue)', action: 'runExtract' });
@@ -76,6 +112,12 @@ export class StatusCommand {
             items.unshift({ label: '$(symbol-keyword) Run Blade Rewrite', action: 'runRewriteBlade' });
         }
         if (selectionHasText && (isCode || isBlade)) {
+            items.unshift({
+                label: 'Review i18n issues for selection (AI-translate missing)',
+                description:
+                    'Analyze i18n keys in the current selection and AI-translate missing/untranslated locales.',
+                action: 'reviewSelection',
+            });
             items.unshift({ label: '$(quote) Convert Selection to Translation Key', action: 'convertSelection' });
         }
 
@@ -125,6 +167,9 @@ export class StatusCommand {
             case 'rescan':
                 await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
                 break;
+            case 'showHealthReport':
+                await vscode.commands.executeCommand('ai-localizer.i18n.showHealthReport');
+                break;
             case 'runExtract':
                 await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');
                 break;
@@ -136,6 +181,51 @@ export class StatusCommand {
                 break;
             case 'convertSelection':
                 await vscode.commands.executeCommand('ai-localizer.i18n.convertSelectionToKey');
+                break;
+            case 'reviewSelection':
+                if (editor) {
+                    await vscode.commands.executeCommand('ai-localizer.i18n.reviewSelection');
+                }
+                break;
+            case 'fixAllIssuesLocaleFile':
+                if (editor) {
+                    await vscode.commands.executeCommand(
+                        'ai-localizer.i18n.fixAllIssuesInFile',
+                        editor.document.uri,
+                    );
+                }
+                break;
+            case 'bulkTranslateLocaleFile':
+                if (editor) {
+                    await vscode.commands.executeCommand(
+                        'ai-localizer.i18n.translateAllUntranslatedInFile',
+                        editor.document.uri,
+                    );
+                }
+                break;
+            case 'cleanupUnusedLocaleFile':
+                if (editor) {
+                    await vscode.commands.executeCommand(
+                        'ai-localizer.i18n.cleanupUnusedKeysInFile',
+                        editor.document.uri,
+                    );
+                }
+                break;
+            case 'removeInvalidLocaleFile':
+                if (editor) {
+                    await vscode.commands.executeCommand(
+                        'ai-localizer.i18n.restoreInvalidKeysInFile',
+                        editor.document.uri,
+                    );
+                }
+                break;
+            case 'applyAllStyleSuggestionsInFile':
+                if (editor) {
+                    await vscode.commands.executeCommand(
+                        'ai-localizer.i18n.applyAllStyleSuggestionsInFile',
+                        editor.document.uri,
+                    );
+                }
                 break;
         }
     }

@@ -720,17 +720,56 @@ export class ConvertSelectionCommand {
         try {
             const cfg = vscode.workspace.getConfiguration('ai-localizer');
             const autoSync = cfg.get<boolean>('i18n.autoSync');
-            if (autoSync === false) {
-                return;
-            }
-
             const projectConfig = await this.projectConfigService.readConfig(folder);
             const hasSyncScript = !!projectConfig?.scripts?.['i18n:sync'];
             if (!hasSyncScript) {
                 return;
             }
 
-            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
+            const workspaceKey = `ai-i18n:autoSyncConfirmed:${folder.uri.fsPath}`;
+            const confirmed = this.context.workspaceState.get<boolean>(workspaceKey);
+
+            if (autoSync === false) {
+                return;
+            }
+
+            if (autoSync === true && confirmed) {
+                await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
+                return;
+            }
+
+            const choice = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: 'Run i18n:sync automatically after conversions',
+                        description: 'Keep locale JSON files in sync using the i18n:sync script',
+                    },
+                    {
+                        label: 'Do not auto-sync (I will run i18n:sync manually)',
+                        description: 'Disable automatic sync for this workspace',
+                    },
+                ],
+                {
+                    placeHolder: 'AI i18n: Run i18n:sync after applying translations?',
+                },
+            );
+
+            if (!choice) {
+                return;
+            }
+
+            if (choice.label === 'Run i18n:sync automatically after conversions') {
+                await cfg.update('i18n.autoSync', true, vscode.ConfigurationTarget.Workspace);
+                await this.context.workspaceState.update(workspaceKey, true);
+                await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
+                return;
+            }
+
+            if (choice.label === 'Do not auto-sync (I will run i18n:sync manually)') {
+                await cfg.update('i18n.autoSync', false, vscode.ConfigurationTarget.Workspace);
+                await this.context.workspaceState.update(workspaceKey, true);
+                return;
+            }
         } catch (err) {
             console.error('AI i18n: Failed to run i18n:sync after applying translations:', err);
         }

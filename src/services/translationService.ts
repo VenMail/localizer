@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import OpenAI from 'openai';
 
+const DEFAULT_MAX_BATCH_ITEMS = Number(process.env.AI_I18N_MAX_BATCH_ITEMS || 50);
+const DEFAULT_MAX_BATCH_CHARS = Number(process.env.AI_I18N_MAX_BATCH_CHARS || 8000);
+
 /**
  * Service for handling AI-powered translations
  */
@@ -9,6 +12,71 @@ export class TranslationService {
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
+    }
+
+    private getOpenAiModel(config?: vscode.WorkspaceConfiguration): string {
+        const cfg = config || vscode.workspace.getConfiguration('ai-localizer');
+        const raw = (cfg.get<string>('openaiModel') || '').trim();
+
+        if (!raw || raw.toLowerCase() === 'auto') {
+            // Default to gpt-5-nano when not explicitly specified
+            return 'gpt-4o-mini';
+        }
+
+        return raw;
+    }
+
+    private getBatchLimits(config?: vscode.WorkspaceConfiguration): {
+        maxItems: number;
+        maxChars: number;
+    } {
+        const cfg = config || vscode.workspace.getConfiguration('ai-localizer');
+        const model = this.getOpenAiModel(cfg).toLowerCase();
+
+        const userMaxItems = cfg.get<number>('openaiMaxBatchItems');
+        const userMaxChars = cfg.get<number>('openaiMaxBatchChars');
+
+        let maxItems: number;
+        let maxChars: number;
+
+        if (Number.isFinite(userMaxItems) && (userMaxItems as number) > 0) {
+            maxItems = userMaxItems as number;
+        } else if (model.includes('nano')) {
+            maxItems = DEFAULT_MAX_BATCH_ITEMS;
+        } else if (model.includes('mini')) {
+            maxItems = Math.max(DEFAULT_MAX_BATCH_ITEMS, 60);
+        } else {
+            maxItems = Math.max(DEFAULT_MAX_BATCH_ITEMS, 80);
+        }
+
+        if (Number.isFinite(userMaxChars) && (userMaxChars as number) > 0) {
+            maxChars = userMaxChars as number;
+        } else if (model.includes('nano')) {
+            maxChars = DEFAULT_MAX_BATCH_CHARS;
+        } else if (model.includes('mini')) {
+            maxChars = Math.max(DEFAULT_MAX_BATCH_CHARS, 12000);
+        } else {
+            maxChars = Math.max(DEFAULT_MAX_BATCH_CHARS, 16000);
+        }
+
+        if (!Number.isFinite(maxChars) || maxChars <= 0) {
+            maxChars = DEFAULT_MAX_BATCH_CHARS;
+        }
+
+        return { maxItems, maxChars };
+    }
+
+    private getBatchOutputMode(): 'json' | 'lines' {
+        const stored = this.context.globalState.get<string>('ai-i18n.batchOutputMode');
+        return stored === 'lines' ? 'lines' : 'json';
+    }
+
+    private async setBatchOutputMode(mode: 'json' | 'lines'): Promise<void> {
+        try {
+            await this.context.globalState.update('ai-i18n.batchOutputMode', mode);
+        } catch (err) {
+            console.error('AI i18n: Failed to persist batch output mode preference:', err);
+        }
     }
 
     /**
@@ -60,7 +128,7 @@ export class TranslationService {
             return result;
         }
 
-        const model = config.get<string>('openaiModel') || 'gpt-4o-mini';
+        const model = this.getOpenAiModel(config);
         const client = new OpenAI({ apiKey });
 
         const tasks = targetLocales.map(async (locale) => {
@@ -104,6 +172,247 @@ export class TranslationService {
         return result;
     }
 
+    async translateBatchToLocale(
+        items: { id: string; text: string; defaultLocale: string }[],
+        targetLocale: string,
+        context: string = 'text',
+        force: boolean = false,
+    ): Promise<Map<string, string>> {
+        const result = new Map<string, string>();
+        if (!items.length || !targetLocale) {
+            return result;
+        }
+
+        const config = vscode.workspace.getConfiguration('ai-localizer');
+        const autoTranslate = config.get<boolean>('i18n.autoTranslate');
+        if (!autoTranslate && !force) {
+            return result;
+        }
+
+        const apiKey = await this.getApiKey();
+        if (!apiKey) {
+            console.warn('AI i18n: No API key configured for auto-translation');
+            return result;
+        }
+
+        const model = this.getOpenAiModel(config);
+        const client = new OpenAI({ apiKey });
+
+        const { maxItems, maxChars } = this.getBatchLimits(config);
+
+        const batches: { id: string; text: string; defaultLocale: string }[][] = [];
+        let currentBatch: { id: string; text: string; defaultLocale: string }[] = [];
+        let currentChars = 0;
+
+        for (const item of items) {
+            const text = item.text || '';
+            const length = text.length;
+            if (
+                currentBatch.length >= maxItems ||
+                (currentBatch.length > 0 && currentChars + length > maxChars)
+            ) {
+                batches.push(currentBatch);
+                currentBatch = [];
+                currentChars = 0;
+            }
+            currentBatch.push(item);
+            currentChars += length;
+        }
+        if (currentBatch.length > 0) {
+            batches.push(currentBatch);
+        }
+
+        const preferredMode = this.getBatchOutputMode();
+
+        const runJsonMode = async (
+            batch: { id: string; text: string; defaultLocale: string }[],
+        ): Promise<boolean> => {
+            let added = false;
+            try {
+                const payload = {
+                    targetLocale,
+                    context,
+                    items: batch.map((it) => ({
+                        id: it.id,
+                        text: it.text,
+                        defaultLocale: it.defaultLocale,
+                    })),
+                };
+
+                const userContent = [
+                    'Translate the following items from their defaultLocale to the target locale.',
+                    `Target locale: ${targetLocale}`,
+                    `Context: ${context}`,
+                    '',
+                    'Return ONLY valid JSON with this shape:',
+                    '{ "translations": [ { "id": "string", "translated": "string" } ] }',
+                    '',
+                    'Items:',
+                    JSON.stringify(payload, null, 2),
+                ].join('\n');
+
+                const completion = await client.chat.completions.create({
+                    model,
+                    temperature: 0.2,
+                    messages: [
+                        {
+                            role: 'system',
+                            content:
+                                'You are a localization assistant for application UI. Translate short UI text, preserving placeholders like {name} or {{ variable }}. Respond with strict JSON only.',
+                        },
+                        {
+                            role: 'user',
+                            content: userContent,
+                        },
+                    ],
+                });
+
+                const content = completion.choices[0]?.message?.content || '';
+                let parsed: any;
+                try {
+                    parsed = JSON.parse(content);
+                } catch (err) {
+                    console.error(
+                        'AI i18n: Failed to parse batch translation JSON response (JSON mode):',
+                        err,
+                    );
+                    return false;
+                }
+
+                const translations = Array.isArray(parsed?.translations)
+                    ? parsed.translations
+                    : [];
+                for (const entry of translations) {
+                    if (!entry) {
+                        continue;
+                    }
+                    const id = typeof entry.id === 'string' ? entry.id : '';
+                    const translatedRaw =
+                        typeof entry.translated === 'string' ? entry.translated : '';
+                    const translated = translatedRaw.trim();
+                    if (id && translated) {
+                        result.set(id, translated);
+                        added = true;
+                    }
+                }
+            } catch (err) {
+                console.error('AI i18n: Failed to get batch AI translations (JSON mode):', err);
+            }
+            return added;
+        };
+
+        const runLineMode = async (
+            batch: { id: string; text: string; defaultLocale: string }[],
+        ): Promise<boolean> => {
+            let added = false;
+            try {
+                const payload = {
+                    targetLocale,
+                    context,
+                    items: batch.map((it) => ({
+                        id: it.id,
+                        text: it.text,
+                        defaultLocale: it.defaultLocale,
+                    })),
+                };
+
+                const userContent = [
+                    'Translate the following items from their defaultLocale to the target locale.',
+                    `Target locale: ${targetLocale}`,
+                    `Context: ${context}`,
+                    '',
+                    'Return one line per item in this exact format:',
+                    '<id>\t<translated text>',
+                    'Do not include a header line or any extra commentary.',
+                    '',
+                    'Items:',
+                    JSON.stringify(payload, null, 2),
+                ].join('\n');
+
+                const completion = await client.chat.completions.create({
+                    model,
+                    temperature: 0.2,
+                    messages: [
+                        {
+                            role: 'system',
+                            content:
+                                'You are a localization assistant for application UI. Translate short UI text, preserving placeholders like {name} or {{ variable }}. Respond with plain lines only, no JSON or code fences.',
+                        },
+                        {
+                            role: 'user',
+                            content: userContent,
+                        },
+                    ],
+                });
+
+                const content = completion.choices[0]?.message?.content || '';
+                const lines = content
+                    .split(/\r?\n/)
+                    .map((l) => l.trim())
+                    .filter((l) => l && !l.startsWith('```'));
+
+                for (const line of lines) {
+                    const idx = line.indexOf('\t');
+                    if (idx <= 0) {
+                        continue;
+                    }
+                    const id = line.slice(0, idx).trim();
+                    const translated = line.slice(idx + 1).trim();
+                    if (id && translated) {
+                        result.set(id, translated);
+                        added = true;
+                    }
+                }
+            } catch (err) {
+                console.error('AI i18n: Failed to get batch AI translations (line mode):', err);
+            }
+            return added;
+        };
+
+        for (const batch of batches) {
+            if (preferredMode === 'lines') {
+                const usedLines = await runLineMode(batch);
+                if (!usedLines) {
+                    const usedJson = await runJsonMode(batch);
+                    if (usedJson) {
+                        await this.setBatchOutputMode('json');
+                    }
+                }
+            } else {
+                const usedJson = await runJsonMode(batch);
+                if (!usedJson) {
+                    const usedLines = await runLineMode(batch);
+                    if (usedLines) {
+                        await this.setBatchOutputMode('lines');
+                    }
+                }
+            }
+        }
+
+        const remaining = items.filter((item) => !result.has(item.id));
+        if (remaining.length) {
+            for (const item of remaining) {
+                try {
+                    const single = await this.translateToLocales(
+                        item.text,
+                        item.defaultLocale,
+                        [targetLocale],
+                        context,
+                        force,
+                    );
+                    const v = single.get(targetLocale);
+                    if (v && v.trim()) {
+                        result.set(item.id, v.trim());
+                    }
+                } catch (err) {
+                    console.error(`AI i18n: Fallback translation failed for key ${item.id}:`, err);
+                }
+            }
+        }
+
+        return result;
+    }
+
     /**
      * Get AI suggestions for fixing untranslated strings
      */
@@ -117,7 +426,7 @@ export class TranslationService {
         }
 
         const config = vscode.workspace.getConfiguration('ai-localizer');
-        const model = config.get<string>('openaiModel') || 'gpt-4o-mini';
+        const model = this.getOpenAiModel(config);
         const client = new OpenAI({ apiKey });
 
         const aiInstructions =
@@ -182,7 +491,7 @@ export class TranslationService {
         }
 
         const config = vscode.workspace.getConfiguration('ai-localizer');
-        const model = config.get<string>('openaiModel') || 'gpt-4o-mini';
+        const model = this.getOpenAiModel(config);
         const client = new OpenAI({ apiKey });
 
         const completion = await client.chat.completions.create({

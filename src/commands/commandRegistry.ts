@@ -142,8 +142,14 @@ export class CommandRegistry {
                 (documentUri: vscode.Uri, key: string, locales: string[]) =>
                     untranslatedCmds.applyQuickFix(documentUri, key, locales),
             ),
+            vscode.commands.registerCommand('ai-localizer.i18n.reviewSelection', () =>
+                untranslatedCmds.reviewSelection(),
+            ),
             vscode.commands.registerCommand('ai-localizer.i18n.generateAutoIgnore', () =>
                 untranslatedCmds.generateAutoIgnore(),
+            ),
+            vscode.commands.registerCommand('ai-localizer.i18n.showHealthReport', () =>
+                untranslatedCmds.showHealthReport(),
             ),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.applyStyleSuggestionQuickFix',
@@ -153,6 +159,10 @@ export class CommandRegistry {
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.applyAllStyleSuggestionsInFile',
                 (documentUri?: vscode.Uri) => untranslatedCmds.applyAllStyleSuggestionsInFile(documentUri),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.fixAllIssuesInFile',
+                (documentUri?: vscode.Uri) => untranslatedCmds.fixAllIssuesInFile(documentUri),
             ),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.cleanupUnusedKeysInFile',

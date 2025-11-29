@@ -44,6 +44,8 @@ export class DiagnosticAnalyzer {
         forcedLocales?: string[],
     ): Promise<vscode.Diagnostic[]> {
         const fileKey = uri.toString();
+        // Invalidate cached text/range data so we always analyze the latest version
+        this.fileTextCache.delete(fileKey);
         this.log.appendLine(`[DiagnosticAnalyzer] Analyzing file: ${uri.fsPath}`);
 
         // Get keys contributed by this file
@@ -102,7 +104,9 @@ export class DiagnosticAnalyzer {
                 record.locales.get(defaultLocaleGlobal);
             const hasDefaultValue = typeof defaultValueRaw === 'string' && !!defaultValueRaw.trim();
             const defaultValue = hasDefaultValue ? (defaultValueRaw as string) : '';
-            const defaultPlaceholders = hasDefaultValue ? this.extractPlaceholders(defaultValue) : new Set<string>();
+            const defaultPlaceholders = hasDefaultValue
+                ? this.extractPlaceholders(defaultValue)
+                : new Set<string>();
 
             const isConstantLikeAcrossLocales = this.isProbablyConstantAcrossLocales(
                 record,
@@ -110,6 +114,12 @@ export class DiagnosticAnalyzer {
                 defaultValue,
             );
 
+            // Base value flags:
+            // - baseLooksNonTranslatable: clearly technical / CSS / code, should not be translated
+            // - baseIsIgnored: user-configured ignore pattern (suppress untranslated/missing diagnostics)
+            const baseLooksNonTranslatable =
+                hasDefaultValue && this.isProbablyNonTranslatable(defaultValue);
+            const baseIsIgnored = hasDefaultValue && this.isIgnoredText(defaultValue);
 
             this.log.appendLine(
                 `[DiagnosticAnalyzer] Checking key '${key}' (default='${defaultLocaleForKey}') in file '${uri.fsPath}' (fileLocale='${fileLocale}')`,
@@ -117,20 +127,17 @@ export class DiagnosticAnalyzer {
 
             // Emit a dedicated diagnostic when the default-locale value itself looks invalid/non-translatable.
             // This runs only when analyzing the default-locale file for this key so Problems entries are stable.
-            if (fileLocale === defaultLocaleForKey && hasDefaultValue) {
-                const looksInvalid =
-                    this.isIgnoredText(defaultValue) ||
-                    this.isProbablyNonTranslatable(defaultValue);
-                if (looksInvalid) {
-                    const range = await this.getKeyRangeInFile(uri, key);
-                    const invalidDiag = new vscode.Diagnostic(
-                        range,
-                        `Invalid/non-translatable value "${key}" [${defaultLocaleForKey}]`,
-                        config.invalidSeverity,
-                    );
-                    invalidDiag.code = 'ai-i18n.invalid';
-                    diagnostics.push(invalidDiag);
-                }
+            // NOTE: we only use heuristic detection here; user ignore patterns (baseIsIgnored) do NOT trigger
+            // an invalid diagnostic, they simply suppress untranslated/missing diagnostics.
+            if (fileLocale === defaultLocaleForKey && baseLooksNonTranslatable) {
+                const range = await this.getKeyRangeInFile(uri, key);
+                const invalidDiag = new vscode.Diagnostic(
+                    range,
+                    `Invalid/non-translatable value "${key}" [${defaultLocaleForKey}]`,
+                    config.invalidSeverity,
+                );
+                invalidDiag.code = 'ai-i18n.invalid';
+                diagnostics.push(invalidDiag);
             }
 
             // Check all locales for this key
@@ -182,6 +189,7 @@ export class DiagnosticAnalyzer {
                     defaultPlaceholders,
                     config,
                     isConstantLikeAcrossLocales,
+                    baseIsIgnored || baseLooksNonTranslatable,
                 );
 
                 for (const issue of issues) {
@@ -425,6 +433,10 @@ export class DiagnosticAnalyzer {
             return true;
         }
 
+        if (this.isCssUtilityString(normalized)) {
+            return true;
+        }
+
         // UUID-like strings
         if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
             return true;
@@ -490,6 +502,47 @@ export class DiagnosticAnalyzer {
         return cssLikeTokens.length === tokens.length;
     }
 
+    private isCssUtilityString(text: string): boolean {
+        const withoutPlaceholders = text
+            .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
+            .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
+        const tokens = withoutPlaceholders.split(/\s+/).filter(Boolean);
+        if (tokens.length < 3) {
+            return false;
+        }
+
+        const cssKeywords = new Set([
+            'absolute',
+            'relative',
+            'fixed',
+            'sticky',
+            'static',
+            'transform',
+            'inline',
+            'block',
+            'flex',
+            'grid',
+        ]);
+
+        let cssLikeCount = 0;
+        for (const token of tokens) {
+            const lower = token.toLowerCase();
+            if (cssKeywords.has(lower)) {
+                cssLikeCount += 1;
+                continue;
+            }
+            if (/^-?[a-z][a-z0-9]*(?:-[a-z0-9/:%]+)+$/.test(lower)) {
+                cssLikeCount += 1;
+                continue;
+            }
+            if (/^[a-z]+[0-9]+$/.test(lower)) {
+                cssLikeCount += 1;
+            }
+        }
+
+        return cssLikeCount >= 3 && cssLikeCount / tokens.length >= 0.6;
+    }
+
     private isProbablyConstantAcrossLocales(
         record: TranslationRecord,
         defaultLocale: string,
@@ -540,16 +593,19 @@ export class DiagnosticAnalyzer {
         defaultPlaceholders: Set<string>,
         config: DiagnosticConfig,
         isConstantLikeAcrossLocales: boolean,
+        isBaseNonTranslatable: boolean,
     ): Array<{ message: string; severity: vscode.DiagnosticSeverity; code: string }> {
         const issues: Array<{ message: string; severity: vscode.DiagnosticSeverity; code: string }> = [];
 
         // Check for missing translation
         if (!value || !value.trim()) {
-            issues.push({
-                message: `Missing translation for "${key}" [${locale}]`,
-                severity: config.missingSeverity,
-                code: 'ai-i18n.untranslated',
-            });
+            if (!isBaseNonTranslatable) {
+                issues.push({
+                    message: `Missing translation for "${key}" [${locale}]`,
+                    severity: config.missingSeverity,
+                    code: 'ai-i18n.untranslated',
+                });
+            }
             return issues; // No point checking placeholders if value is missing
         }
 
@@ -557,8 +613,7 @@ export class DiagnosticAnalyzer {
         if (config.untranslatedEnabled && value === defaultValue) {
             const ignore =
                 isConstantLikeAcrossLocales ||
-                this.isIgnoredText(defaultValue) ||
-                this.isProbablyNonTranslatable(defaultValue);
+                isBaseNonTranslatable;
             if (!ignore) {
                 issues.push({
                     message: `Untranslated (same as default) "${key}" [${locale}]`,
