@@ -734,6 +734,26 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                     };
                     actions.push(action);
                 }
+
+                await this.i18nIndex.ensureInitialized();
+                const record = this.i18nIndex.getRecord(keyInfo.key);
+                if (!record) {
+                    const title = 'AI Localizer: Fix reference';
+                    const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                    if (!hasInvalid) {
+                        action.isPreferred = true;
+                    }
+                    action.command = {
+                        title,
+                        command: 'ai-localizer.i18n.fixMissingKeyReference',
+                        arguments: [
+                            document.uri,
+                            { line: keyInfo.range.start.line, character: keyInfo.range.start.character },
+                            keyInfo.key,
+                        ],
+                    };
+                    actions.push(action);
+                }
             }
         }
 

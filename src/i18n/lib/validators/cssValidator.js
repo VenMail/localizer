@@ -185,6 +185,10 @@ function isCssContent(text) {
     return true;
   }
   
+  if (/\{[^}]*:[^;]+;[^}]*\}/.test(trimmed)) {
+    return true;
+  }
+
   // Check for multiple CSS declarations (inline styles)
   if (/^([a-z-]+\s*:\s*[^;]+;\s*)+$/i.test(trimmed)) {
     return true;

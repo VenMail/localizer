@@ -43,6 +43,7 @@ export class CommandRegistry {
             const { ScriptCommands } = require('./scriptCommands');
             const { UntranslatedCommands } = require('./untranslatedCommands');
             const { ComponentCommands } = require('./componentCommands');
+            const { ScaffoldMessagesCommand } = require('./scaffoldMessagesCommand');
 
             const untranslatedDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-untranslated');
             disposables.push(untranslatedDiagnostics);
@@ -219,6 +220,22 @@ export class CommandRegistry {
                             progress.report({ message: 'Rewriting source code to use t() calls (i18n:rewrite)...' });
                             await scriptCmds.runRewrite();
 
+                            try {
+                                const foldersForEnv = vscode.workspace.workspaceFolders || [];
+                                const primaryFolder = foldersForEnv[0];
+                                if (primaryFolder) {
+                                    const projectEnvModule = require('../core/projectEnv') as typeof import('../core/projectEnv');
+                                    const env = await projectEnvModule.getProjectEnv(primaryFolder);
+                                    if (env.bundler === 'vite') {
+                                        progress.report({ message: 'Scaffolding Vite messages loader (auto/**/*.json)...' });
+                                        await vscode.commands.executeCommand('ai-localizer.i18n.scaffoldMessagesLoader');
+                                    }
+                                }
+                            } catch (scaffoldErr) {
+                                const msg = scaffoldErr instanceof Error ? scaffoldErr.message : String(scaffoldErr);
+                                this.log.appendLine(`[FirstTimeSetup] Failed to scaffold messages loader: ${msg}`);
+                            }
+
                             progress.report({ message: 'Building translation index and diagnostics...' });
                             await this.i18nIndex.ensureInitialized(true);
                             const keyCount = this.i18nIndex.getAllKeys().length;
@@ -351,6 +368,11 @@ export class CommandRegistry {
                     untranslatedCmds.restoreInvalidKeyInCode(documentUri, position, key),
             ),
             vscode.commands.registerCommand(
+                'ai-localizer.i18n.fixMissingKeyReference',
+                (documentUri: vscode.Uri, position: { line: number; character: number }, key: string) =>
+                    untranslatedCmds.fixMissingKeyReference(documentUri, position, key),
+            ),
+            vscode.commands.registerCommand(
                 'ai-localizer.i18n.addKeyToIgnoreList',
                 (folderUri: vscode.Uri, key: string) =>
                     untranslatedCmds.addKeyToIgnoreList(folderUri, key),
@@ -402,12 +424,16 @@ export class CommandRegistry {
 
         // Component commands
         const componentCmds = new ComponentCommands(this.context, this.fileSystemService);
+        const scaffoldMessagesCmd = new ScaffoldMessagesCommand(this.context);
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.openRootApp', () =>
                 componentCmds.openRootApp(),
             ),
             vscode.commands.registerCommand('ai-localizer.i18n.copyLanguageSwitcher', () =>
                 componentCmds.copyLanguageSwitcher(),
+            ),
+            vscode.commands.registerCommand('ai-localizer.i18n.scaffoldMessagesLoader', () =>
+                scaffoldMessagesCmd.execute(),
             ),
         );
 
@@ -554,6 +580,7 @@ export class CommandRegistry {
     private async refreshAllDiagnostics(
         collection: vscode.DiagnosticCollection,
     ): Promise<void> {
+        this.diagnosticAnalyzer.resetCaches();
         await this.i18nIndex.ensureInitialized();
 
         const config = getDiagnosticConfig();

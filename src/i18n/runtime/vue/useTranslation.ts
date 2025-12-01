@@ -1,5 +1,5 @@
 import { computed } from 'vue';
-import { t, setLocale, currentLocale } from '@/i18n';
+import { t, setLocale, currentLocale } from '../i18n';
 
 export function useTranslation() {
   return {

@@ -100,7 +100,39 @@ function parseVueTemplate(template, options = {}) {
   function processTextContent(text, parentTag) {
     if (!text) return;
     
-    // Remove mustache expressions for validation
+    // First, look inside Vue mustache expressions for string literals that
+    // should be translated.
+    try {
+      const mustacheRegex = /\{\{([^}]+)\}\}/g;
+      let mustacheMatch;
+      while ((mustacheMatch = mustacheRegex.exec(text)) !== null) {
+        const expr = (mustacheMatch[1] || '').trim();
+        if (!expr) continue;
+
+        const stringRegex = /(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\1/g;
+        let strMatch;
+        while ((strMatch = stringRegex.exec(expr)) !== null) {
+          const candidate = (strMatch[2] || '').trim();
+          if (!candidate) continue;
+
+          if (!shouldTranslate(candidate, { ignorePatterns })) {
+            continue;
+          }
+
+          const kind = inferKindFromTag(parentTag);
+          results.push({
+            type: 'text',
+            text: candidate,
+            kind,
+            parentTag,
+          });
+        }
+      }
+    } catch {
+      // Best-effort extraction; ignore mustache parsing errors.
+    }
+
+    // Now handle any plain text outside of mustache expressions.
     let cleanText = text
       .replace(/\{\{[^}]+\}\}/g, '')  // Remove {{ expr }}
       .replace(/\s+/g, ' ')

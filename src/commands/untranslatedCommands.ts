@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { I18nIndex } from '../core/i18nIndex';
+import { I18nIndex, extractKeyAtPosition } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
 import { setTranslationValue, setTranslationValueInFile } from '../core/i18nFs';
@@ -101,6 +101,48 @@ export class UntranslatedCommands {
         return deleted;
     }
 
+    private computeEditDistance(a: string, b: string): number {
+        const m = a.length;
+        const n = b.length;
+        if (!m) return n;
+        if (!n) return m;
+        const dp: number[] = [];
+        for (let j = 0; j <= n; j += 1) dp[j] = j;
+        for (let i = 1; i <= m; i += 1) {
+            let prev = dp[0];
+            dp[0] = i;
+            for (let j = 1; j <= n; j += 1) {
+                const temp = dp[j];
+                if (a[i - 1] === b[j - 1]) {
+                    dp[j] = prev;
+                } else {
+                    const add = dp[j - 1] + 1;
+                    const del = dp[j] + 1;
+                    const sub = prev + 1;
+                    dp[j] = add < del ? (add < sub ? add : sub) : del < sub ? del : sub;
+                }
+                prev = temp;
+            }
+        }
+        return dp[n];
+    }
+
+    private buildLabelFromKeySegment(segment: string): string {
+        if (!segment) return '';
+        const replaced = segment.replace(/[_\-]+/g, ' ');
+        const parts = replaced.split(/\s+/).filter(Boolean);
+        if (!parts.length) return '';
+        return parts
+            .map((p, index) => {
+                const lower = p.toLowerCase();
+                if (index === 0) {
+                    return lower.charAt(0).toUpperCase() + lower.slice(1);
+                }
+                return lower;
+            })
+            .join(' ');
+    }
+
     private async setMultipleInFile(fileUri: vscode.Uri, updates: Map<string, string>): Promise<void> {
         const decoder = new TextDecoder('utf-8');
         const encoder = new TextEncoder();
@@ -138,6 +180,178 @@ export class UntranslatedCommands {
 
         const payload = `${JSON.stringify(root, null, 2)}\n`;
         await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
+    }
+
+    private async pruneUntranslatedReports(
+        folder: vscode.WorkspaceFolder,
+        fixed: Array<{ locale: string; keyPath: string }>,
+    ): Promise<void> {
+        if (!fixed.length) {
+            return;
+        }
+
+        const keySet = new Set<string>();
+        for (const item of fixed) {
+            if (!item || !item.locale || !item.keyPath) continue;
+            keySet.add(`${item.locale}::${item.keyPath}`);
+        }
+        if (!keySet.size) {
+            return;
+        }
+
+        const remainingCompactKeys = new Set<string>();
+        let remainingCompactKnown = false;
+
+        const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+        const decoder = new TextDecoder('utf-8');
+        const encoder = new TextEncoder();
+
+        // Combined untranslated/style report: scripts/.i18n-untranslated-report.json
+        try {
+            const combinedUri = vscode.Uri.joinPath(
+                scriptsDir,
+                '.i18n-untranslated-report.json',
+            );
+            const data = await vscode.workspace.fs.readFile(combinedUri);
+            const raw = decoder.decode(data);
+            const report: any = JSON.parse(raw);
+            const issues: any[] = Array.isArray(report.issues) ? report.issues : [];
+            if (issues.length) {
+                const filtered = issues.filter((issue: any) => {
+                    if (!issue || typeof issue.locale !== 'string' || typeof issue.keyPath !== 'string') {
+                        return true;
+                    }
+                    const key = `${issue.locale}::${issue.keyPath}`;
+                    return !keySet.has(key);
+                });
+                if (filtered.length !== issues.length) {
+                    report.issues = filtered;
+                    const payload = `${JSON.stringify(report, null, 2)}\n`;
+                    await vscode.workspace.fs.writeFile(
+                        combinedUri,
+                        encoder.encode(payload),
+                    );
+                }
+
+                const remainingIssues: any[] = Array.isArray(report.issues)
+                    ? report.issues
+                    : [];
+                for (const issue of remainingIssues) {
+                    if (
+                        !issue ||
+                        issue.issueType !== 'untranslated' ||
+                        typeof issue.locale !== 'string'
+                    ) {
+                        continue;
+                    }
+                    const locale = issue.locale as string;
+                    const localeFile =
+                        typeof issue.localeFile === 'string' ? issue.localeFile : '';
+                    if (!locale) {
+                        continue;
+                    }
+                    remainingCompactKeys.add(`${locale}::${localeFile}`);
+                }
+                remainingCompactKnown = true;
+            }
+        } catch {
+            // Ignore if report file is missing or invalid
+        }
+
+        // Untranslated-only grouped report: scripts/.i18n-untranslated-untranslated.json
+        try {
+            const untranslatedUri = vscode.Uri.joinPath(
+                scriptsDir,
+                '.i18n-untranslated-untranslated.json',
+            );
+            const data = await vscode.workspace.fs.readFile(untranslatedUri);
+            const raw = decoder.decode(data);
+            const report: any = JSON.parse(raw);
+            const files: any[] = Array.isArray(report.files) ? report.files : [];
+            let changed = false;
+
+            const newFiles = files
+                .map((entry: any) => {
+                    if (!entry || typeof entry.locale !== 'string' || !Array.isArray(entry.issues)) {
+                        return entry;
+                    }
+                    const locale = entry.locale;
+                    const issues = entry.issues.filter((issue: any) => {
+                        const keyPath =
+                            issue && typeof issue.keyPath === 'string'
+                                ? issue.keyPath
+                                : null;
+                        if (!keyPath) {
+                            return true;
+                        }
+                        const key = `${locale}::${keyPath}`;
+                        return !keySet.has(key);
+                    });
+                    if (issues.length !== entry.issues.length) {
+                        changed = true;
+                    }
+                    const result = issues.length ? { ...entry, issues } : null;
+                    if (result && remainingCompactKnown) {
+                        const localeFile =
+                            typeof result.localeFile === 'string' ? result.localeFile : '';
+                        remainingCompactKeys.add(`${locale}::${localeFile}`);
+                    }
+                    return result;
+                })
+                .filter((entry: any) => !!entry);
+
+            if (changed) {
+                report.files = newFiles;
+                const payload = `${JSON.stringify(report, null, 2)}\n`;
+                await vscode.workspace.fs.writeFile(
+                    untranslatedUri,
+                    encoder.encode(payload),
+                );
+            }
+        } catch {
+            // Ignore if report file is missing or invalid
+        }
+
+        // Compact untranslated report: scripts/.i18n-untranslated-compact.json
+        if (remainingCompactKnown) {
+            try {
+                const compactUri = vscode.Uri.joinPath(
+                    scriptsDir,
+                    '.i18n-untranslated-compact.json',
+                );
+                const data = await vscode.workspace.fs.readFile(compactUri);
+                const raw = decoder.decode(data);
+                const report: any = JSON.parse(raw);
+                const files: any[] = Array.isArray(report.files) ? report.files : [];
+
+                const newFiles = files
+                    .map((entry: any) => {
+                        if (!entry || typeof entry.locale !== 'string') {
+                            return entry;
+                        }
+                        const locale = entry.locale as string;
+                        const localeFile =
+                            typeof entry.localeFile === 'string' ? entry.localeFile : '';
+                        const key = `${locale}::${localeFile}`;
+                        if (!remainingCompactKeys.has(key)) {
+                            return null;
+                        }
+                        return entry;
+                    })
+                    .filter((entry: any) => !!entry);
+
+                if (newFiles.length !== files.length) {
+                    report.files = newFiles;
+                    const payload = `${JSON.stringify(report, null, 2)}\n`;
+                    await vscode.workspace.fs.writeFile(
+                        compactUri,
+                        encoder.encode(payload),
+                    );
+                }
+            } catch {
+                // Ignore if compact report file is missing or invalid
+            }
+        }
     }
 
     async applyAiFixes(): Promise<void> {
@@ -228,6 +442,11 @@ export class UntranslatedCommands {
             for (const u of updates) {
                 await setTranslationValue(folder, u.locale, u.keyPath, u.newValue);
             }
+
+            await this.pruneUntranslatedReports(
+                folder,
+                updates.map((u) => ({ locale: u.locale, keyPath: u.keyPath })),
+            );
 
             // Locale file writes trigger watchers which update index + diagnostics incrementally
             vscode.window.showInformationMessage(
@@ -708,8 +927,10 @@ export class UntranslatedCommands {
 
             // Translate in a single batched call per locale (with internal limits)
             let translatedCount = 0;
+            const fixed: { locale: string; keyPath: string }[] = [];
 
-            const progressTitle = `AI Localizer: Translating ${targetLocale}...`;
+            const relPath = vscode.workspace.asRelativePath(targetUri);
+            const progressTitle = `AI Localizer: Translating ${targetLocale} (${relPath})...`;
 
             await vscode.window.withProgress(
                 {
@@ -752,6 +973,7 @@ export class UntranslatedCommands {
                         try {
                             await setTranslationValue(folder!, targetLocale, item.key, newValue);
                             translatedCount++;
+                            fixed.push({ locale: targetLocale, keyPath: item.key });
                         } catch (err) {
                             console.error(`AI Localizer: Failed to write translation for key ${item.key}:`, err);
                         }
@@ -759,7 +981,7 @@ export class UntranslatedCommands {
                         if (processed % 10 === 0 || processed === keysToTranslate.length) {
                             const percent = (processed / keysToTranslate.length) * 100;
                             progress.report({
-                                message: `${processed} of ${keysToTranslate.length} key(s) for ${targetLocale}`,
+                                message: `${processed} of ${keysToTranslate.length} key(s) for ${targetLocale} in ${relPath}`,
                                 increment: percent - lastReported,
                             });
                             lastReported = percent;
@@ -767,6 +989,10 @@ export class UntranslatedCommands {
                     }
                 },
             );
+
+            if (fixed.length > 0) {
+                await this.pruneUntranslatedReports(folder, fixed);
+            }
 
             // Locale file writes trigger watchers which update index + diagnostics incrementally
 
@@ -899,8 +1125,10 @@ export class UntranslatedCommands {
         }
 
         let translatedCount = 0;
+        const fixed: { locale: string; keyPath: string }[] = [];
 
-        const progressTitle = `AI Localizer: Translating ${selectedLocale}...`;
+        const relPath = vscode.workspace.asRelativePath(documentUri);
+        const progressTitle = `AI Localizer: Translating ${selectedLocale} (${relPath})...`;
 
         await vscode.window.withProgress(
             {
@@ -943,6 +1171,7 @@ export class UntranslatedCommands {
                     try {
                         await setTranslationValue(folder, selectedLocale, item.key, newValue);
                         translatedCount += 1;
+                        fixed.push({ locale: selectedLocale, keyPath: item.key });
                     } catch (err) {
                         console.error(`AI Localizer: Failed to write translation for key ${item.key}:`, err);
                     }
@@ -950,7 +1179,7 @@ export class UntranslatedCommands {
                     if (processed % 10 === 0 || processed === keysToTranslate.length) {
                         const percent = (processed / keysToTranslate.length) * 100;
                         progress.report({
-                            message: `${processed} of ${keysToTranslate.length} key(s) for ${selectedLocale}`,
+                            message: `${processed} of ${keysToTranslate.length} key(s) for ${selectedLocale} in ${relPath}`,
                             increment: percent - lastReported,
                         });
                         lastReported = percent;
@@ -958,6 +1187,13 @@ export class UntranslatedCommands {
                 }
             },
         );
+
+        if (fixed.length > 0) {
+            await this.pruneUntranslatedReports(
+                folder,
+                fixed,
+            );
+        }
 
         // Locale file writes trigger watchers which update index + diagnostics incrementally
 
@@ -1022,6 +1258,7 @@ export class UntranslatedCommands {
                 string,
                 { key: string; defaultValue: string; defaultLocale: string }[]
             >();
+            const sampleFileByLocale = new Map<string, vscode.Uri>();
 
             for (const key of allKeys) {
                 const record = this.i18nIndex.getRecord(key);
@@ -1045,6 +1282,14 @@ export class UntranslatedCommands {
                     const needsTranslation = !current || current === base;
                     if (!needsTranslation) {
                         continue;
+                    }
+
+                    if (!sampleFileByLocale.has(locale) && record.locations && record.locations.length) {
+                        const locEntry =
+                            record.locations.find((l) => l.locale === locale) || record.locations[0];
+                        if (locEntry) {
+                            sampleFileByLocale.set(locale, locEntry.uri);
+                        }
                     }
 
                     let list = missingPerLocale.get(locale);
@@ -1089,6 +1334,7 @@ export class UntranslatedCommands {
             const maxConcurrent = 4;
             let completedLocales = 0;
             let translatedTotal = 0;
+            const fixed: { locale: string; keyPath: string }[] = [];
 
             await vscode.window.withProgress(
                 {
@@ -1143,6 +1389,7 @@ export class UntranslatedCommands {
                                     try {
                                         await setTranslationValue(folder!, locale, item.key, newValue);
                                         translatedTotal += 1;
+                                        fixed.push({ locale, keyPath: item.key });
                                     } catch (err) {
                                         console.error(
                                             `AI Localizer: Failed to write translation for key ${item.key} in ${locale}:`,
@@ -1158,8 +1405,16 @@ export class UntranslatedCommands {
                             } finally {
                                 completedLocales += 1;
                                 const percent = (completedLocales / localeEntries.length) * 100;
+                                const sampleUri = sampleFileByLocale.get(locale);
+                                const fileLabel = sampleUri
+                                    ? vscode.workspace.asRelativePath(sampleUri, false)
+                                    : undefined;
+                                const baseMsg = `${completedLocales} of ${localeEntries.length} locale(s)`;
+                                const message = fileLabel
+                                    ? `${baseMsg} — ${locale} (${fileLabel})`
+                                    : `${baseMsg} — ${locale}`;
                                 progress.report({
-                                    message: `${completedLocales} of ${localeEntries.length} locale(s)`,
+                                    message,
                                     increment: percent - lastReported,
                                 });
                                 lastReported = percent;
@@ -1175,6 +1430,10 @@ export class UntranslatedCommands {
                     await Promise.all(workers);
                 },
             );
+
+            if (fixed.length > 0) {
+                await this.pruneUntranslatedReports(folder, fixed);
+            }
 
             if (translatedTotal > 0) {
                 vscode.window.showInformationMessage(
@@ -2500,6 +2759,114 @@ export class UntranslatedCommands {
         } catch (err) {
             console.error('AI Localizer: Failed to restore invalid key in code:', err);
             vscode.window.showErrorMessage('AI Localizer: Failed to restore invalid key in code.');
+        }
+    }
+
+    async fixMissingKeyReference(
+        documentUri: vscode.Uri,
+        position: { line: number; character: number },
+        key: string,
+    ): Promise<void> {
+        try {
+            const doc = await vscode.workspace.openTextDocument(documentUri);
+
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+            const allKeys = this.i18nIndex.getAllKeys();
+
+            const keyParts = String(key).split('.').filter(Boolean);
+            const keyPrefix = keyParts.slice(0, -1).join('.');
+            const keyLeaf = keyParts[keyParts.length - 1] || '';
+
+            let bestKey: string | null = null;
+            let bestScore = Number.POSITIVE_INFINITY;
+
+            for (const candidate of allKeys) {
+                if (!candidate) continue;
+                const parts = candidate.split('.').filter(Boolean);
+                if (!parts.length) continue;
+                const prefix = parts.slice(0, -1).join('.');
+                if (prefix !== keyPrefix) continue;
+                const leaf = parts[parts.length - 1] || '';
+                const score = this.computeEditDistance(keyLeaf, leaf);
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestKey = candidate;
+                }
+            }
+
+            if (bestKey) {
+                const bestParts = bestKey.split('.').filter(Boolean);
+                const bestLeaf = bestParts[bestParts.length - 1] || '';
+                const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
+                if (maxLen > 0 && bestScore > Math.max(2, Math.floor(maxLen / 2))) {
+                    bestKey = null;
+                }
+            }
+
+            const items: vscode.QuickPickItem[] = [];
+            if (bestKey && bestKey !== key) {
+                items.push({
+                    label: `Replace with existing key: ${bestKey}`,
+                    description: 'Use closest matching translation key in the same namespace',
+                });
+            }
+            items.push({
+                label: `Create new translation key: ${key}`,
+                description: 'Create a new locale entry using this key',
+            });
+
+            const choice = await vscode.window.showQuickPick(items, {
+                placeHolder: 'AI Localizer: Fix missing translation reference',
+            });
+            if (!choice) {
+                return;
+            }
+
+            if (bestKey && choice.label.includes(bestKey)) {
+                const vsPosition = new vscode.Position(position.line, position.character);
+                const keyInfo = extractKeyAtPosition(doc, vsPosition);
+                if (!keyInfo || keyInfo.key !== key) {
+                    vscode.window.showInformationMessage(
+                        `AI Localizer: Could not locate "${key}" at this position.`,
+                    );
+                    return;
+                }
+
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(documentUri, keyInfo.range, bestKey);
+                const applied = await vscode.workspace.applyEdit(edit);
+                if (!applied) {
+                    vscode.window.showErrorMessage(
+                        'AI Localizer: Failed to apply reference fix to source file.',
+                    );
+                    return;
+                }
+                await doc.save();
+                return;
+            }
+
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+            const lastSegment = keyParts[keyParts.length - 1] || '';
+            const label = this.buildLabelFromKeySegment(lastSegment) || key;
+
+            await setTranslationValue(folder, defaultLocale, key, label);
+
+            vscode.window.showInformationMessage(
+                `AI Localizer: Created translation key ${key} in locale ${defaultLocale}.`,
+            );
+        } catch (err) {
+            console.error('AI Localizer: Failed to fix missing key reference:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to fix missing key reference.');
         }
     }
 

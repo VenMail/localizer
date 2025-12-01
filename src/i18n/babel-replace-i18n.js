@@ -936,6 +936,10 @@ async function processVueFile(filePath, keyMap) {
     const cleaned = String(rawText).replace(/\s+/g, ' ').trim();
     if (!cleaned) return whole;
 
+    // Ensure the text is still considered translatable by the shared
+    // validators/ignorePatterns before attempting to rewrite.
+    if (!shouldTranslateText(cleaned)) return whole;
+
     const kind = inferKindFromJsxElementName(tagName);
     const keyId = `${namespace}|${kind}|${cleaned}`;
     const fullKey = keyMap.get(keyId);
@@ -1009,13 +1013,13 @@ async function processVueFile(filePath, keyMap) {
       const parsed = await readJsonSafe(translationsPath);
       if (parsed && typeof parsed === 'object') translations = parsed;
     } else {
-      console.error(`[i18n-rewrite] No translations found at ${translationsPath} or ${groupedDir}`);
+      console.error(`[i18n-replace] No translations found at ${translationsPath} or ${groupedDir}`);
       process.exit(1);
     }
     const keyMap = buildKeyMapFromTranslations(translations);
 
     if (!existsSync(srcRoot)) {
-      console.error(`[i18n-rewrite] Source root not found: ${srcRoot}`);
+      console.error(`[i18n-replace] Source root not found: ${srcRoot}`);
       process.exit(1);
     }
 
@@ -1032,10 +1036,10 @@ async function processVueFile(filePath, keyMap) {
       const { changed, skippedDueToConflict } = await processFile(file, keyMap);
       if (changed) {
         changedCount += 1;
-        console.log(`[i18n-rewrite] Updated ${rel}`);
+        console.log(`[i18n-replace] Updated ${rel}`);
       } else if (skippedDueToConflict) {
         conflictCount += 1;
-        console.warn(`[i18n-rewrite] Skipped ${rel} due to existing 't' import conflict.`);
+        console.warn(`[i18n-replace] Skipped ${rel} due to existing 't' import conflict.`);
       }
     }
 
@@ -1044,13 +1048,13 @@ async function processVueFile(filePath, keyMap) {
       const { changed } = await processVueFile(file, keyMap);
       if (changed) {
         changedCount += 1;
-        console.log(`[i18n-rewrite] Updated Vue template ${rel}`);
+        console.log(`[i18n-replace] Updated Vue template ${rel}`);
       }
     }
 
-    console.log(`[i18n-rewrite] Completed. Updated ${changedCount} files. Skipped ${conflictCount} files due to conflicts.`);
+    console.log(`[i18n-replace] Completed. Updated ${changedCount} files. Skipped ${conflictCount} files due to conflicts.`);
   } catch (error) {
-    console.error('[i18n-rewrite] Failed to rewrite source files with translations.');
+    console.error('[i18n-replace] Failed to rewrite source files with translations.');
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
   }

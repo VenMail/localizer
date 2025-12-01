@@ -23,6 +23,7 @@
     "onCommand:ai-localizer.i18n.firstTimeSetup",
     "onCommand:ai-localizer.i18n.openRootApp",
     "onCommand:ai-localizer.i18n.copyLanguageSwitcher",
+    "onCommand:ai-localizer.i18n.scaffoldMessagesLoader",
     "onCommand:ai-localizer.i18n.convertSelectionToKey",
     "onCommand:ai-localizer.i18n.runExtractScript",
     "onCommand:ai-localizer.i18n.runRewriteScript",
@@ -65,10 +66,13 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      
       {
         "command": "ai-localizer.setOpenAiApiKeySecret",
         "title": "AI Localizer: Set OpenAI API Key (Secure)"
+      },
+      {
+        "command": "ai-localizer.i18n.scaffoldMessagesLoader",
+        "title": "AI Localizer: Scaffold Vite Messages Loader"
       },
       {
         "command": "ai-localizer.i18n.rescan",

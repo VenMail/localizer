@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { TextDecoder, TextEncoder } from 'util';
-import { workspaceLooksTypeScript } from './workspace';
+import { getProjectEnv } from './projectEnv';
 
 async function fileExists(uri: vscode.Uri): Promise<boolean> {
     try {
@@ -17,30 +16,20 @@ export async function ensureVueI18nRuntime(
     folder: vscode.WorkspaceFolder,
     switcherRelativePath: string,
 ): Promise<void> {
-    const normalized = switcherRelativePath.replace(/\\/g, '/');
-    const parts = normalized.split('/').filter(Boolean);
-    if (parts.length < 2) {
-        return;
-    }
-
-    const baseParts = parts.slice(0, parts.length - 2);
-    const baseRoot = baseParts.join('/');
-
-    const looksTs = await workspaceLooksTypeScript(folder);
+    const env = await getProjectEnv(folder);
+    const looksTs = env.isTypeScript;
     const runtimeFileName = looksTs ? 'index.ts' : 'index.js';
     const composableFileName = looksTs ? 'useTranslation.ts' : 'useTranslation.js';
 
-    const runtimeRel = baseRoot ? `${baseRoot}/i18n/${runtimeFileName}` : `i18n/${runtimeFileName}`;
-    const compRel = baseRoot ? `${baseRoot}/composables/${composableFileName}` : `composables/${composableFileName}`;
+    const runtimeRel = `${env.runtimeRoot}/${runtimeFileName}`;
+    const composablesBase = env.composablesRoot || env.runtimeRoot.replace(/\/i18n$/, '/composables');
+    const compRel = `${composablesBase}/${composableFileName}`;
 
     const runtimeUri = vscode.Uri.file(path.join(folder.uri.fsPath, runtimeRel));
     const compUri = vscode.Uri.file(path.join(folder.uri.fsPath, compRel));
 
     const runtimeExists = await fileExists(runtimeUri);
     const compExists = await fileExists(compUri);
-
-    const decoder = new TextDecoder('utf-8');
-    const encoder = new TextEncoder();
 
     if (!runtimeExists) {
         const srcRuntime = vscode.Uri.joinPath(
@@ -71,11 +60,8 @@ export async function ensureVueI18nRuntime(
         );
         try {
             const data = await vscode.workspace.fs.readFile(srcComp);
-            let text = decoder.decode(data);
-            const runtimeImportPath = baseRoot ? '../i18n' : '../i18n';
-            text = text.replace("'../i18n'", `'${runtimeImportPath}'`).replace('"../i18n"', `"${runtimeImportPath}"`);
             await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(compUri.fsPath)));
-            await vscode.workspace.fs.writeFile(compUri, encoder.encode(text));
+            await vscode.workspace.fs.writeFile(compUri, data);
         } catch (err) {
             console.error('Failed to copy Vue useTranslation composable:', err);
         }

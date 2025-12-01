@@ -8,11 +8,15 @@ const DEFAULT_MAX_BATCH_CHARS = Number(process.env.AI_I18N_MAX_BATCH_CHARS || 80
  * Service for handling AI-powered translations
  */
 export class TranslationService {
+
     private context: vscode.ExtensionContext;
     private shortTextCache = new Map<string, string>();
+    private log: vscode.OutputChannel | null;
+    private static batchRunCounter = 0;
 
-    constructor(context: vscode.ExtensionContext) {
+    constructor(context: vscode.ExtensionContext, log?: vscode.OutputChannel) {
         this.context = context;
+        this.log = log || null;
     }
 
     private getOpenAiModel(config?: vscode.WorkspaceConfiguration): string {
@@ -234,6 +238,8 @@ export class TranslationService {
             return result;
         }
 
+        const runId = ++TranslationService.batchRunCounter;
+
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoTranslate = config.get<boolean>('i18n.autoTranslate');
         if (!autoTranslate && !force) {
@@ -252,6 +258,7 @@ export class TranslationService {
         const { maxItems, maxChars } = this.getBatchLimits(config);
 
         const filteredItems: { id: string; text: string; defaultLocale: string }[] = [];
+        let cachedCount = 0;
         for (const item of items) {
             const text = item.text || '';
             if (this.isCacheableShortText(text)) {
@@ -259,6 +266,7 @@ export class TranslationService {
                 const cached = this.shortTextCache.get(cacheKey);
                 if (cached) {
                     result.set(item.id, cached);
+                    cachedCount += 1;
                     continue;
                 }
             }
@@ -288,6 +296,10 @@ export class TranslationService {
         if (currentBatch.length > 0) {
             batches.push(currentBatch);
         }
+
+        this.log?.appendLine(
+            `[TranslateBatch #${runId}] target=${targetLocale}, items=${items.length}, cached=${cachedCount}, toTranslate=${workItems.length}, batches=${batches.length}, maxItems=${maxItems}, maxChars=${maxChars}`,
+        );
 
         const preferredMode = this.getBatchOutputMode();
 
@@ -343,6 +355,10 @@ export class TranslationService {
                         'AI Localizer: Failed to parse batch translation JSON response (JSON mode):',
                         err,
                     );
+                    const details = err instanceof Error ? err.message : String(err);
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Failed to parse JSON batch response for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
+                    );
                     return false;
                 }
 
@@ -373,6 +389,10 @@ export class TranslationService {
                 }
             } catch (err) {
                 console.error('AI Localizer: Failed to get batch AI translations (JSON mode):', err);
+                const details = err instanceof Error ? err.message : String(err);
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Error in JSON mode for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
+                );
             }
             return added;
         };
@@ -450,25 +470,57 @@ export class TranslationService {
                 }
             } catch (err) {
                 console.error('AI Localizer: Failed to get batch AI translations (line mode):', err);
+                const details = err instanceof Error ? err.message : String(err);
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Error in line mode for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
+                );
             }
             return added;
         };
 
-        for (const batch of batches) {
+        for (let i = 0; i < batches.length; i += 1) {
+            const batch = batches[i];
+            const batchLabel = `${i + 1}/${batches.length}`;
             if (preferredMode === 'lines') {
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Batch ${batchLabel}: trying line mode (items=${batch.length}).`,
+                );
                 const usedLines = await runLineMode(batch);
                 if (!usedLines) {
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode produced no usable translations; falling back to JSON mode.`,
+                    );
                     const usedJson = await runJsonMode(batch);
                     if (usedJson) {
+                        this.log?.appendLine(
+                            `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode succeeded; switching preferred batch output mode to 'json'.`,
+                        );
                         await this.setBatchOutputMode('json');
+                    } else {
+                        this.log?.appendLine(
+                            `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode also produced no usable translations.`,
+                        );
                     }
                 }
             } else {
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Batch ${batchLabel}: trying JSON mode (items=${batch.length}).`,
+                );
                 const usedJson = await runJsonMode(batch);
                 if (!usedJson) {
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode produced no usable translations; falling back to line mode.`,
+                    );
                     const usedLines = await runLineMode(batch);
                     if (usedLines) {
+                        this.log?.appendLine(
+                            `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode succeeded; switching preferred batch output mode to 'lines'.`,
+                        );
                         await this.setBatchOutputMode('lines');
+                    } else {
+                        this.log?.appendLine(
+                            `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode also produced no usable translations.`,
+                        );
                     }
                 }
             }
@@ -476,6 +528,9 @@ export class TranslationService {
 
         const remaining = items.filter((item) => !result.has(item.id));
         if (remaining.length) {
+            this.log?.appendLine(
+                `[TranslateBatch #${runId}] ${remaining.length} item(s) still missing after batched calls; falling back to per-item translations.`,
+            );
             for (const item of remaining) {
                 try {
                     const single = await this.translateToLocales(
@@ -491,9 +546,17 @@ export class TranslationService {
                     }
                 } catch (err) {
                     console.error(`AI Localizer: Fallback translation failed for key ${item.id}:`, err);
+                    const details = err instanceof Error ? err.message : String(err);
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Per-item fallback failed for key ${item.id}: ${details}`,
+                    );
                 }
             }
         }
+
+        this.log?.appendLine(
+            `[TranslateBatch #${runId}] Completed. Translated ${result.size} key(s) for target=${targetLocale}.`,
+        );
 
         return result;
     }

@@ -109,6 +109,65 @@ function isPlaceholderOnlyText(text) {
   return false;
 }
 
+function isCssUtilityString(text) {
+  const withoutPlaceholders = String(text || '')
+    .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
+    .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
+
+  const tokens = withoutPlaceholders.split(/\s+/).filter(Boolean);
+  if (tokens.length < 3) {
+    return false;
+  }
+
+  const cssKeywords = new Set([
+    'absolute',
+    'relative',
+    'fixed',
+    'sticky',
+    'static',
+    'transform',
+    'transition',
+    'animate',
+    'duration',
+    'ease',
+    'delay',
+    'inline',
+    'block',
+    'flex',
+    'grid',
+    'hidden',
+    'visible',
+    'border',
+    'rounded',
+    'shadow',
+    'overflow',
+    'cursor',
+    'pointer',
+  ]);
+
+  let cssLikeCount = 0;
+  for (const token of tokens) {
+    const lower = String(token || '').toLowerCase();
+    if (cssKeywords.has(lower)) {
+      cssLikeCount += 1;
+      continue;
+    }
+    if (/^-?[a-z][a-z0-9]*(?:-[a-z0-9/:%]+)+$/.test(lower)) {
+      cssLikeCount += 1;
+      continue;
+    }
+    if (/^[a-z]+[0-9]+$/.test(lower)) {
+      cssLikeCount += 1;
+    }
+  }
+
+  // For short strings, be stricter. For longer strings (common in Tailwind), be more lenient.
+  if (tokens.length >= 5) {
+    return cssLikeCount / tokens.length >= 0.5;
+  }
+  return cssLikeCount >= 3 && cssLikeCount / tokens.length >= 0.6;
+}
+
 /**
  * Check if text is non-translatable
  * Combines pattern-based ignores with linguistic validation
@@ -120,6 +179,17 @@ function isNonTranslatableText(text, patterns) {
   const normalized = trimmed.replace(/\s+/g, ' ');
 
   if (isPlaceholderOnlyText(normalized)) {
+    return true;
+  }
+
+  // CSS / utility-class blobs (e.g. Tailwind strings) are non-translatable
+  if (isCssUtilityString(normalized)) {
+    return true;
+  }
+
+  // Full CSS rule blocks (selectors with `{}` and declarations) are clearly non-translatable
+  // Example: "table { border-collapse: collapse; width: 100%; ... } .sheet-title { ... }"
+  if (/\{[^}]*:[^;]+;[^}]*\}/.test(normalized)) {
     return true;
   }
 

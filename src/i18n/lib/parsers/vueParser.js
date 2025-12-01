@@ -56,6 +56,9 @@ class VueParser extends BaseParser {
       return results;
     }
 
+    // Ensure ignore patterns from options are respected by helper methods
+    this.ignorePatterns = options.ignorePatterns || this.ignorePatterns || {};
+
     results.stats.processed = 1;
 
     // Extract and parse template section
@@ -112,7 +115,47 @@ class VueParser extends BaseParser {
     const processTextContent = (text) => {
       if (!text) return;
 
-      // Remove Vue mustache expressions
+      // First, look inside Vue mustache expressions for string literals that should be translated.
+      // This covers patterns like:
+      //   {{ searchValue ? "No matching files found" : "No files found" }}
+      //   {{ searchValue ? 'No matching files found' : 'No files found' }}
+      try {
+        const mustacheRegex = /\{\{([^}]+)\}\}/g;
+        let mustacheMatch;
+        const parentTag = getCurrentParentTag();
+
+        while ((mustacheMatch = mustacheRegex.exec(text)) !== null) {
+          const expr = (mustacheMatch[1] || '').trim();
+          if (!expr) continue;
+
+          // Find all string literals inside the expression. We deliberately just
+          // hand candidates to shouldTranslate; validators will reject keys,
+          // technical identifiers, etc.
+          const stringRegex = /(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\1/g;
+          let strMatch;
+          while ((strMatch = stringRegex.exec(expr)) !== null) {
+            const candidate = (strMatch[2] || '').trim();
+            if (!candidate) continue;
+
+            if (!shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
+              continue;
+            }
+
+            const kind = this.inferKindFromTag(parentTag);
+            results.items.push({
+              type: 'text',
+              text: candidate,
+              kind,
+              parentTag,
+            });
+            results.stats.extracted++;
+          }
+        }
+      } catch {
+        // Best-effort extraction; ignore mustache parsing errors.
+      }
+
+      // Now handle any plain text outside of mustache expressions.
       let cleanText = text
         .replace(/\{\{[^}]+\}\}/g, '')  // {{ expr }}
         .replace(/\s+/g, ' ')
@@ -403,21 +446,67 @@ class VueParser extends BaseParser {
     // Look for common i18n patterns in Vue scripts
     // This is a simplified extraction - the JSX parser handles full AST parsing
 
-    // Extract strings from common patterns
-    const patterns = [
-      // $t('key') or t('key')
-      /\$?t\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-      // i18n.t('key')
-      /i18n\.t\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-      // useI18n().t('key')
-      /useI18n\(\)\.t\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    const { shouldTranslate } = require('../validators');
+
+    if (!script || typeof script !== 'string') {
+      return;
+    }
+
+    const lines = script.split('\n');
+
+    // First, identify lines that contain explicit i18n key lookups so we can
+    // avoid treating those keys as human-facing text.
+    const i18nLineIndexes = new Set();
+    const i18nLinePatterns = [
+      /\$?t\s*\(\s*['"][^'"]+['"]\s*\)/,
+      /i18n\.t\s*\(\s*['"][^'"]+['"]\s*\)/,
+      /useI18n\(\)\.t\s*\(\s*['"][^'"]+['"]\s*\)/,
     ];
 
-    for (const pattern of patterns) {
-      let match;
-      while ((match = pattern.exec(script)) !== null) {
-        // These are translation keys, not text to extract
-        // But we note them for reference
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      for (const pattern of i18nLinePatterns) {
+        if (pattern.test(line)) {
+          i18nLineIndexes.add(i);
+          break;
+        }
+      }
+    }
+
+    // Now scan for string literals in the script (computed(), methods, etc.)
+    const stringPatterns = [
+      /'([^'\\\n]{3,200})'/g,
+      /"([^"\\\n]{3,200})"/g,
+    ];
+
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const line = lines[lineIndex];
+      if (!line || !line.trim()) continue;
+
+      for (const pattern of stringPatterns) {
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(line)) !== null) {
+          const candidate = (match[1] || '').trim();
+          if (!candidate) continue;
+
+          // Skip obvious i18n key lookups; validators will also reject most keys,
+          // but this keeps noise down if keys look like natural language.
+          if (i18nLineIndexes.has(lineIndex)) {
+            continue;
+          }
+
+          if (!shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
+            continue;
+          }
+
+          results.items.push({
+            type: 'string',
+            text: candidate,
+            kind: 'text',
+          });
+          results.stats.extracted++;
+        }
       }
     }
   }

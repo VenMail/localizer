@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder } from 'util';
+import { getProjectEnv } from './projectEnv';
 
 const MAX_LOCALE_FILE_SIZE_BYTES = Number(process.env.AI_I18N_MAX_LOCALE_SIZE || 2 * 1024 * 1024);
 const INDEX_CONCURRENCY = Number(process.env.AI_I18N_INDEX_CONCURRENCY || 16);
@@ -60,7 +61,20 @@ export class I18nIndex {
         const fileKeySet = new Set<string>();
         const fileList: vscode.Uri[] = [];
         for (const folder of folders) {
-            for (const glob of localeGlobs) {
+            let effectiveGlobs: string[] = localeGlobs;
+            if (!config.get<string[]>('i18n.localeGlobs')) {
+                try {
+                    const env = await getProjectEnv(folder);
+                    effectiveGlobs = [
+                        `${env.runtimeRoot}/auto/**/*.json`,
+                        `${env.runtimeRoot}/**/*.json`,
+                    ];
+                } catch {
+                    effectiveGlobs = localeGlobs;
+                }
+            }
+
+            for (const glob of effectiveGlobs) {
                 const pattern = new vscode.RelativePattern(folder, glob);
                 const found = await vscode.workspace.findFiles(pattern, '**/node_modules/**');
                 for (const f of found) {

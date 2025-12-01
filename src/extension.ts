@@ -37,7 +37,7 @@ export function activate(context: vscode.ExtensionContext) {
         registerI18nProviders(context, i18nIndex);
 
         // Initialize services and centralized command registry
-        const translationService = new TranslationService(context);
+        const translationService = new TranslationService(context, output);
         const projectConfigService = new ProjectConfigService();
         const fileSystemService = new FileSystemService();
         const registry = new CommandRegistry(

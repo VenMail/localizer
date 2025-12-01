@@ -437,6 +437,10 @@ export class DiagnosticAnalyzer {
             return true;
         }
 
+        if (/\{[^}]*:[^;]+;[^}]*\}/.test(normalized)) {
+            return true;
+        }
+
         if (
             normalized.includes('class="') ||
             normalized.includes("class='") ||
@@ -809,6 +813,15 @@ export class DiagnosticAnalyzer {
         const range = new vscode.Range(start, end);
         keyRanges.set(fullKey, range);
         return range;
+    }
+
+    resetCaches(): void {
+        this.diagnosticsByFile.clear();
+        this.fileTextCache.clear();
+        this.styleIssuesByLocaleKey.clear();
+        this.styleReportLoaded = false;
+        this.ignorePatterns = null;
+        this.ignorePatternsLoaded = false;
     }
 }
 

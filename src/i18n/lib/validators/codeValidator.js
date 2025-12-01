@@ -53,7 +53,9 @@ function isJsExpression(text) {
   }
   
   // Function calls with parentheses
-  if (/[a-zA-Z_$][a-zA-Z0-9_$]*\s*\([^)]*\)/.test(trimmed)) {
+  // Must be anchored to start/end to avoid matching text like "Contact us (required)"
+  // Allows optional prefixes: !, await, new, void
+  if (/^(!|await\s+|new\s+|void\s+)?[a-zA-Z_$][a-zA-Z0-9_$.]*\s*\([^)]*\)$/.test(trimmed)) {
     // But not if it's just a simple word followed by parentheses with text
     // e.g., "Click (here)" should not match
     if (/^[A-Z][a-z]+\s+\([^)]+\)$/.test(trimmed)) {
@@ -194,7 +196,7 @@ function isProgrammingIdentifier(text) {
   }
   
   // Check against JS keywords
-  if (JS_KEYWORDS.has(trimmed.toLowerCase())) {
+  if (JS_KEYWORDS.has(trimmed)) {
     return true;
   }
   
@@ -225,7 +227,24 @@ function isCodeContent(text) {
   }
   
   // Check for code blocks
-  if (/^(const|let|var|function|class|import|export|if|else|for|while|switch|try|catch|return)\s/.test(trimmed)) {
+  // Control flow with parentheses
+  if (/^(if|for|while|switch|catch)\s*\(/.test(trimmed)) {
+    return true;
+  }
+  
+  // Declarations
+  if (/^(const|let|var|function|class|import|export)\s+[a-zA-Z_$]/.test(trimmed)) {
+    return true;
+  }
+
+  // Other keywords
+  if (/^(try|else|do)\s*\{/.test(trimmed)) {
+    return true;
+  }
+  
+  // Return/throw statements - careful not to match "return to home" (imperative usually capitalized, but maybe not)
+  // We assume code returns are usually lower case 'return' followed by expression
+  if (/^(return|throw)\s+[^A-Z]/.test(trimmed)) {
     return true;
   }
   

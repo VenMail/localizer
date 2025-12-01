@@ -140,20 +140,28 @@ function looksLikeHumanText(text) {
   
   if (words.length === 1) {
     // Single word: must start with capital letter and look like a word
-    const word = words[0];
+    let word = words[0];
     
-    // Allow single capitalized words that look like labels
-    if (/^[A-Z][a-z]+$/.test(word)) {
+    // Strip trailing punctuation (.,:;!?) for validation
+    word = word.replace(/[.,:;!?]+$/, '');
+    
+    // Allow single capitalized words that look like labels (including contractions)
+    if (/^[A-Z][a-zA-Z0-9']*$/.test(word)) {
+      // Reject camelCase if it looks like code (e.g. "userName") 
+      // but allow "iPad", "WiFi" type things if they start with Cap? 
+      // Actually "userName" starts with lower. "UserName" is PascalCase.
+      // We want to allow "Password", "Done", "IDs".
+      // We want to reject "User_Name", "user_name".
+      return true;
+    }
+
+    // Allow ALL CAPS words (labels/constants)
+    if (/^[A-Z0-9_]+$/.test(word) && /[A-Z]/.test(word)) {
       return true;
     }
     
-    // Allow words with apostrophes (contractions, possessives)
-    if (/^[A-Z][a-z]+'[a-z]+$/.test(word)) {
-      return true;
-    }
-    
-    // Reject camelCase, snake_case, kebab-case
-    if (/[a-z][A-Z]/.test(word) || /_/.test(word) || /-/.test(word)) {
+    // Reject camelCase (starts with lower), snake_case, kebab-case
+    if (/^[a-z]/.test(word) || /_/.test(word) || /-/.test(word)) {
       return false;
     }
     

@@ -45,6 +45,19 @@ const projectRoot = path.resolve(__dirname, '..');
 const srcRoot = detectSrcRoot(projectRoot);
 const outputDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
 
+let hasVueI18n = false;
+try {
+  const pkgPath = path.resolve(projectRoot, 'package.json');
+  if (existsSync(pkgPath)) {
+    const pkg = require(pkgPath);
+    const deps = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {});
+    if (deps['vue-i18n'] || deps['@intlify/vue-i18n']) {
+      hasVueI18n = true;
+    }
+  }
+} catch {
+}
+
 // Load ignore patterns
 const ignorePatterns = loadIgnorePatterns(projectRoot);
 
@@ -772,14 +785,18 @@ async function processVueFile(filePath, keyMap) {
       }
     }
 
-    // Process Vue files
-    for (const file of vueFiles) {
-      const rel = path.relative(projectRoot, file);
-      const { changed } = await processVueFile(file, keyMap);
-      if (changed) {
-        changedCount += 1;
-        console.log(`[i18n-replace] Updated Vue template ${rel}`);
+    // Process Vue files only when vue-i18n is present, since the rewrite uses $t(...) in templates.
+    if (hasVueI18n) {
+      for (const file of vueFiles) {
+        const rel = path.relative(projectRoot, file);
+        const { changed } = await processVueFile(file, keyMap);
+        if (changed) {
+          changedCount += 1;
+          console.log(`[i18n-replace] Updated Vue template ${rel}`);
+        }
       }
+    } else if (vueFiles.length > 0) {
+      console.log('[i18n-replace] vue-i18n not detected; skipping Vue template rewrite to avoid inserting $t(...) without a global helper.');
     }
 
     console.log(`[i18n-replace] Completed. Updated ${changedCount} files. Skipped ${conflictCount} files due to conflicts.`);
