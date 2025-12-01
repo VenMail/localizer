@@ -202,6 +202,9 @@ export class UntranslatedCommands {
         const remainingCompactKeys = new Set<string>();
         let remainingCompactKnown = false;
 
+        let prunedUntranslatedIssues = 0;
+        let prunedCompactEntries = 0;
+
         const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
         const decoder = new TextDecoder('utf-8');
         const encoder = new TextEncoder();
@@ -276,6 +279,7 @@ export class UntranslatedCommands {
                         return entry;
                     }
                     const locale = entry.locale;
+                    const beforeCount = entry.issues.length;
                     const issues = entry.issues.filter((issue: any) => {
                         const keyPath =
                             issue && typeof issue.keyPath === 'string'
@@ -287,8 +291,9 @@ export class UntranslatedCommands {
                         const key = `${locale}::${keyPath}`;
                         return !keySet.has(key);
                     });
-                    if (issues.length !== entry.issues.length) {
+                    if (issues.length !== beforeCount) {
                         changed = true;
+                        prunedUntranslatedIssues += beforeCount - issues.length;
                     }
                     const result = issues.length ? { ...entry, issues } : null;
                     if (result && remainingCompactKnown) {
@@ -341,6 +346,7 @@ export class UntranslatedCommands {
                     .filter((entry: any) => !!entry);
 
                 if (newFiles.length !== files.length) {
+                    prunedCompactEntries += files.length - newFiles.length;
                     report.files = newFiles;
                     const payload = `${JSON.stringify(report, null, 2)}\n`;
                     await vscode.workspace.fs.writeFile(
@@ -351,6 +357,28 @@ export class UntranslatedCommands {
             } catch {
                 // Ignore if compact report file is missing or invalid
             }
+        }
+
+        if (prunedUntranslatedIssues > 0 || prunedCompactEntries > 0) {
+            const parts: string[] = [];
+            if (prunedUntranslatedIssues > 0) {
+                parts.push(
+                    `${prunedUntranslatedIssues} untranslated issue${
+                        prunedUntranslatedIssues === 1 ? '' : 's'
+                    }`,
+                );
+            }
+            if (prunedCompactEntries > 0) {
+                parts.push(
+                    `${prunedCompactEntries} compact entr${
+                        prunedCompactEntries === 1 ? 'y' : 'ies'
+                    }`,
+                );
+            }
+            const summary = parts.join(', ');
+            vscode.window.showInformationMessage(
+                `AI Localizer: Pruned ${summary} from untranslated reports.`,
+            );
         }
     }
 

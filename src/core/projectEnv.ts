@@ -53,15 +53,15 @@ export async function getProjectEnv(folder: vscode.WorkspaceFolder): Promise<Pro
         return existing;
     }
 
-    const [framework, isTypeScript, pkg] = await Promise.all<[
-        FrameworkProfile | undefined,
-        boolean,
-        any | undefined
-    ]>([
+    const [rawFramework, rawIsTypeScript, rawPkg] = await Promise.all([
         detectFrameworkProfile(folder),
         workspaceLooksTypeScript(folder),
         readPackageJson(folder),
     ]);
+
+    const framework = rawFramework as FrameworkProfile | undefined;
+    const isTypeScript = !!rawIsTypeScript;
+    const pkg = rawPkg as any | undefined;
 
     let srcRoot = 'src';
 
