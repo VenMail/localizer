@@ -2002,8 +2002,12 @@ export class UntranslatedCommands {
             const choice = await vscode.window.showQuickPick(
                 [
                     {
-                        label: `Remove ${unused.length} unused key(s)`,
+                        label: 'Remove unused keys in this file',
                         description: `Remove ${unused.length} unused key(s) from this locale file only.`,
+                    },
+                    {
+                        label: 'Remove unused keys in all locale files',
+                        description: `Remove ${unused.length} unused key(s) from this and all other locale files.`,
                     },
                     {
                         label: 'Cancel',
@@ -2017,6 +2021,9 @@ export class UntranslatedCommands {
             if (!choice || choice.label === 'Cancel') {
                 return;
             }
+
+            const applyToAllLocales =
+                choice.label === 'Remove unused keys in all locale files';
 
             const deletedKeys = new Set<string>();
             for (const item of unused) {
@@ -2044,9 +2051,37 @@ export class UntranslatedCommands {
                 Array.from(deletedKeys),
             );
 
-            vscode.window.showInformationMessage(
-                `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file.`,
-            );
+            let deletedFromOtherFiles = 0;
+
+            if (applyToAllLocales && deletedKeys.size > 0) {
+                await this.i18nIndex.ensureInitialized();
+                for (const keyPath of deletedKeys) {
+                    const record = this.i18nIndex.getRecord(keyPath);
+                    if (!record) {
+                        continue;
+                    }
+                    const otherUris = record.locations
+                        .map((l) => l.uri)
+                        .filter((u) => u.toString() !== targetUri.toString());
+                    if (!otherUris.length) {
+                        continue;
+                    }
+                    deletedFromOtherFiles += await this.deleteKeyFromLocaleFiles(
+                        keyPath,
+                        otherUris,
+                    );
+                }
+            }
+
+            if (deletedFromOtherFiles > 0) {
+                vscode.window.showInformationMessage(
+                    `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file and cleaned up unused keys in ${deletedFromOtherFiles} other locale file(s).`,
+                );
+            } else {
+                vscode.window.showInformationMessage(
+                    `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file.`,
+                );
+            }
         } catch (err) {
             console.error('AI Localizer: Failed to cleanup unused keys for file:', err);
             vscode.window.showErrorMessage('AI Localizer: Failed to cleanup unused keys for file.');

@@ -26,6 +26,8 @@ export class DiagnosticAnalyzer {
     private decoder = new TextDecoder('utf-8');
     private ignorePatterns: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } | null = null;
     private ignorePatternsLoaded = false;
+    private untranslatedIssuesByLocaleKey = new Map<string, boolean>();
+    private untranslatedReportActive = false;
 
     constructor(
         private i18nIndex: I18nIndex,
@@ -262,6 +264,20 @@ export class DiagnosticAnalyzer {
     }
 
     /**
+     * Reset all caches. Call before a full re-analysis.
+     */
+    resetCaches(): void {
+        this.diagnosticsByFile.clear();
+        this.fileTextCache.clear();
+        this.styleIssuesByLocaleKey.clear();
+        this.styleReportLoaded = false;
+        this.untranslatedIssuesByLocaleKey.clear();
+        this.untranslatedReportActive = false;
+        this.ignorePatterns = null;
+        this.ignorePatternsLoaded = false;
+    }
+
+    /**
      * Load style issues from .i18n-untranslated-style.json report.
      */
     async loadStyleReport(
@@ -313,6 +329,57 @@ export class DiagnosticAnalyzer {
             }
         }
         this.styleReportLoaded = true;
+    }
+
+    async loadUntranslatedReport(
+        workspaceFolders: readonly vscode.WorkspaceFolder[],
+        force = false,
+    ): Promise<void> {
+        if (this.untranslatedReportActive && !force) {
+            return;
+        }
+
+        this.untranslatedIssuesByLocaleKey.clear();
+        this.untranslatedReportActive = false;
+
+        for (const folder of workspaceFolders) {
+            try {
+                const reportUri = vscode.Uri.joinPath(
+                    folder.uri,
+                    'scripts',
+                    '.i18n-untranslated-untranslated.json',
+                );
+                const data = await vscode.workspace.fs.readFile(reportUri);
+                const raw = this.decoder.decode(data);
+                const report: any = JSON.parse(raw);
+                const files = Array.isArray(report?.files) ? report.files : [];
+
+                for (const file of files) {
+                    const locale = typeof file?.locale === 'string' ? file.locale : null;
+                    const issues = Array.isArray(file?.issues) ? file.issues : [];
+                    if (!locale || !issues.length) {
+                        continue;
+                    }
+
+                    for (const issue of issues) {
+                        const keyPath = typeof issue?.keyPath === 'string' ? issue.keyPath : null;
+                        if (!keyPath) {
+                            continue;
+                        }
+                        const mapKey = `${keyPath}::${locale}`;
+                        if (!this.untranslatedIssuesByLocaleKey.has(mapKey)) {
+                            this.untranslatedIssuesByLocaleKey.set(mapKey, true);
+                        }
+                    }
+                }
+            } catch {
+                // Optional report; ignore missing/invalid files and move on to the next folder
+            }
+        }
+
+        if (this.untranslatedIssuesByLocaleKey.size > 0) {
+            this.untranslatedReportActive = true;
+        }
     }
 
     /**
@@ -643,7 +710,14 @@ export class DiagnosticAnalyzer {
             const ignore =
                 isConstantLikeAcrossLocales ||
                 isBaseNonTranslatable;
-            if (!ignore) {
+
+            let allowedByReport = true;
+            if (this.untranslatedReportActive) {
+                const reportKey = `${key}::${locale}`;
+                allowedByReport = this.untranslatedIssuesByLocaleKey.has(reportKey);
+            }
+
+            if (!ignore && allowedByReport) {
                 issues.push({
                     message: `Untranslated (same as default) "${key}" [${locale}]`,
                     severity: config.untranslatedSeverity,
@@ -813,15 +887,6 @@ export class DiagnosticAnalyzer {
         const range = new vscode.Range(start, end);
         keyRanges.set(fullKey, range);
         return range;
-    }
-
-    resetCaches(): void {
-        this.diagnosticsByFile.clear();
-        this.fileTextCache.clear();
-        this.styleIssuesByLocaleKey.clear();
-        this.styleReportLoaded = false;
-        this.ignorePatterns = null;
-        this.ignorePatternsLoaded = false;
     }
 }
 

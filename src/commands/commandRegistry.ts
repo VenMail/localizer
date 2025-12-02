@@ -606,6 +606,7 @@ export class CommandRegistry {
         const folders = vscode.workspace.workspaceFolders || [];
         await this.diagnosticAnalyzer.loadStyleReport(folders, true);
         await this.diagnosticAnalyzer.loadIgnorePatterns(folders, true);
+        await this.diagnosticAnalyzer.loadUntranslatedReport(folders, true);
 
         const diagnosticMap = await this.diagnosticAnalyzer.analyzeAll(config);
 

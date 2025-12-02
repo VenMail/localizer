@@ -323,9 +323,9 @@ export class FileSystemService {
     }
 
     private supportsOxc(nodeVersion: string): boolean {
-        // Match oxc-parser engines: ^20.19.0 || >=22.12.0
+        // Match oxc-parser engines: ^20.15.0 || >=22.12.0
         const atLeast20_19 =
-            this.compareVersions(nodeVersion, '20.19.0') >= 0 &&
+            this.compareVersions(nodeVersion, '20.15.0') >= 0 &&
             this.compareVersions(nodeVersion, '21.0.0') < 0;
         const atLeast22_12 = this.compareVersions(nodeVersion, '22.12.0') >= 0;
         return atLeast20_19 || atLeast22_12;
