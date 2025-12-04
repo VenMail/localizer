@@ -110,6 +110,23 @@ function normalizeText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function isCommonShortText(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return false;
+  const cleaned = trimmed.replace(/\s+/g, ' ').trim();
+
+  if (/[.!?]/.test(cleaned)) return false;
+
+  const words = cleaned.split(' ').filter(Boolean);
+  if (words.length === 0 || words.length > 2) return false;
+
+  if (cleaned.length > 24) return false;
+
+  if (/[\/_]/.test(cleaned)) return false;
+
+  return true;
+}
+
 function inferPlaceholderNameFromExpression(expr, index) {
   if (!expr) return `value${index + 1}`;
   if (expr.type === 'Identifier') return expr.name;
@@ -447,7 +464,8 @@ async function processFile(filePath, keyMap) {
       const elementName = getJsxElementName(jsxParent.openingElement.name);
       const kind = inferKindFromJsxElementName(elementName);
       
-      const keyId = `${namespace}|${kind}|${text}`;
+      const nsForKey = isCommonShortText(text) ? 'Commons' : namespace;
+      const keyId = `${nsForKey}|${kind}|${text}`;
       const fullKey = keyMap.get(keyId);
       if (!fullKey) return;
       
@@ -499,7 +517,8 @@ async function processFile(filePath, keyMap) {
         const text = normalizeText(getStringValue(valueNode));
         if (!shouldTranslateText(text, ignorePatterns)) return;
         
-        const keyId = `${namespace}|${kind}|${text}`;
+        const nsForKey = isCommonShortText(text) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${text}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return;
         

@@ -64,9 +64,16 @@ function isCommonShortText(text) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
   const cleaned = trimmed.replace(/\s+/g, ' ').trim();
+
+  if (/[.!?]/.test(cleaned)) return false;
+
   const words = cleaned.split(' ').filter(Boolean);
   if (words.length === 0 || words.length > 2) return false;
-  if (cleaned.length > 40) return false;
+
+  if (cleaned.length > 24) return false;
+
+  if (/[\/_]/.test(cleaned)) return false;
+
   return true;
 }
 

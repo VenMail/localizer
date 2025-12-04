@@ -46,6 +46,42 @@ export function deriveNamespaceFromFile(folder: vscode.WorkspaceFolder, uri: vsc
     return segments.join('.');
 }
 
+export function deriveRootFromFile(folder: vscode.WorkspaceFolder, uri: vscode.Uri): string {
+    const full = uri.fsPath.replace(/\\/g, '/');
+    if (full.includes('/resources/views/')) {
+        return 'views';
+    }
+
+    const jsMarker = '/resources/js/';
+    const srcMarker = '/src/';
+    let tail: string | null = null;
+
+    const jsIndex = full.indexOf(jsMarker);
+    if (jsIndex !== -1) {
+        tail = full.slice(jsIndex + jsMarker.length);
+    } else {
+        const srcIndex = full.indexOf(srcMarker);
+        if (srcIndex !== -1) {
+            tail = full.slice(srcIndex + srcMarker.length);
+        }
+    }
+
+    if (tail) {
+        const parts = tail.split('/').filter(Boolean);
+        if (parts.length) {
+            return parts[0].toLowerCase();
+        }
+    }
+
+    const root = folder.uri.fsPath;
+    const rel = path.relative(root, uri.fsPath).replace(/\\/g, '/');
+    const parts = rel.split('/').filter(Boolean);
+    if (parts.length) {
+        return parts[0].toLowerCase();
+    }
+    return 'common';
+}
+
 async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: string): Promise<vscode.Uri> {
     const bases = ['resources/js/i18n/auto', 'src/i18n', 'src/locales', 'locales', 'i18n'];
     for (const base of bases) {
@@ -100,11 +136,20 @@ export async function upsertTranslationKey(
     locale: string,
     fullKey: string,
     value: string,
+    options?: { rootName?: string },
 ): Promise<void> {
     const localeDir = await findOrCreateLocaleDir(folder, locale);
     const segments = fullKey.split('.').filter(Boolean);
-    const group = segments[0] || 'Common';
-    const fileName = `${group.toLowerCase()}.json`;
+    const first = segments[0] || 'Common';
+    let fileName: string;
+    if (first === 'Commons') {
+        fileName = 'commons.json';
+    } else if (options?.rootName) {
+        fileName = `${options.rootName.toLowerCase()}.json`;
+    } else {
+        const group = first || 'Common';
+        fileName = `${group.toLowerCase()}.json`;
+    }
     const fileUri = vscode.Uri.joinPath(localeDir, fileName);
     const decoder = new TextDecoder('utf-8');
     const encoder = new TextEncoder();
@@ -165,11 +210,20 @@ export async function setTranslationValue(
     locale: string,
     fullKey: string,
     value: string,
+    options?: { rootName?: string },
 ): Promise<void> {
     const localeDir = await findOrCreateLocaleDir(folder, locale);
     const segments = fullKey.split('.').filter(Boolean);
-    const group = segments[0] || 'Common';
-    const fileName = `${group.toLowerCase()}.json`;
+    const first = segments[0] || 'Common';
+    let fileName: string;
+    if (first === 'Commons') {
+        fileName = 'commons.json';
+    } else if (options?.rootName) {
+        fileName = `${options.rootName.toLowerCase()}.json`;
+    } else {
+        const group = first || 'Common';
+        fileName = `${group.toLowerCase()}.json`;
+    }
     const fileUri = vscode.Uri.joinPath(localeDir, fileName);
     const decoder = new TextDecoder('utf-8');
     const encoder = new TextEncoder();

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { I18nIndex, slugifyForKey } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
-import { deriveNamespaceFromFile, upsertTranslationKey } from '../core/i18nFs';
+import { deriveNamespaceFromFile, deriveRootFromFile, upsertTranslationKey } from '../core/i18nFs';
 import { pickWorkspaceFolder } from '../core/workspace';
 import { isTranslatableText as isTranslatableTextShared } from '../core/textValidation';
 
@@ -74,6 +74,8 @@ export class ConvertSelectionCommand {
             return;
         }
 
+        const rootName = deriveRootFromFile(folder, document.uri);
+
         // Get locales
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
@@ -135,7 +137,11 @@ export class ConvertSelectionCommand {
             }
 
             const slug = slugifyForKey(sourceText);
-            const defaultKey = `${namespace}.${kind}.${slug}`;
+            let baseNamespace = namespace;
+            if (this.isCommonShortText(sourceText)) {
+                baseNamespace = 'Commons';
+            }
+            const defaultKey = `${baseNamespace}.${kind}.${slug}`;
 
             const finalKey = await vscode.window.showInputBox({
                 value: defaultKey,
@@ -178,7 +184,7 @@ export class ConvertSelectionCommand {
                     value = sourceText;
                     missingLocalesSingle.push(locale);
                 }
-                await upsertTranslationKey(folder, locale, finalKey, value);
+                await upsertTranslationKey(folder, locale, finalKey, value, { rootName });
             }
 
             if (missingLocalesSingle.length) {
@@ -307,7 +313,11 @@ export class ConvertSelectionCommand {
             }
 
             const slug = slugifyForKey(sourceText);
-            const key = `${namespace}.${kind}.${slug}`;
+            let baseNamespace = namespace;
+            if (this.isCommonShortText(sourceText)) {
+                baseNamespace = 'Commons';
+            }
+            const key = `${baseNamespace}.${kind}.${slug}`;
 
             const targetLocales = locales.filter((l) => l !== defaultLocale);
 
@@ -340,7 +350,7 @@ export class ConvertSelectionCommand {
                     value = sourceText;
                     missingLocalesMulti.push(locale);
                 }
-                await upsertTranslationKey(folder, locale, key, value);
+                await upsertTranslationKey(folder, locale, key, value, { rootName });
             }
 
             if (missingLocalesMulti.length) {
@@ -702,6 +712,28 @@ export class ConvertSelectionCommand {
         }
         
         return parts;
+    }
+
+    private isCommonShortText(text: string): boolean {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) {
+            return false;
+        }
+        const cleaned = trimmed.replace(/\s+/g, ' ').trim();
+        if (/[.!?]/.test(cleaned)) {
+            return false;
+        }
+        const words = cleaned.split(' ').filter((w) => !!w);
+        if (!words.length || words.length > 2) {
+            return false;
+        }
+        if (cleaned.length > 24) {
+            return false;
+        }
+        if (/[\/_]/.test(cleaned)) {
+            return false;
+        }
+        return true;
     }
 
     /**

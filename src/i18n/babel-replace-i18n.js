@@ -157,6 +157,23 @@ function normalizeText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function isCommonShortText(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return false;
+  const cleaned = trimmed.replace(/\s+/g, ' ').trim();
+
+  if (/[.!?]/.test(cleaned)) return false;
+
+  const words = cleaned.split(' ').filter(Boolean);
+  if (words.length === 0 || words.length > 2) return false;
+
+  if (cleaned.length > 24) return false;
+
+  if (/[\/_]/.test(cleaned)) return false;
+
+  return true;
+}
+
 function shouldTranslateText(text) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
@@ -396,7 +413,8 @@ async function processFile(filePath, keyMap) {
       function buildCallFromString(text) {
         const cleaned = normalizeText(text);
         if (!shouldTranslateText(cleaned)) return null;
-        const keyId = `${namespace}|${kind}|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return null;
         return t.callExpression(t.identifier('t'), [t.stringLiteral(fullKey)]);
@@ -406,7 +424,8 @@ async function processFile(filePath, keyMap) {
         const { pattern, placeholders } = buildPatternAndPlaceholdersFromTemplate(tpl);
         const cleaned = normalizeText(pattern);
         if (!shouldTranslateText(cleaned)) return null;
-        const keyId = `${namespace}|${kind}|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return null;
         const props = placeholders.map(({ name, expression }) => t.objectProperty(t.identifier(name), expression));
@@ -489,7 +508,8 @@ async function processFile(filePath, keyMap) {
       ) {
         return;
       }
-      const keyId = `${namespace}|${kind}|${text}`;
+      const nsForKey = isCommonShortText(text) ? 'Commons' : namespace;
+      const keyId = `${nsForKey}|${kind}|${text}`;
       const fullKey = keyMap.get(keyId);
       if (!fullKey) return;
       const callExpr = t.callExpression(t.identifier('t'), [t.stringLiteral(fullKey)]);
@@ -539,7 +559,8 @@ async function processFile(filePath, keyMap) {
       const makeCallFromString = (s) => {
         const cleaned = normalizeText(s);
         if (!shouldTranslateText(cleaned)) return null;
-        const keyId = `${namespace}|${kind}|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return null;
         return t.callExpression(t.identifier('t'), [t.stringLiteral(fullKey)]);
@@ -548,7 +569,8 @@ async function processFile(filePath, keyMap) {
         const { pattern, placeholders } = buildPatternAndPlaceholdersFromTemplate(tpl);
         const cleaned = normalizeText(pattern);
         if (!shouldTranslateText(cleaned)) return null;
-        const keyId = `${namespace}|${kind}|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return null;
         const props = placeholders.map(({ name, expression }) => t.objectProperty(t.identifier(name), expression));
@@ -681,7 +703,8 @@ async function processFile(filePath, keyMap) {
         const cleaned = normalizeText(valueNode.value);
         if (!shouldTranslateText(cleaned)) return;
 
-        const keyId = `${namespace}|${kind}|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return;
 
@@ -693,7 +716,8 @@ async function processFile(filePath, keyMap) {
         const cleaned = normalizeText(pattern);
         if (!shouldTranslateText(cleaned)) return;
 
-        const keyId = `${namespace}|${kind}|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return;
 
@@ -744,7 +768,8 @@ async function processFile(filePath, keyMap) {
       if (/title/i.test(varName)) kind = 'heading';
       else if (/label/i.test(varName)) kind = 'label';
       else if (/placeholder/i.test(varName)) kind = 'placeholder';
-      const keyId = `${namespace}|${kind}|${cleaned}`;
+      const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+      const keyId = `${nsForKey}|${kind}|${cleaned}`;
       const fullKey = keyMap.get(keyId);
       if (!fullKey) return;
       const args = [t.stringLiteral(fullKey)];
@@ -774,7 +799,8 @@ async function processFile(filePath, keyMap) {
         if (!info) return;
         const cleaned = normalizeText(info.pattern);
         if (!shouldTranslateText(cleaned)) return;
-        const keyId = `${namespace}|title|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|title|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return;
         const argsForCall = [t.stringLiteral(fullKey)];
@@ -821,7 +847,8 @@ async function processFile(filePath, keyMap) {
         if (/title/i.test(varName)) kind = 'heading';
         else if (/label/i.test(varName)) kind = 'label';
         else if (/placeholder/i.test(varName)) kind = 'placeholder';
-        const keyId = `${namespace}|${kind}|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return;
         const args = [t.stringLiteral(fullKey)];
@@ -848,7 +875,8 @@ async function processFile(filePath, keyMap) {
             if (!info) return null;
             const cleaned = normalizeText(info.pattern);
             if (!shouldTranslateText(cleaned)) return null;
-            const keyId = `${namespace}|toast|${cleaned}`;
+            const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+            const keyId = `${nsForKey}|toast|${cleaned}`;
             const fullKey = keyMap.get(keyId);
             if (!fullKey) return null;
             const argsForCall = [t.stringLiteral(fullKey)];
@@ -878,7 +906,8 @@ async function processFile(filePath, keyMap) {
         if (!info) return;
         const cleaned = normalizeText(info.pattern);
         if (!shouldTranslateText(cleaned)) return;
-        const keyId = `${namespace}|toast|${cleaned}`;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|toast|${cleaned}`;
         const fullKey = keyMap.get(keyId);
         if (!fullKey) return;
         const argsForCall = [t.stringLiteral(fullKey)];
@@ -941,7 +970,8 @@ async function processVueFile(filePath, keyMap) {
     if (!shouldTranslateText(cleaned)) return whole;
 
     const kind = inferKindFromJsxElementName(tagName);
-    const keyId = `${namespace}|${kind}|${cleaned}`;
+    const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+    const keyId = `${nsForKey}|${kind}|${cleaned}`;
     const fullKey = keyMap.get(keyId);
     if (!fullKey) return whole;
 

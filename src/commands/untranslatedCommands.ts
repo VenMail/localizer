@@ -3,7 +3,7 @@ import * as path from 'path';
 import { I18nIndex, extractKeyAtPosition } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
-import { setTranslationValue, setTranslationValueInFile } from '../core/i18nFs';
+import { setTranslationValue, setTranslationValueInFile, deriveRootFromFile } from '../core/i18nFs';
 import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
 import { TextDecoder, TextEncoder } from 'util';
 
@@ -125,6 +125,25 @@ export class UntranslatedCommands {
             }
         }
         return dp[n];
+    }
+
+    private getRootNameForRecord(record: any): string {
+        if (!record || !Array.isArray(record.locations) || !record.locations.length) {
+            return 'common';
+        }
+        const defaultLocale = record.defaultLocale;
+        let location = record.locations.find((loc: any) => loc && loc.locale === defaultLocale);
+        if (!location) {
+            location = record.locations[0];
+        }
+        if (!location || !location.uri) {
+            return 'common';
+        }
+        const base = path.basename(location.uri.fsPath, '.json');
+        if (!base) {
+            return 'common';
+        }
+        return base.toLowerCase();
     }
 
     private buildLabelFromKeySegment(segment: string): string {
@@ -387,7 +406,7 @@ export class UntranslatedCommands {
         let folder = active
             ? vscode.workspace.getWorkspaceFolder(active.document.uri) ?? undefined
             : undefined;
-        
+
         if (!folder) {
             folder = await pickWorkspaceFolder();
         }
@@ -441,7 +460,6 @@ export class UntranslatedCommands {
                 return;
             }
 
-            // Preview updates
             try {
                 const previewDoc = await vscode.workspace.openTextDocument({
                     language: 'json',
@@ -449,7 +467,6 @@ export class UntranslatedCommands {
                 } as any);
                 await vscode.window.showTextDocument(previewDoc, { preview: false });
             } catch {
-                // Preview failed, continue
             }
 
             const choice = await vscode.window.showQuickPick(
@@ -467,8 +484,12 @@ export class UntranslatedCommands {
                 return;
             }
 
+            await this.i18nIndex.ensureInitialized();
+
             for (const u of updates) {
-                await setTranslationValue(folder, u.locale, u.keyPath, u.newValue);
+                const record = this.i18nIndex.getRecord(u.keyPath);
+                const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                await setTranslationValue(folder, u.locale, u.keyPath, u.newValue, { rootName });
             }
 
             await this.pruneUntranslatedReports(
@@ -476,7 +497,6 @@ export class UntranslatedCommands {
                 updates.map((u) => ({ locale: u.locale, keyPath: u.keyPath })),
             );
 
-            // Locale file writes trigger watchers which update index + diagnostics incrementally
             vscode.window.showInformationMessage(
                 `AI Localizer: Applied ${updates.length} AI translation updates.`,
             );
@@ -528,11 +548,13 @@ export class UntranslatedCommands {
                 return;
             }
 
+            const rootName = this.getRootNameForRecord(record);
+
             // First: sync missing keys with default placeholder values
             for (const locale of targetLocales) {
                 const current = record.locales.get(locale);
                 if (typeof current !== 'string' || !current.trim()) {
-                    await setTranslationValue(folder, locale, key, defaultValue);
+                    await setTranslationValue(folder, locale, key, defaultValue, { rootName });
                 }
             }
 
@@ -561,7 +583,7 @@ export class UntranslatedCommands {
             }
 
             for (const [locale, newValue] of translations.entries()) {
-                await setTranslationValue(folder, locale, key, newValue);
+                await setTranslationValue(folder, locale, key, newValue, { rootName });
             }
 
             // Locale file writes trigger watchers which update index + diagnostics incrementally
@@ -999,7 +1021,9 @@ export class UntranslatedCommands {
                             continue;
                         }
                         try {
-                            await setTranslationValue(folder!, targetLocale, item.key, newValue);
+                            const record = this.i18nIndex.getRecord(item.key);
+                            const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                            await setTranslationValue(folder!, targetLocale, item.key, newValue, { rootName });
                             translatedCount++;
                             fixed.push({ locale: targetLocale, keyPath: item.key });
                         } catch (err) {
@@ -1197,7 +1221,9 @@ export class UntranslatedCommands {
                         continue;
                     }
                     try {
-                        await setTranslationValue(folder, selectedLocale, item.key, newValue);
+                        const record = this.i18nIndex.getRecord(item.key);
+                        const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                        await setTranslationValue(folder, selectedLocale, item.key, newValue, { rootName });
                         translatedCount += 1;
                         fixed.push({ locale: selectedLocale, keyPath: item.key });
                     } catch (err) {
@@ -1415,7 +1441,9 @@ export class UntranslatedCommands {
                                         continue;
                                     }
                                     try {
-                                        await setTranslationValue(folder!, locale, item.key, newValue);
+                                        const record = this.i18nIndex.getRecord(item.key);
+                                        const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                                        await setTranslationValue(folder!, locale, item.key, newValue, { rootName });
                                         translatedTotal += 1;
                                         fixed.push({ locale, keyPath: item.key });
                                     } catch (err) {
@@ -2922,7 +2950,8 @@ export class UntranslatedCommands {
             const lastSegment = keyParts[keyParts.length - 1] || '';
             const label = this.buildLabelFromKeySegment(lastSegment) || key;
 
-            await setTranslationValue(folder, defaultLocale, key, label);
+            const rootName = deriveRootFromFile(folder, documentUri);
+            await setTranslationValue(folder, defaultLocale, key, label, { rootName });
 
             vscode.window.showInformationMessage(
                 `AI Localizer: Created translation key ${key} in locale ${defaultLocale}.`,
@@ -3114,7 +3143,9 @@ export class UntranslatedCommands {
 
             const newValue = translations.get(locale);
             if (newValue) {
-                await setTranslationValue(folder, locale, key, newValue);
+                const record = this.i18nIndex.getRecord(key);
+                const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                await setTranslationValue(folder, locale, key, newValue, { rootName });
                 // Locale file writes trigger watchers which update index + diagnostics incrementally
 
                 vscode.window.showInformationMessage(
