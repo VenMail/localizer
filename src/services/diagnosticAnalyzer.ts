@@ -880,8 +880,28 @@ export class DiagnosticAnalyzer {
             return new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0));
         }
 
+        // Try to narrow the search using the full dotted key path so we place
+        // diagnostics on the correct occurrence when the same slug appears
+        // under multiple groups in a large locale file.
+        let searchStart = 0;
+        if (parts.length > 1) {
+            for (let i = 0; i < parts.length - 1; i += 1) {
+                const seg = parts[i];
+                if (!seg) {
+                    continue;
+                }
+                const segNeedle = `"${seg}"`;
+                const idx = text.indexOf(segNeedle, searchStart);
+                if (idx === -1) {
+                    searchStart = 0;
+                    break;
+                }
+                searchStart = idx + segNeedle.length;
+            }
+        }
+
         const needle = `"${lastSegment}"`;
-        let index = text.indexOf(needle);
+        let index = text.indexOf(needle, searchStart);
         let foundIndex = -1;
 
         while (index !== -1) {
