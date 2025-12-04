@@ -109,6 +109,12 @@ const LIBRARY_IDENTIFIERS = new Set([
   'arguments', 'options', 'config', 'settings', 'init', 'initialize',
 ]);
 
+const JS_DIRECTIVE_LITERALS = new Set([
+  'use strict',
+  'use client',
+  'use server',
+]);
+
 /**
  * Check if text looks like English text with parentheses (e.g., "Click (here)")
  */
@@ -462,6 +468,8 @@ function isCodeContent(text) {
   const trimmed = String(text || '').trim();
   if (!trimmed || trimmed.length < 2) return false;
   
+  const lower = trimmed.toLowerCase();
+  
   // Quick heuristics to identify English text
   if (isEnglishWithParens(trimmed)) {
     return false;
@@ -474,6 +482,10 @@ function isCodeContent(text) {
     if (!codeIndicators.some(indicator => trimmed.includes(indicator))) {
       return false;
     }
+  }
+  
+  if (JS_DIRECTIVE_LITERALS.has(lower) && trimmed === lower) {
+    return true;
   }
   
   // Check for explicit code patterns
@@ -609,6 +621,7 @@ module.exports = {
   JS_KEYWORDS,
   PROGRAMMING_IDENTIFIERS,
   LIBRARY_IDENTIFIERS,
+  JS_DIRECTIVE_LITERALS,
   COMMON_ENGLISH_PATTERNS,
   isJsExpression,
   isVueDirectiveExpression,

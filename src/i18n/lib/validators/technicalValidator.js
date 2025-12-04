@@ -706,6 +706,12 @@ function isTechnicalContent(text) {
     return true;
   }
   
+  // Check for sentinel-style constants with surrounding underscores and optional trailing punctuation
+  // Examples: __CAPACITOR_IS_NATIVE__, __NEXT_DATA__, __DEV__: , __PROD__=
+  if (/^_+[A-Z][A-Z0-9_]*_+[:=]?$/.test(trimmed)) {
+    return true;
+  }
+  
   // Check for dot notation (object.property.method)
   if (/^[a-z_$][a-z0-9_$]*(\.[a-z_$][a-z0-9_$]*)+$/i.test(trimmed)) {
     return true;

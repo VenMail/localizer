@@ -172,7 +172,8 @@ function isSingleCssClass(part) {
   
   // 1. ANY hyphenated pattern with numbers, colors, or size indicators
   //    e.g., p-4, mt-2, text-gray-500, p-1.5, bg-blue-600, w-full
-  if (/^-?[a-z]+(?:-[a-z0-9]+)+$/i.test(part)) {
+  //    Allow decimal and fractional numeric segments (1.5, 50/90, etc.).
+  if (/^-?[a-z]+(?:-[a-z0-9.\/:%]+)+$/i.test(part)) {
     // Contains common CSS value indicators
     if (/\d+|full|auto|none|start|end|center|stretch|between|around|evenly|primary|secondary|success|danger|warning|info|light|dark|white|black|gray|grey|red|blue|green|yellow|purple|pink|indigo|teal|orange|cyan|amber|lime|emerald|sky|violet|fuchsia|rose/i.test(part)) {
       return true;

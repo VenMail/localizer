@@ -77,6 +77,35 @@ function isCommonShortText(text) {
   return true;
 }
 
+function cleanupExistingTranslations(existing) {
+  let removed = 0;
+  const root = existing && typeof existing === 'object' ? existing : {};
+  for (const [namespace, kinds] of Object.entries(root)) {
+    if (!kinds || typeof kinds !== 'object') continue;
+    for (const [kind, entries] of Object.entries(kinds)) {
+      if (!entries || typeof entries !== 'object') continue;
+      for (const [slug, value] of Object.entries(entries)) {
+        const text = typeof value === 'string' ? value : null;
+        if (!text) continue;
+        const validation = validateText(String(text).trim(), { ignorePatterns });
+        if (!validation.valid) {
+          delete entries[slug];
+          removed += 1;
+        }
+      }
+      if (Object.keys(entries).length === 0) {
+        delete kinds[kind];
+      }
+    }
+    if (Object.keys(kinds).length === 0) {
+      delete root[namespace];
+    }
+  }
+  if (removed > 0) {
+    console.log(`[i18n-extract] Cleaned ${removed} invalid existing translations with updated validators.`);
+  }
+}
+
 function getRootFromFilePath(filePath) {
   const normalized = filePath.replace(/\\/g, '/');
   if (normalized.includes('/resources/views/')) {
@@ -351,6 +380,7 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
     }
 
     if (existingTranslations) {
+      cleanupExistingTranslations(existingTranslations);
       Object.assign(translations, existingTranslations);
       primeTextKeyMap(existingTranslations, textKeyMap);
     }
