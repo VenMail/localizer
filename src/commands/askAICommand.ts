@@ -4,6 +4,8 @@ import { TranslationService } from '../services/translationService';
 /**
  * Command to ask AI for help
  */
+let askAiOutputChannel: vscode.OutputChannel | undefined;
+
 export class AskAICommand {
     private aiOutput: vscode.OutputChannel;
 
@@ -11,7 +13,10 @@ export class AskAICommand {
         private context: vscode.ExtensionContext,
         private translationService: TranslationService,
     ) {
-        this.aiOutput = vscode.window.createOutputChannel('Localizer - Ask AI');
+        if (!askAiOutputChannel) {
+            askAiOutputChannel = vscode.window.createOutputChannel('Localizer - Ask AI');
+        }
+        this.aiOutput = askAiOutputChannel;
     }
 
     async execute(): Promise<void> {

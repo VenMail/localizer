@@ -174,6 +174,15 @@ export interface RunI18nScriptOptions {
     extraArgs?: string[];
 }
 
+let scriptsOutputChannel: vscode.OutputChannel | undefined;
+
+function getScriptsOutputChannel(): vscode.OutputChannel {
+    if (!scriptsOutputChannel) {
+        scriptsOutputChannel = vscode.window.createOutputChannel('AI i18n Scripts');
+    }
+    return scriptsOutputChannel;
+}
+
 export async function runI18nScript(
     scriptName: string,
     options?: RunI18nScriptOptions,
@@ -217,7 +226,7 @@ export async function runI18nScript(
             break;
     }
 
-    const output = vscode.window.createOutputChannel('AI i18n Scripts');
+    const output = getScriptsOutputChannel();
     output.show(true);
     output.appendLine(`> (${folder.name}) ${command}`);
 
