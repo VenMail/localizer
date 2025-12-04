@@ -67,6 +67,13 @@ export class StatusCommand {
                     description: 'Copy scripts and set up package.json',
                     action: 'configure',
                 });
+            } else {
+                items.unshift({
+                    label: '$(tools) Fix all i18n issues in this project',
+                    description:
+                        'Run extract, rewrite, sync, AI fixes, and cleanup unused/invalid keys across this workspace.',
+                    action: 'fixAllIssuesProject',
+                });
             }
         }
 
@@ -175,6 +182,9 @@ export class StatusCommand {
                 break;
             case 'showHealthReport':
                 await vscode.commands.executeCommand('ai-localizer.i18n.showHealthReport');
+                break;
+            case 'fixAllIssuesProject':
+                await vscode.commands.executeCommand('ai-localizer.i18n.fixAllIssuesInProject');
                 break;
             case 'runExtract':
                 await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');

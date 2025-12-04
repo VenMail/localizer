@@ -137,3 +137,46 @@ export async function isFileClean(
 
     return !isDirty;
 }
+
+export interface GitSnapshotResult {
+    success: boolean;
+    error?: string;
+}
+
+export async function createSnapshotCommit(
+    folder: vscode.WorkspaceFolder,
+    message: string,
+): Promise<GitSnapshotResult> {
+    const gitExtension = vscode.extensions.getExtension('vscode.git');
+    if (!gitExtension) {
+        return {
+            success: false,
+            error: 'Git extension not available.',
+        };
+    }
+
+    try {
+        if (!gitExtension.isActive) {
+            await gitExtension.activate();
+        }
+
+        const git = gitExtension.exports.getAPI(1);
+        const repo = git.repositories.find((r: any) => r.rootUri.fsPath === folder.uri.fsPath);
+        if (!repo) {
+            return {
+                success: false,
+                error: 'No git repository found for workspace folder.',
+            };
+        }
+
+        await repo.commit(message, { all: true } as any);
+        return { success: true };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('Failed to create git snapshot commit:', err);
+        return {
+            success: false,
+            error: msg,
+        };
+    }
+}

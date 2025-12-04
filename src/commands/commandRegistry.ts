@@ -44,6 +44,7 @@ export class CommandRegistry {
             const { UntranslatedCommands } = require('./untranslatedCommands');
             const { ComponentCommands } = require('./componentCommands');
             const { ScaffoldMessagesCommand } = require('./scaffoldMessagesCommand');
+            const { ProjectFixCommand } = require('./projectFixCommand');
 
             const untranslatedDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-untranslated');
             disposables.push(untranslatedDiagnostics);
@@ -152,6 +153,19 @@ export class CommandRegistry {
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.showStatus', () =>
                 statusCmd.execute(),
+            ),
+        );
+
+        // Project-wide fix command
+        const projectFixCmd = new ProjectFixCommand(
+            this.context,
+            this.i18nIndex,
+            this.translationService,
+            this.projectConfigService,
+        );
+        disposables.push(
+            vscode.commands.registerCommand('ai-localizer.i18n.fixAllIssuesInProject', () =>
+                projectFixCmd.execute(),
             ),
         );
 

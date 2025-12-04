@@ -169,32 +169,51 @@ export async function installPackages(
     return true;
 }
 
-export async function runI18nScript(scriptName: string): Promise<void> {
-    const active = vscode.window.activeTextEditor;
-    let folder = active ? vscode.workspace.getWorkspaceFolder(active.document.uri) ?? undefined : undefined;
+export interface RunI18nScriptOptions {
+    folder?: vscode.WorkspaceFolder;
+    extraArgs?: string[];
+}
+
+export async function runI18nScript(
+    scriptName: string,
+    options?: RunI18nScriptOptions,
+): Promise<void> {
+    let folder = options?.folder;
+
     if (!folder) {
-        folder = await pickWorkspaceFolder();
+        const active = vscode.window.activeTextEditor;
+        folder = active
+            ? vscode.workspace.getWorkspaceFolder(active.document.uri) ?? undefined
+            : undefined;
+        if (!folder) {
+            folder = await pickWorkspaceFolder();
+        }
     }
+
     if (!folder) {
         vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
         return;
     }
 
     const pm = await detectPackageManager(folder);
+    const args = options?.extraArgs && options.extraArgs.length
+        ? ` -- ${options.extraArgs.join(' ')}`
+        : '';
+
     let command: string;
     switch (pm) {
         case 'yarn':
-            command = `yarn ${scriptName}`;
+            command = `yarn ${scriptName}${args}`;
             break;
         case 'pnpm':
-            command = `pnpm run ${scriptName}`;
+            command = `pnpm run ${scriptName}${args}`;
             break;
         case 'bun':
-            command = `bun run ${scriptName}`;
+            command = `bun run ${scriptName}${args}`;
             break;
         case 'npm':
         default:
-            command = `npm run ${scriptName}`;
+            command = `npm run ${scriptName}${args}`;
             break;
     }
 

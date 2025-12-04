@@ -268,7 +268,6 @@ function isSingleCssClass(part) {
   
   return false;
 }
-
 /**
  * Check if text is a CSS class list (Tailwind, utility classes, etc.)
  * e.g., "flex items-center justify-between", "mt-4 px-2 text-gray-500"
@@ -291,37 +290,42 @@ function isCssClassList(text) {
   // Split by whitespace
   const parts = trimmed.split(/\s+/);
   if (parts.length === 0) return false;
+
+  // Ignore placeholder-like tokens such as {classX}, {{value}}, ${expr}
+  const placeholderPattern = /^\{\{?[^}]+\}?\}$|^\$\{[^}]+\}$/;
+  const cssParts = parts.filter(p => !placeholderPattern.test(p));
+  if (cssParts.length === 0) return false;
   
-  // For single words, be more strict
-  if (parts.length === 1) {
-    return isSingleCssClass(parts[0]);
+  // For a single non-placeholder token, be strict
+  if (cssParts.length === 1) {
+    return isSingleCssClass(cssParts[0]);
   }
   
-  // Count how many look like CSS classes
+  // Count how many non-placeholder tokens look like CSS classes
   let classLikeCount = 0;
-  for (const part of parts) {
+  for (const part of cssParts) {
     if (isSingleCssClass(part)) {
       classLikeCount++;
     }
   }
   
-  // If all parts look like CSS classes, it's definitely a class list
-  if (classLikeCount === parts.length) {
+  // If all non-placeholder tokens look like CSS classes, it's definitely a class list
+  if (classLikeCount === cssParts.length && cssParts.length > 0) {
     return true;
   }
   
-  // If we have a quick pattern match and majority are CSS-like, accept it
-  if (hasQuickPattern && classLikeCount >= parts.length * 0.6) {
+  // If we have a quick pattern match and majority of non-placeholder tokens are CSS-like, accept it
+  if (hasQuickPattern && classLikeCount >= cssParts.length * 0.6) {
     return true;
   }
   
-  // If more than 70% look like CSS classes and we have at least 2, it's probably a class list
-  if (classLikeCount >= parts.length * 0.7 && classLikeCount >= 2) {
+  // If more than 70% of non-placeholder tokens look like CSS classes and we have at least 2, it's probably a class list
+  if (classLikeCount >= cssParts.length * 0.7 && classLikeCount >= 2) {
     return true;
   }
   
-  // Edge case: If we have 2+ classes and they ALL match hyphen-number pattern
-  if (parts.length >= 2 && parts.every(p => /-\d/.test(p))) {
+  // Edge case: If we have 2+ non-placeholder tokens and they ALL match hyphen-number pattern
+  if (cssParts.length >= 2 && cssParts.every(p => /-\d/.test(p))) {
     return true;
   }
   

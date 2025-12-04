@@ -303,227 +303,369 @@ export class TranslationService {
 
         const preferredMode = this.getBatchOutputMode();
 
+        const classifyError = (err: any): 'rate_limit' | 'too_large' | 'other' => {
+            const anyErr: any = err;
+            const status =
+                anyErr && typeof anyErr.status === 'number' ? (anyErr.status as number) : undefined;
+            const code =
+                anyErr && typeof anyErr.code === 'string'
+                    ? (anyErr.code as string).toLowerCase()
+                    : '';
+            const type =
+                anyErr && anyErr.error && typeof anyErr.error.type === 'string'
+                    ? (anyErr.error.type as string).toLowerCase()
+                    : '';
+            const message =
+                (anyErr && typeof anyErr.message === 'string'
+                    ? (anyErr.message as string)
+                    : String(anyErr || '')
+                ).toLowerCase();
+
+            if (
+                status === 429 ||
+                code === 'rate_limit_exceeded' ||
+                type === 'rate_limit_exceeded' ||
+                message.includes('rate limit') ||
+                message.includes('too many requests')
+            ) {
+                return 'rate_limit';
+            }
+
+            if (
+                status === 400 ||
+                type.includes('context_length') ||
+                type.includes('max_tokens') ||
+                message.includes('context length') ||
+                message.includes('maximum context length') ||
+                message.includes('too many tokens') ||
+                message.includes('request too large') ||
+                message.includes('token limit')
+            ) {
+                return 'too_large';
+            }
+
+            return 'other';
+        };
+
+        const sleep = (ms: number): Promise<void> =>
+            new Promise((resolve) => {
+                setTimeout(resolve, ms);
+            });
+
+        type BatchRunResult = 'ok' | 'none' | 'too_large';
+
         const runJsonMode = async (
             batch: { id: string; text: string; defaultLocale: string }[],
-        ): Promise<boolean> => {
-            let added = false;
-            try {
-                const payload = {
-                    targetLocale,
-                    context,
-                    items: batch.map((it) => ({
-                        id: it.id,
-                        text: it.text,
-                        defaultLocale: it.defaultLocale,
-                    })),
-                };
-
-                const userContent = [
-                    'Translate the following items from their defaultLocale to the target locale.',
-                    `Target locale: ${targetLocale}`,
-                    `Context: ${context}`,
-                    '',
-                    'Return ONLY valid JSON with this shape:',
-                    '{ "translations": [ { "id": "string", "translated": "string" } ] }',
-                    '',
-                    'Items:',
-                    JSON.stringify(payload, null, 2),
-                ].join('\n');
-
-                const completion = await client.chat.completions.create({
-                    model,
-                    temperature: 0.2,
-                    messages: [
-                        {
-                            role: 'system',
-                            content:
-                                'You are a localization assistant for application UI. Translate short UI text, preserving placeholders like {name} or {{ variable }}. Respond with strict JSON only.',
-                        },
-                        {
-                            role: 'user',
-                            content: userContent,
-                        },
-                    ],
-                });
-
-                const content = completion.choices[0]?.message?.content || '';
-                let parsed: any;
+        ): Promise<BatchRunResult> => {
+            const maxAttempts = 3;
+            let attempt = 0;
+            while (attempt < maxAttempts) {
+                attempt += 1;
                 try {
-                    parsed = JSON.parse(content);
+                    const payload = {
+                        targetLocale,
+                        context,
+                        items: batch.map((it) => ({
+                            id: it.id,
+                            text: it.text,
+                            defaultLocale: it.defaultLocale,
+                        })),
+                    };
+
+                    const userContent = [
+                        'Translate the following items from their defaultLocale to the target locale.',
+                        `Target locale: ${targetLocale}`,
+                        `Context: ${context}`,
+                        '',
+                        'Return ONLY valid JSON with this shape:',
+                        '{ "translations": [ { "id": "string", "translated": "string" } ] }',
+                        '',
+                        'Items:',
+                        JSON.stringify(payload, null, 2),
+                    ].join('\n');
+
+                    const completion = await client.chat.completions.create({
+                        model,
+                        temperature: 0.2,
+                        messages: [
+                            {
+                                role: 'system',
+                                content:
+                                    'You are a localization assistant for application UI. Translate short UI text, preserving placeholders like {name} or {{ variable }}. Respond with strict JSON only.',
+                            },
+                            {
+                                role: 'user',
+                                content: userContent,
+                            },
+                        ],
+                    });
+
+                    const content = completion.choices[0]?.message?.content || '';
+                    let parsed: any;
+                    try {
+                        parsed = JSON.parse(content);
+                    } catch (err) {
+                        console.error(
+                            'AI Localizer: Failed to parse batch translation JSON response (JSON mode):',
+                            err,
+                        );
+                        const details = err instanceof Error ? err.message : String(err);
+                        this.log?.appendLine(
+                            `[TranslateBatch #${runId}] Failed to parse JSON batch response for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
+                        );
+                        return 'none';
+                    }
+
+                    const translations = Array.isArray(parsed?.translations)
+                        ? parsed.translations
+                        : [];
+                    let added = false;
+                    for (const entry of translations) {
+                        if (!entry) {
+                            continue;
+                        }
+                        const id = typeof entry.id === 'string' ? entry.id : '';
+                        const translatedRaw =
+                            typeof entry.translated === 'string' ? entry.translated : '';
+                        const translated = translatedRaw.trim();
+                        if (id && translated) {
+                            result.set(id, translated);
+                            const original = batch.find((it) => it.id === id);
+                            if (original && this.isCacheableShortText(original.text)) {
+                                const cacheKey = this.makeShortTextCacheKey(
+                                    original.text,
+                                    original.defaultLocale,
+                                    targetLocale,
+                                );
+                                this.shortTextCache.set(cacheKey, translated);
+                            }
+                            added = true;
+                        }
+                    }
+                    return added ? 'ok' : 'none';
                 } catch (err) {
                     console.error(
-                        'AI Localizer: Failed to parse batch translation JSON response (JSON mode):',
+                        'AI Localizer: Failed to get batch AI translations (JSON mode):',
                         err,
                     );
                     const details = err instanceof Error ? err.message : String(err);
                     this.log?.appendLine(
-                        `[TranslateBatch #${runId}] Failed to parse JSON batch response for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
+                        `[TranslateBatch #${runId}] Error in JSON mode for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
                     );
-                    return false;
-                }
-
-                const translations = Array.isArray(parsed?.translations)
-                    ? parsed.translations
-                    : [];
-                for (const entry of translations) {
-                    if (!entry) {
+                    const category = classifyError(err);
+                    if (category === 'rate_limit' && attempt < maxAttempts) {
+                        const delayMs = 1000 * Math.pow(2, attempt - 1);
+                        this.log?.appendLine(
+                            `[TranslateBatch #${runId}] JSON mode hit rate limit; retrying in ${delayMs} ms.`,
+                        );
+                        await sleep(delayMs);
                         continue;
                     }
-                    const id = typeof entry.id === 'string' ? entry.id : '';
-                    const translatedRaw =
-                        typeof entry.translated === 'string' ? entry.translated : '';
-                    const translated = translatedRaw.trim();
-                    if (id && translated) {
-                        result.set(id, translated);
-                        const original = batch.find((it) => it.id === id);
-                        if (original && this.isCacheableShortText(original.text)) {
-                            const cacheKey = this.makeShortTextCacheKey(
-                                original.text,
-                                original.defaultLocale,
-                                targetLocale,
-                            );
-                            this.shortTextCache.set(cacheKey, translated);
-                        }
-                        added = true;
+                    if (category === 'too_large') {
+                        return 'too_large';
                     }
+                    return 'none';
                 }
-            } catch (err) {
-                console.error('AI Localizer: Failed to get batch AI translations (JSON mode):', err);
-                const details = err instanceof Error ? err.message : String(err);
-                this.log?.appendLine(
-                    `[TranslateBatch #${runId}] Error in JSON mode for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
-                );
             }
-            return added;
+            return 'none';
         };
 
         const runLineMode = async (
             batch: { id: string; text: string; defaultLocale: string }[],
-        ): Promise<boolean> => {
-            let added = false;
-            try {
-                const payload = {
-                    targetLocale,
-                    context,
-                    items: batch.map((it) => ({
-                        id: it.id,
-                        text: it.text,
-                        defaultLocale: it.defaultLocale,
-                    })),
-                };
+        ): Promise<BatchRunResult> => {
+            const maxAttempts = 3;
+            let attempt = 0;
+            while (attempt < maxAttempts) {
+                attempt += 1;
+                try {
+                    const payload = {
+                        targetLocale,
+                        context,
+                        items: batch.map((it) => ({
+                            id: it.id,
+                            text: it.text,
+                            defaultLocale: it.defaultLocale,
+                        })),
+                    };
 
-                const userContent = [
-                    'Translate the following items from their defaultLocale to the target locale.',
-                    `Target locale: ${targetLocale}`,
-                    `Context: ${context}`,
-                    '',
-                    'Return one line per item in this exact format:',
-                    '<id>\t<translated text>',
-                    'Do not include a header line or any extra commentary.',
-                    '',
-                    'Items:',
-                    JSON.stringify(payload, null, 2),
-                ].join('\n');
+                    const userContent = [
+                        'Translate the following items from their defaultLocale to the target locale.',
+                        `Target locale: ${targetLocale}`,
+                        `Context: ${context}`,
+                        '',
+                        'Return one line per item in this exact format:',
+                        '<id>\t<translated text>',
+                        'Do not include a header line or any extra commentary.',
+                        '',
+                        'Items:',
+                        JSON.stringify(payload, null, 2),
+                    ].join('\n');
 
-                const completion = await client.chat.completions.create({
-                    model,
-                    temperature: 0.2,
-                    messages: [
-                        {
-                            role: 'system',
-                            content:
-                                'You are a localization assistant for application UI. Translate short UI text, preserving placeholders like {name} or {{ variable }}. Respond with plain lines only, no JSON or code fences.',
-                        },
-                        {
-                            role: 'user',
-                            content: userContent,
-                        },
-                    ],
-                });
+                    const completion = await client.chat.completions.create({
+                        model,
+                        temperature: 0.2,
+                        messages: [
+                            {
+                                role: 'system',
+                                content:
+                                    'You are a localization assistant for application UI. Translate short UI text, preserving placeholders like {name} or {{ variable }}. Respond with plain lines only, no JSON or code fences.',
+                            },
+                            {
+                                role: 'user',
+                                content: userContent,
+                            },
+                        ],
+                    });
 
-                const content = completion.choices[0]?.message?.content || '';
-                const lines = content
-                    .split(/\r?\n/)
-                    .map((l) => l.trim())
-                    .filter((l) => l && !l.startsWith('```'));
+                    const content = completion.choices[0]?.message?.content || '';
+                    const lines = content
+                        .split(/\r?\n/)
+                        .map((l) => l.trim())
+                        .filter((l) => l && !l.startsWith('```'));
 
-                for (const line of lines) {
-                    const idx = line.indexOf('\t');
-                    if (idx <= 0) {
+                    let added = false;
+                    for (const line of lines) {
+                        const idx = line.indexOf('\t');
+                        if (idx <= 0) {
+                            continue;
+                        }
+                        const id = line.slice(0, idx).trim();
+                        const translated = line.slice(idx + 1).trim();
+                        if (id && translated) {
+                            result.set(id, translated);
+                            const original = batch.find((it) => it.id === id);
+                            if (original && this.isCacheableShortText(original.text)) {
+                                const cacheKey = this.makeShortTextCacheKey(
+                                    original.text,
+                                    original.defaultLocale,
+                                    targetLocale,
+                                );
+                                this.shortTextCache.set(cacheKey, translated);
+                            }
+                            added = true;
+                        }
+                    }
+                    return added ? 'ok' : 'none';
+                } catch (err) {
+                    console.error(
+                        'AI Localizer: Failed to get batch AI translations (line mode):',
+                        err,
+                    );
+                    const details = err instanceof Error ? err.message : String(err);
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Error in line mode for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
+                    );
+                    const category = classifyError(err);
+                    if (category === 'rate_limit' && attempt < maxAttempts) {
+                        const delayMs = 1000 * Math.pow(2, attempt - 1);
+                        this.log?.appendLine(
+                            `[TranslateBatch #${runId}] Line mode hit rate limit; retrying in ${delayMs} ms.`,
+                        );
+                        await sleep(delayMs);
                         continue;
                     }
-                    const id = line.slice(0, idx).trim();
-                    const translated = line.slice(idx + 1).trim();
-                    if (id && translated) {
-                        result.set(id, translated);
-                        const original = batch.find((it) => it.id === id);
-                        if (original && this.isCacheableShortText(original.text)) {
-                            const cacheKey = this.makeShortTextCacheKey(
-                                original.text,
-                                original.defaultLocale,
-                                targetLocale,
-                            );
-                            this.shortTextCache.set(cacheKey, translated);
-                        }
-                        added = true;
+                    if (category === 'too_large') {
+                        return 'too_large';
                     }
+                    return 'none';
                 }
-            } catch (err) {
-                console.error('AI Localizer: Failed to get batch AI translations (line mode):', err);
-                const details = err instanceof Error ? err.message : String(err);
-                this.log?.appendLine(
-                    `[TranslateBatch #${runId}] Error in line mode for target=${targetLocale}, batchSize=${batch.length}: ${details}`,
-                );
             }
-            return added;
+            return 'none';
         };
 
-        for (let i = 0; i < batches.length; i += 1) {
-            const batch = batches[i];
-            const batchLabel = `${i + 1}/${batches.length}`;
-            if (preferredMode === 'lines') {
-                this.log?.appendLine(
-                    `[TranslateBatch #${runId}] Batch ${batchLabel}: trying line mode (items=${batch.length}).`,
-                );
-                const usedLines = await runLineMode(batch);
-                if (!usedLines) {
+        const processBatch = async (
+            batch: { id: string; text: string; defaultLocale: string }[],
+            index: number,
+            total: number,
+        ): Promise<void> => {
+            const batchLabel = `${index + 1}/${total}`;
+
+            const runWithPreferredMode = async (
+                currentBatch: { id: string; text: string; defaultLocale: string }[],
+            ): Promise<BatchRunResult> => {
+                if (preferredMode === 'lines') {
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Batch ${batchLabel}: trying line mode (items=${currentBatch.length}).`,
+                    );
+                    const lineResult = await runLineMode(currentBatch);
+                    if (lineResult === 'ok') {
+                        return 'ok';
+                    }
+                    if (lineResult === 'too_large') {
+                        return 'too_large';
+                    }
                     this.log?.appendLine(
                         `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode produced no usable translations; falling back to JSON mode.`,
                     );
-                    const usedJson = await runJsonMode(batch);
-                    if (usedJson) {
+                    const jsonResult = await runJsonMode(currentBatch);
+                    if (jsonResult === 'ok') {
                         this.log?.appendLine(
                             `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode succeeded; switching preferred batch output mode to 'json'.`,
                         );
                         await this.setBatchOutputMode('json');
-                    } else {
-                        this.log?.appendLine(
-                            `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode also produced no usable translations.`,
-                        );
+                        return 'ok';
                     }
-                }
-            } else {
-                this.log?.appendLine(
-                    `[TranslateBatch #${runId}] Batch ${batchLabel}: trying JSON mode (items=${batch.length}).`,
-                );
-                const usedJson = await runJsonMode(batch);
-                if (!usedJson) {
+                    if (jsonResult === 'too_large') {
+                        return 'too_large';
+                    }
                     this.log?.appendLine(
-                        `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode produced no usable translations; falling back to line mode.`,
+                        `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode also produced no usable translations.`,
                     );
-                    const usedLines = await runLineMode(batch);
-                    if (usedLines) {
-                        this.log?.appendLine(
-                            `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode succeeded; switching preferred batch output mode to 'lines'.`,
-                        );
-                        await this.setBatchOutputMode('lines');
-                    } else {
-                        this.log?.appendLine(
-                            `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode also produced no usable translations.`,
-                        );
-                    }
+                    return 'none';
                 }
+
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Batch ${batchLabel}: trying JSON mode (items=${currentBatch.length}).`,
+                );
+                const jsonResult = await runJsonMode(currentBatch);
+                if (jsonResult === 'ok') {
+                    return 'ok';
+                }
+                if (jsonResult === 'too_large') {
+                    return 'too_large';
+                }
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Batch ${batchLabel}: JSON mode produced no usable translations; falling back to line mode.`,
+                );
+                const lineResult = await runLineMode(currentBatch);
+                if (lineResult === 'ok') {
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode succeeded; switching preferred batch output mode to 'lines'.`,
+                    );
+                    await this.setBatchOutputMode('lines');
+                    return 'ok';
+                }
+                if (lineResult === 'too_large') {
+                    return 'too_large';
+                }
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Batch ${batchLabel}: line mode also produced no usable translations.`,
+                );
+                return 'none';
+            };
+
+            const resultMode = await runWithPreferredMode(batch);
+            if (resultMode === 'too_large') {
+                if (batch.length <= 1) {
+                    this.log?.appendLine(
+                        `[TranslateBatch #${runId}] Batch ${batchLabel}: request too large even for a single item; skipping and relying on per-item fallback.`,
+                    );
+                    return;
+                }
+                const mid = Math.floor(batch.length / 2) || 1;
+                const left = batch.slice(0, mid);
+                const right = batch.slice(mid);
+                this.log?.appendLine(
+                    `[TranslateBatch #${runId}] Batch ${batchLabel}: request too large, splitting into ${left.length} + ${right.length} item(s).`,
+                );
+                await processBatch(left, index, total);
+                await processBatch(right, index, total);
             }
+        };
+
+        for (let i = 0; i < batches.length; i += 1) {
+            const batch = batches[i];
+            await processBatch(batch, i, batches.length);
         }
 
         const remaining = items.filter((item) => !result.has(item.id));
