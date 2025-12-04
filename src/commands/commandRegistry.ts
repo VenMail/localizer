@@ -584,6 +584,13 @@ export class CommandRegistry {
         await this.diagnosticAnalyzer.loadStyleReport(folders);
         await this.diagnosticAnalyzer.loadIgnorePatterns(folders);
 
+        // Invalidate stale untranslated report entries for changed keys
+        // This ensures that manually edited translations are re-evaluated
+        // against the actual values rather than stale report data
+        if (extraKeys && extraKeys.length > 0) {
+            this.diagnosticAnalyzer.invalidateUntranslatedReportKeys(extraKeys);
+        }
+
         const diagnostics = await this.diagnosticAnalyzer.analyzeFile(uri, config, extraKeys);
         collection.set(uri, diagnostics);
     }

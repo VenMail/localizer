@@ -278,6 +278,32 @@ export class DiagnosticAnalyzer {
     }
 
     /**
+     * Invalidate untranslated report entries for specific keys.
+     * This should be called when translation files are edited to ensure
+     * stale report data doesn't cause incorrect diagnostics.
+     */
+    invalidateUntranslatedReportKeys(keys: string[]): void {
+        if (!this.untranslatedReportActive || !keys.length) {
+            return;
+        }
+
+        // Get all locales from the index to invalidate all locale variants of each key
+        const allLocales = this.i18nIndex.getAllLocales();
+        
+        for (const key of keys) {
+            for (const locale of allLocales) {
+                const reportKey = `${key}::${locale}`;
+                this.untranslatedIssuesByLocaleKey.delete(reportKey);
+            }
+        }
+
+        // If all entries are cleared, deactivate the report
+        if (this.untranslatedIssuesByLocaleKey.size === 0) {
+            this.untranslatedReportActive = false;
+        }
+    }
+
+    /**
      * Load style issues from .i18n-untranslated-style.json report.
      */
     async loadStyleReport(
