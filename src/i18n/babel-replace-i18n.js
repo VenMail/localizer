@@ -367,33 +367,104 @@ function rewriteVueTemplate(template, namespace, keyMap) {
     if (end <= start) return;
     const rawText = template.slice(start, end);
     if (!rawText || !rawText.trim()) return;
-
-    const cleaned = normalizeText(rawText);
-    if (!cleaned) return;
-
     const parentTag = getCurrentParentTag();
     const kind = inferKindFromJsxElementName(parentTag || 'div');
-    const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
-    let keyId = `${nsForKey}|${kind}|${cleaned}`;
-    let fullKey = keyMap.get(keyId);
 
-    if (!fullKey && kind !== 'text') {
-      keyId = `${nsForKey}|text|${cleaned}`;
-      fullKey = keyMap.get(keyId);
+    function rewritePlainTextFragment(fragment) {
+      if (!fragment || !fragment.trim()) return fragment;
+
+      const cleaned = normalizeText(fragment);
+      if (!cleaned) return fragment;
+
+      const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+      let keyId = `${nsForKey}|${kind}|${cleaned}`;
+      let fullKey = keyMap.get(keyId);
+
+      if (!fullKey && kind !== 'text') {
+        keyId = `${nsForKey}|text|${cleaned}`;
+        fullKey = keyMap.get(keyId);
+      }
+
+      if (!fullKey) return fragment;
+
+      const leadingSpaceMatch = fragment.match(/^\s*/);
+      const trailingSpaceMatch = fragment.match(/\s*$/);
+      const leadingSpace = leadingSpaceMatch ? leadingSpaceMatch[0] : '';
+      const trailingSpace = trailingSpaceMatch ? trailingSpaceMatch[0] : '';
+
+      const escapedKey = String(fullKey).replace(/'/g, "\\'");
+      return `${leadingSpace}{{$t('${escapedKey}')}}${trailingSpace}`;
     }
 
-    if (!fullKey) return;
+    // If this segment contains Vue mustache bindings, keep the overall
+    // expression but rewrite any string literals inside to $t('key') calls
+    // when a matching translation key exists.
+    if (rawText.includes('{{') && rawText.includes('}}')) {
+      const mustacheRegex = /\{\{([^}]+)\}\}/g;
+      let resultText = '';
+      let lastIndex = 0;
+      let hasChange = false;
 
-    const leadingSpaceMatch = rawText.match(/^\s*/);
-    const trailingSpaceMatch = rawText.match(/\s*$/);
-    const leadingSpace = leadingSpaceMatch ? leadingSpaceMatch[0] : '';
-    const trailingSpace = trailingSpaceMatch ? trailingSpaceMatch[0] : '';
+      let match;
+      while ((match = mustacheRegex.exec(rawText)) !== null) {
+        const before = rawText.slice(lastIndex, match.index);
+        if (before) {
+          resultText += rewritePlainTextFragment(before);
+        }
 
-    const escapedKey = String(fullKey).replace(/'/g, "\\'");
-    const wrapped = `${leadingSpace}{{$t('${escapedKey}')}}${trailingSpace}`;
+        const expr = match[1] || '';
+        let exprChanged = false;
+        const stringRegex = /(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\1/g;
+
+        const rewrittenExpr = expr.replace(stringRegex, (m, quote, body) => {
+          const candidate = (body || '').trim();
+          if (!candidate) return m;
+
+          const cleaned = normalizeText(candidate);
+          if (!cleaned) return m;
+
+          const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+          let keyId = `${nsForKey}|${kind}|${cleaned}`;
+          let fullKey = keyMap.get(keyId);
+
+          if (!fullKey && kind !== 'text') {
+            keyId = `${nsForKey}|text|${cleaned}`;
+            fullKey = keyMap.get(keyId);
+          }
+
+          if (!fullKey) return m;
+
+          const escapedKey = String(fullKey).replace(/'/g, "\\'");
+          exprChanged = true;
+          return `$t('${escapedKey}')`;
+        });
+
+        if (exprChanged) {
+          hasChange = true;
+        }
+
+        resultText += `{{${rewrittenExpr}}}`;
+        lastIndex = match.index + match[0].length;
+      }
+
+      const tail = rawText.slice(lastIndex);
+      if (tail) {
+        resultText += rewritePlainTextFragment(tail);
+      }
+
+      if (!hasChange) return;
+
+      out += template.slice(lastEmitPos, start);
+      out += resultText;
+      lastEmitPos = end;
+      return;
+    }
+
+    const rewritten = rewritePlainTextFragment(rawText);
+    if (rewritten === rawText) return;
 
     out += template.slice(lastEmitPos, start);
-    out += wrapped;
+    out += rewritten;
     lastEmitPos = end;
   }
 
