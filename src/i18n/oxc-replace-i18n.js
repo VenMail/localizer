@@ -461,12 +461,13 @@ function rewriteVueTemplate(template, namespace, keyMap) {
 
     const parentTag = getCurrentParentTag();
     const kind = inferKindFromJsxElementName(parentTag || 'div');
-    let keyId = `${namespace}|${kind}|${cleaned}`;
+    const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+    let keyId = `${nsForKey}|${kind}|${cleaned}`;
     let fullKey = keyMap.get(keyId);
 
     // Fallback: allow generic "text" alias if kind-specific key is missing.
     if (!fullKey && kind !== 'text') {
-      keyId = `${namespace}|text|${cleaned}`;
+      keyId = `${nsForKey}|text|${cleaned}`;
       fullKey = keyMap.get(keyId);
     }
 
