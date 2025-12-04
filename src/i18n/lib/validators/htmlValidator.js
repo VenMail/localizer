@@ -298,10 +298,10 @@ function containsBindingSyntax(text) {
   if (!trimmed) return false;
   
   // Vue: v-bind, :, v-on, @, v-model
-  if (/(?:v-bind)?:[a-zA-Z][a-zA-Z0-9_:.\-]*\s*=/.test(trimmed)) {
+  if (/(?:v-bind)?:[a-zA-Z][a-zA-Z0-9_:.-]*\s*=/.test(trimmed)) {
     return true;
   }
-  if (/(?:v-on)?@[a-zA-Z][a-zA-Z0-9_:.\-]*\s*=/.test(trimmed)) {
+  if (/(?:v-on)?@[a-zA-Z][a-zA-Z0-9_:.-]*\s*=/.test(trimmed)) {
     return true;
   }
   if (/v-(?:model|if|else-if|show|for|slot|html|text|pre|cloak|once|memo)(?::[a-zA-Z]+)?\s*=/.test(trimmed)) {
@@ -309,13 +309,13 @@ function containsBindingSyntax(text) {
   }
   
   // Angular: [], (), [()]
-  if (/\[[a-zA-Z][a-zA-Z0-9_.\-]*\]\s*=/.test(trimmed)) {
+  if (/\[[a-zA-Z][a-zA-Z0-9_.-]*\]\s*=/.test(trimmed)) {
     return true;
   }
-  if (/\([a-zA-Z][a-zA-Z0-9_.\-]*\)\s*=/.test(trimmed)) {
+  if (/\([a-zA-Z][a-zA-Z0-9_.-]*\)\s*=/.test(trimmed)) {
     return true;
   }
-  if (/\[\([a-zA-Z][a-zA-Z0-9_.\-]*\)\]\s*=/.test(trimmed)) {
+  if (/\[\([a-zA-Z][a-zA-Z0-9_.-]*\)\]\s*=/.test(trimmed)) {
     return true;
   }
   if (/\*ng[A-Z][a-zA-Z]*\s*=/.test(trimmed)) {
@@ -323,12 +323,12 @@ function containsBindingSyntax(text) {
   }
   
   // Svelte: bind:, on:, use:, etc.
-  if (/(bind|on|use|transition|in|out|animate|let):[a-zA-Z][a-zA-Z0-9_.\-]*\s*=/.test(trimmed)) {
+  if (/(bind|on|use|transition|in|out|animate|let):[a-zA-Z][a-zA-Z0-9_:.-]*\s*=/.test(trimmed)) {
     return true;
   }
   
   // Alpine.js: x-data, x-bind, x-on, etc.
-  if (/x-[a-z][a-z\-]*\s*=/.test(trimmed)) {
+  if (/x-[a-z][a-z-]*\s*=/.test(trimmed)) {
     return true;
   }
   
@@ -358,6 +358,10 @@ function containsBindingSyntax(text) {
   }
   
   return false;
+}
+
+function containsVueBindingSyntax(text) {
+  return containsBindingSyntax(text);
 }
 
 /**
@@ -521,7 +525,7 @@ function isHtmlContent(text) {
   }
   
   // Check if heavily mixed with template syntax (>50% is template code)
-  const templateChars = (trimmed.match(/[{}<>%@#\[\]]/g) || []).length;
+  const templateChars = (trimmed.match(/[{}<>{}\[\]@#:=]/g) || []).length;
   if (templateChars > trimmed.length * 0.3) {
     return true;
   }
@@ -537,6 +541,7 @@ module.exports = {
   isHtmlAttributeFragment,
   isTemplateExpression,
   containsBindingSyntax,
+  containsVueBindingSyntax,
   isTemplateTag,
   containsServerSideCode,
   extractTextFromHtml,

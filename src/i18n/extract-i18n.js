@@ -331,10 +331,22 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
         }
       }
     } else {
-      const outputFile = path.resolve(outputDir, 'en.json');
-      if (existsSync(outputFile)) {
-        const parsed = await readJsonSafe(outputFile);
-        if (parsed && typeof parsed === 'object') existingTranslations = parsed;
+      // Legacy auto single-file layout: resources/js/i18n/auto/en.json
+      const autoSingleFile = path.resolve(outputDir, 'en.json');
+      if (existsSync(autoSingleFile)) {
+        const parsed = await readJsonSafe(autoSingleFile);
+        if (parsed && typeof parsed === 'object') {
+          existingTranslations = parsed;
+        }
+      } else {
+        // Older projects may only have a runtime base file at resources/js/i18n/en.json
+        const legacyRuntimeFile = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'en.json');
+        if (existsSync(legacyRuntimeFile)) {
+          const parsed = await readJsonSafe(legacyRuntimeFile);
+          if (parsed && typeof parsed === 'object') {
+            existingTranslations = parsed;
+          }
+        }
       }
     }
 
