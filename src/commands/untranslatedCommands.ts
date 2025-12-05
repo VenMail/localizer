@@ -26,6 +26,16 @@ export class UntranslatedCommands {
         private context?: vscode.ExtensionContext,
     ) {}
 
+    /**
+     * Cleanup all pending guard timeouts. Call on extension deactivation.
+     */
+    dispose(): void {
+        for (const [, pending] of this.deletionGuardPending) {
+            clearTimeout(pending.timeout);
+        }
+        this.deletionGuardPending.clear();
+    }
+
     async openReport(): Promise<void> {
         const active = vscode.window.activeTextEditor;
         let folder = active

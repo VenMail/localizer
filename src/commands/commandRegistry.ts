@@ -316,6 +316,8 @@ export class CommandRegistry {
             this.projectConfigService,
             this.context,
         );
+        // Register cleanup for UntranslatedCommands
+        disposables.push({ dispose: () => untranslatedCmds.dispose() });
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.openUntranslatedReport', () =>
                 untranslatedCmds.openReport(),

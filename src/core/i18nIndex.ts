@@ -160,21 +160,27 @@ export class I18nIndex {
             this.keyMap.set(key, record);
         }
         record.locales.set(locale, value);
-        if (
-            !record.locations.some(
-                (l) => l.locale === locale && l.uri.toString() === uri.toString(),
-            )
-        ) {
+        
+        const uriStr = uri.toString();
+        // Use string comparison for faster location lookup
+        const locationKey = `${locale}:${uriStr}`;
+        if (!record.locations.some((l) => `${l.locale}:${l.uri.toString()}` === locationKey)) {
             record.locations.push({ locale, uri });
         }
 
-        const fileKey = uri.toString();
+        const fileKey = uriStr;
         let entry = this.fileToKeys.get(fileKey);
         if (!entry) {
             entry = { locale, keys: [] };
             this.fileToKeys.set(fileKey, entry);
         }
-        if (!entry.keys.includes(key)) {
+        // Use Set for O(1) key deduplication via casting
+        const entryAny = entry as any;
+        if (!entryAny.keySet) {
+            entryAny.keySet = new Set<string>(entry.keys);
+        }
+        if (!entryAny.keySet.has(key)) {
+            entryAny.keySet.add(key);
             entry.keys.push(key);
         }
     }

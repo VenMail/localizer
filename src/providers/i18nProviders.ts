@@ -757,6 +757,18 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                         ],
                     };
                     actions.push(action);
+
+                    // Add bulk fix action for ts/tsx files
+                    if (document.languageId === 'typescript' || document.languageId === 'typescriptreact') {
+                        const bulkTitle = 'AI Localizer: Bulk fix all missing key references in this file';
+                        const bulkAction = new vscode.CodeAction(bulkTitle, vscode.CodeActionKind.QuickFix);
+                        bulkAction.command = {
+                            title: bulkTitle,
+                            command: 'ai-localizer.i18n.bulkFixMissingKeyReferences',
+                            arguments: [document.uri],
+                        };
+                        actions.push(bulkAction);
+                    }
                 }
             }
         }
