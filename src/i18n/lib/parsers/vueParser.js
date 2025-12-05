@@ -193,10 +193,16 @@ class VueParser extends BaseParser {
       }
 
       // Now handle any plain text outside of mustache expressions.
-      let cleanText = text
-        .replace(/\{\{[^}]+\}\}/g, '')  // {{ expr }}
-        .replace(/\s+/g, ' ')
-        .trim();
+      // Use robust extraction to handle expressions containing } in strings
+      // e.g., {{ "text with } brace" }} must be fully removed
+      let cleanText = text;
+      const mustacheRanges = this.getMustacheRanges(text);
+      // Remove mustache expressions in reverse order to preserve indices
+      for (let i = mustacheRanges.length - 1; i >= 0; i--) {
+        const { start, end } = mustacheRanges[i];
+        cleanText = cleanText.slice(0, start) + cleanText.slice(end);
+      }
+      cleanText = cleanText.replace(/\s+/g, ' ').trim();
 
       if (!cleanText) return;
       
@@ -656,6 +662,72 @@ class VueParser extends BaseParser {
     }
 
     return expressions;
+  }
+
+  /**
+   * Get the start and end positions of all mustache expressions in text.
+   * Used to properly remove mustache expressions while handling nested braces in strings.
+   * @param {string} text - The text to parse
+   * @returns {Array<{start: number, end: number}>} - Array of ranges
+   */
+  getMustacheRanges(text) {
+    const ranges = [];
+    let pos = 0;
+    const len = text.length;
+
+    while (pos < len) {
+      const start = text.indexOf('{{', pos);
+      if (start === -1) break;
+
+      let depth = 2;
+      let i = start + 2;
+      let inSingleQuote = false;
+      let inDoubleQuote = false;
+      let inBacktick = false;
+      let escaped = false;
+
+      while (i < len && depth > 0) {
+        const char = text[i];
+
+        if (escaped) {
+          escaped = false;
+          i++;
+          continue;
+        }
+
+        if (char === '\\') {
+          escaped = true;
+          i++;
+          continue;
+        }
+
+        if (!inDoubleQuote && !inBacktick && char === "'") {
+          inSingleQuote = !inSingleQuote;
+        } else if (!inSingleQuote && !inBacktick && char === '"') {
+          inDoubleQuote = !inDoubleQuote;
+        } else if (!inSingleQuote && !inDoubleQuote && char === '`') {
+          inBacktick = !inBacktick;
+        }
+
+        if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+          if (char === '{') {
+            depth++;
+          } else if (char === '}') {
+            depth--;
+          }
+        }
+
+        i++;
+      }
+
+      if (depth === 0) {
+        ranges.push({ start, end: i });
+      }
+
+      pos = i;
+    }
+
+    return ranges;
   }
 
   /**

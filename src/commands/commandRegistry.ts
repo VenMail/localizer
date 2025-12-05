@@ -193,6 +193,24 @@ export class CommandRegistry {
             vscode.commands.registerCommand('ai-localizer.i18n.runSyncScriptOnly', () =>
                 scriptCmds.runSync(),
             ),
+            // Granular sync: sync only specific keys (most efficient for quick fixes)
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.syncKeys',
+                async (keys: string[], folder?: vscode.WorkspaceFolder) =>
+                    scriptCmds.syncKeys(keys, folder),
+            ),
+            // Granular sync: sync all keys from a specific file
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.syncFile',
+                async (fileUri: vscode.Uri, folder?: vscode.WorkspaceFolder) =>
+                    scriptCmds.syncFile(fileUri, folder),
+            ),
+            // Ensure keys exist in all locales (create if missing)
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.ensureKeys',
+                async (keys: string[], values?: Record<string, string>, folder?: vscode.WorkspaceFolder) =>
+                    scriptCmds.ensureKeys(keys, values ?? {}, folder),
+            ),
             vscode.commands.registerCommand('ai-localizer.i18n.runFixUntranslatedScript', async () => {
                 await scriptCmds.runFixUntranslated();
 
@@ -561,19 +579,6 @@ export class CommandRegistry {
             }
         };
 
-        for (const folder of folders) {
-            for (const glob of localeGlobs) {
-                const pattern = new vscode.RelativePattern(folder, glob);
-                const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                watcher.onDidChange(handleLocaleChange, undefined, disposables);
-                watcher.onDidCreate(handleLocaleChange, undefined, disposables);
-                watcher.onDidDelete(handleLocaleChange, undefined, disposables);
-                disposables.push(watcher);
-            }
-        }
-
-        void this.refreshAllDiagnostics(untranslatedDiagnostics);
-
         // Source file diagnostics for missing translation key references
         const sourceFileDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-missing-refs');
         disposables.push(sourceFileDiagnostics);
@@ -621,6 +626,31 @@ export class CommandRegistry {
                 sourceFileDebounceTimers.set(uriKey, timer);
             }
         };
+
+        // Enhanced locale change handler that also refreshes source file diagnostics
+        const enhancedHandleLocaleChange = async (uri: vscode.Uri) => {
+            await handleLocaleChange(uri);
+            // After locale files change, refresh diagnostics for all open source files
+            for (const editor of vscode.window.visibleTextEditors) {
+                if (isSourceFile(editor.document.languageId)) {
+                    await refreshSourceFileDiagnostics(editor.document);
+                }
+            }
+        };
+
+        // Register watchers ONCE with the enhanced handler (avoids duplicate registrations)
+        for (const folder of folders) {
+            for (const glob of localeGlobs) {
+                const pattern = new vscode.RelativePattern(folder, glob);
+                const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+                watcher.onDidChange(enhancedHandleLocaleChange, undefined, disposables);
+                watcher.onDidCreate(enhancedHandleLocaleChange, undefined, disposables);
+                watcher.onDidDelete(enhancedHandleLocaleChange, undefined, disposables);
+                disposables.push(watcher);
+            }
+        }
+
+        void this.refreshAllDiagnostics(untranslatedDiagnostics);
         
         // Cleanup debounce timers on dispose
         disposables.push({
@@ -661,29 +691,6 @@ export class CommandRegistry {
                 }
             }),
         );
-
-        // Refresh source file diagnostics after locale files change (keys may now exist)
-        const originalHandleLocaleChange = handleLocaleChange;
-        const enhancedHandleLocaleChange = async (uri: vscode.Uri) => {
-            await originalHandleLocaleChange(uri);
-            // After locale files change, refresh diagnostics for all open source files
-            for (const editor of vscode.window.visibleTextEditors) {
-                if (isSourceFile(editor.document.languageId)) {
-                    await refreshSourceFileDiagnostics(editor.document);
-                }
-            }
-        };
-        // Re-register watchers with enhanced handler
-        for (const folder of folders) {
-            for (const glob of localeGlobs) {
-                const pattern = new vscode.RelativePattern(folder, glob);
-                const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                watcher.onDidChange(enhancedHandleLocaleChange, undefined, disposables);
-                watcher.onDidCreate(enhancedHandleLocaleChange, undefined, disposables);
-                watcher.onDidDelete(enhancedHandleLocaleChange, undefined, disposables);
-                disposables.push(watcher);
-            }
-        }
 
         // Register command to manually refresh source file diagnostics
         disposables.push(

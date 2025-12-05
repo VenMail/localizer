@@ -3,6 +3,7 @@ import * as path from 'path';
 import { I18nIndex, extractKeyAtPosition } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
+import { getGranularSyncService } from '../services/granularSyncService';
 import { setTranslationValue, setTranslationValueInFile, setTranslationValuesBatch, deriveRootFromFile } from '../core/i18nFs';
 import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
 import { findKeyInHistory, getFileContentAtCommit, getFileDiff } from '../core/gitHistory';
@@ -563,8 +564,9 @@ export class UntranslatedCommands {
                 return;
             }
 
-            // avoid sync for quick fixes for now
-            // await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
+            // Use granular key-level sync for quick fixes (avoids touching unrelated files)
+            const syncService = getGranularSyncService(this.context);
+            await syncService.syncKeys(folder, [key]);
 
             await this.i18nIndex.ensureInitialized();
             const record = this.i18nIndex.getRecord(key);
@@ -951,8 +953,9 @@ export class UntranslatedCommands {
                 return;
             }
 
-            // only sync needed for single file
-            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
+            // Use granular file-level sync (only syncs keys from this specific file)
+            const syncService = getGranularSyncService(this.context);
+            await syncService.syncFile(folder, targetUri);
 
             await this.i18nIndex.ensureInitialized();
 
@@ -2948,8 +2951,9 @@ export class UntranslatedCommands {
             const keyLeaf = keyParts[keyParts.length - 1] || '';
             const keyPrefix = keyParts.slice(0, -1).join('.');
 
-            // Use lightweight sync only for non project level fix
-            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
+            // Use granular key-level sync (only syncs the specific key being fixed)
+            const syncService = getGranularSyncService(this.context);
+            await syncService.syncKeys(folder, [key]);
 
             await this.i18nIndex.ensureInitialized();
             const allKeys = this.i18nIndex.getAllKeys();
