@@ -2677,26 +2677,32 @@ export class UntranslatedCommands {
             }
 
             // First, restore code references for this key
+            // CRITICAL: With the fixed logic, keys in the invalid report should be unused.
+            // However, if this is an old report generated with buggy logic, the key might have usages.
+            // In that case, we should NOT restore code as it would break the application.
             let codeRestoreCount = 0;
             const usages = Array.isArray(entry.usages) ? entry.usages : [];
             const baseValue = typeof entry.baseValue === 'string' ? entry.baseValue : '';
 
-            for (const usage of usages) {
-                if (!usage || typeof usage.file !== 'string' || typeof usage.line !== 'number') continue;
-                const codeFileUri = vscode.Uri.joinPath(folder.uri, usage.file);
-                try {
-                    const restored = await this.restoreInlineStringInFile(
-                        codeFileUri,
-                        keyPath,
-                        baseValue,
-                        usage.line - 1, // Convert to 0-indexed
-                    );
-                    if (restored) {
-                        codeRestoreCount++;
-                    }
-                } catch (err) {
-                    console.error(`AI Localizer: Failed to restore code reference for ${keyPath} in ${usage.file}:`, err);
+            // Safety check: If the key is being used in code, this is likely from an old buggy report.
+            // Warn the user - the key should not be removed if it's actively being used.
+            if (usages.length > 0) {
+                const choice = await vscode.window.showWarningMessage(
+                    `AI Localizer: Key "${keyPath}" is marked as invalid but is being used in ${usages.length} location(s) in code. ` +
+                    `This may be from an outdated report. Removing it would break the application. ` +
+                    `Please regenerate the invalid keys report. Do you want to cancel this operation?`,
+                    { modal: true },
+                    'Cancel',
+                    'Remove from locale files only (risky)',
+                );
+                if (!choice || choice === 'Cancel') {
+                    return;
                 }
+                // User chose to proceed anyway - skip code restoration but remove from locale files
+                // This is risky but user explicitly chose it
+            } else {
+                // Key is unused (as expected for invalid keys with the fixed logic)
+                // No code to restore since the key isn't used anywhere
             }
 
             // Then remove from this locale file

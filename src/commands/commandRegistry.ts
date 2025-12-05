@@ -387,13 +387,19 @@ export class CommandRegistry {
             ),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.bulkFixMissingKeyReferences',
-                (documentUri?: vscode.Uri) => {
+                async (documentUri?: vscode.Uri) => {
                     const uri = documentUri || vscode.window.activeTextEditor?.document.uri;
                     if (!uri) {
                         vscode.window.showWarningMessage('AI Localizer: No document available.');
                         return;
                     }
-                    return untranslatedCmds.bulkFixMissingKeyReferences(uri);
+                    try {
+                        await untranslatedCmds.bulkFixMissingKeyReferences(uri);
+                    } catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        console.error('AI Localizer: Failed to bulk fix missing key references:', err);
+                        vscode.window.showErrorMessage(`AI Localizer: Failed to fix missing references. ${msg}`);
+                    }
                 },
             ),
             vscode.commands.registerCommand(
