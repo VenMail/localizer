@@ -7,16 +7,45 @@ const DEFAULT_MAX_BATCH_CHARS = Number(process.env.AI_I18N_MAX_BATCH_CHARS || 20
 /**
  * Service for handling AI-powered translations
  */
+// LRU-like cache with max size to prevent unbounded memory growth
+const MAX_SHORT_TEXT_CACHE_SIZE = 1000;
+
 export class TranslationService {
 
     private context: vscode.ExtensionContext;
     private shortTextCache = new Map<string, string>();
+    private shortTextCacheOrder: string[] = []; // Track insertion order for LRU eviction
     private log: vscode.OutputChannel | null;
     private static batchRunCounter = 0;
+    
+    // Cached OpenAI client to avoid repeated instantiation
+    private cachedClient: OpenAI | null = null;
+    private cachedApiKey: string | null = null;
 
     constructor(context: vscode.ExtensionContext, log?: vscode.OutputChannel) {
         this.context = context;
         this.log = log || null;
+    }
+
+    /**
+     * Get or create a cached OpenAI client.
+     * Reuses the same client if the API key hasn't changed.
+     */
+    private async getOrCreateClient(): Promise<OpenAI | null> {
+        const apiKey = await this.getApiKey();
+        if (!apiKey) {
+            return null;
+        }
+
+        // Return cached client if API key matches
+        if (this.cachedClient && this.cachedApiKey === apiKey) {
+            return this.cachedClient;
+        }
+
+        // Create new client and cache it
+        this.cachedClient = new OpenAI({ apiKey });
+        this.cachedApiKey = apiKey;
+        return this.cachedClient;
     }
 
     private getOpenAiModel(config?: vscode.WorkspaceConfiguration): string {
@@ -101,6 +130,35 @@ export class TranslationService {
         return true;
     }
 
+    /**
+     * Add an entry to the short text cache with LRU eviction.
+     * Prevents unbounded memory growth by evicting oldest entries when limit is reached.
+     */
+    private addToShortTextCache(cacheKey: string, value: string): void {
+        // If key already exists, update value and move to end of order
+        if (this.shortTextCache.has(cacheKey)) {
+            this.shortTextCache.set(cacheKey, value);
+            const idx = this.shortTextCacheOrder.indexOf(cacheKey);
+            if (idx !== -1) {
+                this.shortTextCacheOrder.splice(idx, 1);
+                this.shortTextCacheOrder.push(cacheKey);
+            }
+            return;
+        }
+
+        // Evict oldest entries if at capacity
+        while (this.shortTextCacheOrder.length >= MAX_SHORT_TEXT_CACHE_SIZE) {
+            const oldest = this.shortTextCacheOrder.shift();
+            if (oldest) {
+                this.shortTextCache.delete(oldest);
+            }
+        }
+
+        // Add new entry
+        this.shortTextCache.set(cacheKey, value);
+        this.shortTextCacheOrder.push(cacheKey);
+    }
+
     private makeShortTextCacheKey(
         text: string,
         defaultLocale: string,
@@ -180,14 +238,13 @@ export class TranslationService {
             return result;
         }
 
-        const apiKey = await this.getApiKey();
-        if (!apiKey) {
+        const client = await this.getOrCreateClient();
+        if (!client) {
             console.warn('AI Localizer: No API key configured for auto-translation');
             return result;
         }
 
         const model = this.getOpenAiModel(config);
-        const client = new OpenAI({ apiKey });
 
         const cacheable = this.isCacheableShortText(text);
         const localesToTranslate: string[] = [];
@@ -232,7 +289,7 @@ export class TranslationService {
                 if (translated) {
                     if (cacheable) {
                         const cacheKey = this.makeShortTextCacheKey(text, defaultLocale, locale);
-                        this.shortTextCache.set(cacheKey, translated);
+                        this.addToShortTextCache(cacheKey, translated);
                     }
                     return { locale, translated };
                 }
@@ -272,14 +329,13 @@ export class TranslationService {
             return result;
         }
 
-        const apiKey = await this.getApiKey();
-        if (!apiKey) {
+        const client = await this.getOrCreateClient();
+        if (!client) {
             console.warn('AI Localizer: No API key configured for auto-translation');
             return result;
         }
 
         const model = this.getOpenAiModel(config);
-        const client = new OpenAI({ apiKey });
 
         const { maxItems, maxChars } = this.getBatchLimits(config);
 
@@ -497,7 +553,7 @@ export class TranslationService {
                                     original.defaultLocale,
                                     targetLocale,
                                 );
-                                this.shortTextCache.set(cacheKey, translated);
+                                this.addToShortTextCache(cacheKey, translated);
                             }
                             added = true;
                         }
@@ -600,7 +656,7 @@ export class TranslationService {
                                     original.defaultLocale,
                                     targetLocale,
                                 );
-                                this.shortTextCache.set(cacheKey, translated);
+                                this.addToShortTextCache(cacheKey, translated);
                             }
                             added = true;
                         }
@@ -810,14 +866,13 @@ export class TranslationService {
         issues: any[],
         instructions?: string,
     ): Promise<Array<{ locale: string; keyPath: string; newValue: string }>> {
-        const apiKey = await this.getApiKey();
-        if (!apiKey) {
+        const client = await this.getOrCreateClient();
+        if (!client) {
             throw new Error('OpenAI API key is not configured');
         }
 
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const model = this.getOpenAiModel(config);
-        const client = new OpenAI({ apiKey });
 
         const aiInstructions =
             instructions && instructions.trim().length > 0
@@ -886,14 +941,13 @@ export class TranslationService {
         question: string,
         context?: string,
     ): Promise<string> {
-        const apiKey = await this.getApiKey();
-        if (!apiKey) {
+        const client = await this.getOrCreateClient();
+        if (!client) {
             throw new Error('OpenAI API key is not configured');
         }
 
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const model = this.getOpenAiModel(config);
-        const client = new OpenAI({ apiKey });
 
         const completion = await client.chat.completions.create({
             model,

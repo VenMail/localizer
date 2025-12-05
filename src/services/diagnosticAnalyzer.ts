@@ -3,6 +3,12 @@ import { TextDecoder } from 'util';
 import { I18nIndex, TranslationRecord } from '../core/i18nIndex';
 import { ProjectConfigService } from './projectConfigService';
 
+// Shared decoder instance to avoid repeated allocations
+const sharedDecoder = new TextDecoder('utf-8');
+
+// Maximum number of files to keep in text cache (prevents unbounded memory growth)
+const MAX_FILE_TEXT_CACHE_SIZE = 50;
+
 /**
  * Incremental diagnostic analyzer for i18n translation issues.
  * 
@@ -18,12 +24,12 @@ export class DiagnosticAnalyzer {
         string,
         { text: string; lineStarts: number[]; keyRanges: Map<string, vscode.Range> }
     >();
+    private fileTextCacheOrder: string[] = []; // Track insertion order for LRU eviction
     private styleIssuesByLocaleKey = new Map<
         string,
         { english?: string; current?: string; suggested?: string }
     >();
     private styleReportLoaded = false;
-    private decoder = new TextDecoder('utf-8');
     private ignorePatterns: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } | null = null;
     private ignorePatternsLoaded = false;
     private untranslatedIssuesByLocaleKey = new Map<string, boolean>();
@@ -269,6 +275,7 @@ export class DiagnosticAnalyzer {
     resetCaches(): void {
         this.diagnosticsByFile.clear();
         this.fileTextCache.clear();
+        this.fileTextCacheOrder = [];
         this.styleIssuesByLocaleKey.clear();
         this.styleReportLoaded = false;
         this.untranslatedIssuesByLocaleKey.clear();
@@ -324,7 +331,7 @@ export class DiagnosticAnalyzer {
                     '.i18n-untranslated-style.json',
                 );
                 const data = await vscode.workspace.fs.readFile(styleUri);
-                const raw = this.decoder.decode(data);
+                const raw = sharedDecoder.decode(data);
                 const report: any = JSON.parse(raw);
                 const files = Array.isArray(report?.files) ? report.files : [];
 
@@ -376,7 +383,7 @@ export class DiagnosticAnalyzer {
                     '.i18n-untranslated-untranslated.json',
                 );
                 const data = await vscode.workspace.fs.readFile(reportUri);
-                const raw = this.decoder.decode(data);
+                const raw = sharedDecoder.decode(data);
                 const report: any = JSON.parse(raw);
                 const files = Array.isArray(report?.files) ? report.files : [];
 
@@ -432,7 +439,7 @@ export class DiagnosticAnalyzer {
                     'i18n-ignore-patterns.json',
                 );
                 const data = await vscode.workspace.fs.readFile(ignoreUri);
-                const raw = this.decoder.decode(data);
+                const raw = sharedDecoder.decode(data);
                 const json = JSON.parse(raw);
                 if (Array.isArray(json?.exact)) merged.exact!.push(...json.exact);
                 if (Array.isArray(json?.exactInsensitive)) merged.exactInsensitive!.push(...json.exactInsensitive);
@@ -447,7 +454,7 @@ export class DiagnosticAnalyzer {
                     '.i18n-auto-ignore.json',
                 );
                 const data = await vscode.workspace.fs.readFile(autoUri);
-                const raw = this.decoder.decode(data);
+                const raw = sharedDecoder.decode(data);
                 const json = JSON.parse(raw);
                 if (Array.isArray(json?.exact)) merged.exact!.push(...json.exact);
                 if (Array.isArray(json?.exactInsensitive)) merged.exactInsensitive!.push(...json.exactInsensitive);
@@ -853,7 +860,7 @@ export class DiagnosticAnalyzer {
         if (!cached) {
             try {
                 const data = await vscode.workspace.fs.readFile(uri);
-                const text = this.decoder.decode(data);
+                const text = sharedDecoder.decode(data);
                 const lineStarts: number[] = [0];
                 for (let i = 0; i < text.length; i += 1) {
                     if (text.charCodeAt(i) === 10) {
@@ -861,7 +868,17 @@ export class DiagnosticAnalyzer {
                     }
                 }
                 cached = { text, lineStarts, keyRanges: new Map<string, vscode.Range>() };
+                
+                // LRU eviction: remove oldest entries if at capacity
+                while (this.fileTextCacheOrder.length >= MAX_FILE_TEXT_CACHE_SIZE) {
+                    const oldest = this.fileTextCacheOrder.shift();
+                    if (oldest) {
+                        this.fileTextCache.delete(oldest);
+                    }
+                }
+                
                 this.fileTextCache.set(cacheKey, cached);
+                this.fileTextCacheOrder.push(cacheKey);
             } catch {
                 return new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0));
             }

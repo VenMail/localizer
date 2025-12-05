@@ -13,6 +13,9 @@ export type TranslationRecord = {
     locations: { locale: string; uri: vscode.Uri }[];
 };
 
+// Shared decoder instance to avoid repeated allocations
+const sharedDecoder = new TextDecoder('utf-8');
+
 export class I18nIndex {
     private keyMap = new Map<string, TranslationRecord>();
     private defaultLocale = 'en';
@@ -55,8 +58,6 @@ export class I18nIndex {
         if (!folders.length) {
             return;
         }
-
-        const decoder = new TextDecoder('utf-8');
 
         const fileKeySet = new Set<string>();
         const fileList: vscode.Uri[] = [];
@@ -121,7 +122,7 @@ export class I18nIndex {
             let text: string | null = null;
             try {
                 const data = await vscode.workspace.fs.readFile(file);
-                text = decoder.decode(data);
+                text = sharedDecoder.decode(data);
             } catch (err) {
                 console.error(`Failed to read locale file ${file.fsPath}:`, err);
                 return;
@@ -272,11 +273,10 @@ export class I18nIndex {
             return;
         }
 
-        const decoder = new TextDecoder('utf-8');
         let text: string | null = null;
         try {
             const data = await vscode.workspace.fs.readFile(uri);
-            text = decoder.decode(data);
+            text = sharedDecoder.decode(data);
         } catch (err) {
             console.error(`Failed to read locale file ${uri.fsPath}:`, err);
             return;

@@ -2,6 +2,20 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder, TextEncoder } from 'util';
 
+// Shared encoder/decoder instances to avoid repeated allocations
+const sharedDecoder = new TextDecoder('utf-8');
+const sharedEncoder = new TextEncoder();
+
+// Cache for locale directory lookups (cleared on workspace change)
+const localeDirCache = new Map<string, vscode.Uri>();
+
+/**
+ * Clear the locale directory cache. Call when workspace folders change.
+ */
+export function clearLocaleDirCache(): void {
+    localeDirCache.clear();
+}
+
 function toPascalCase(input: string): string {
     const words = String(input || '')
         .replace(/[_\-]+/g, ' ')
@@ -83,6 +97,13 @@ export function deriveRootFromFile(folder: vscode.WorkspaceFolder, uri: vscode.U
 }
 
 async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: string): Promise<vscode.Uri> {
+    // Check cache first
+    const cacheKey = `${folder.uri.fsPath}::${locale}`;
+    const cached = localeDirCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
     const bases = ['resources/js/i18n/auto', 'src/i18n', 'src/locales', 'locales', 'i18n'];
     for (const base of bases) {
         const baseUri = vscode.Uri.file(path.join(folder.uri.fsPath, base));
@@ -93,10 +114,12 @@ async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: str
                 try {
                     const locStat = await vscode.workspace.fs.stat(localeUri);
                     if (locStat.type === vscode.FileType.Directory) {
+                        localeDirCache.set(cacheKey, localeUri);
                         return localeUri;
                     }
                 } catch {
                     await vscode.workspace.fs.createDirectory(localeUri);
+                    localeDirCache.set(cacheKey, localeUri);
                     return localeUri;
                 }
             }
@@ -105,6 +128,7 @@ async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: str
     }
     const fallback = vscode.Uri.file(path.join(folder.uri.fsPath, 'resources/js/i18n/auto', locale));
     await vscode.workspace.fs.createDirectory(fallback);
+    localeDirCache.set(cacheKey, fallback);
     return fallback;
 }
 
@@ -151,12 +175,10 @@ export async function upsertTranslationKey(
         fileName = `${group.toLowerCase()}.json`;
     }
     const fileUri = vscode.Uri.joinPath(localeDir, fileName);
-    const decoder = new TextDecoder('utf-8');
-    const encoder = new TextEncoder();
     let root: any = {};
     try {
         const data = await vscode.workspace.fs.readFile(fileUri);
-        const raw = decoder.decode(data);
+        const raw = sharedDecoder.decode(data);
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
             root = parsed;
@@ -174,7 +196,7 @@ export async function upsertTranslationKey(
     const last = segments[segments.length - 1];
     container[last] = value;
     const payload = `${JSON.stringify(root, null, 2)}\n`;
-    await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
+    await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
 }
 
 export async function setTranslationValueInFile(
@@ -182,12 +204,10 @@ export async function setTranslationValueInFile(
     fullKey: string,
     value: string,
 ): Promise<void> {
-    const decoder = new TextDecoder('utf-8');
-    const encoder = new TextEncoder();
     let root: any = {};
     try {
         const data = await vscode.workspace.fs.readFile(fileUri);
-        const raw = decoder.decode(data);
+        const raw = sharedDecoder.decode(data);
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
             root = parsed;
@@ -202,7 +222,7 @@ export async function setTranslationValueInFile(
     const last = segments[segments.length - 1];
     container[last] = value;
     const payload = `${JSON.stringify(root, null, 2)}\n`;
-    await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
+    await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
 }
 
 export async function setTranslationValue(
@@ -225,12 +245,10 @@ export async function setTranslationValue(
         fileName = `${group.toLowerCase()}.json`;
     }
     const fileUri = vscode.Uri.joinPath(localeDir, fileName);
-    const decoder = new TextDecoder('utf-8');
-    const encoder = new TextEncoder();
     let root: any = {};
     try {
         const data = await vscode.workspace.fs.readFile(fileUri);
-        const raw = decoder.decode(data);
+        const raw = sharedDecoder.decode(data);
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
             root = parsed;
@@ -244,5 +262,92 @@ export async function setTranslationValue(
     const last = segments[segments.length - 1];
     container[last] = value;
     const payload = `${JSON.stringify(root, null, 2)}\n`;
-    await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
+    await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+}
+
+/**
+ * Batch write multiple translations to locale files.
+ * Groups updates by target file to minimize I/O operations.
+ * This is significantly faster than calling setTranslationValue for each key.
+ * 
+ * @param folder - Workspace folder
+ * @param locale - Target locale
+ * @param updates - Map of fullKey -> { value, rootName }
+ */
+export async function setTranslationValuesBatch(
+    folder: vscode.WorkspaceFolder,
+    locale: string,
+    updates: Map<string, { value: string; rootName?: string }>,
+): Promise<{ written: number; errors: string[] }> {
+    const result = { written: 0, errors: [] as string[] };
+    if (!updates.size) {
+        return result;
+    }
+
+    const localeDir = await findOrCreateLocaleDir(folder, locale);
+
+    // Group updates by target file
+    const fileUpdates = new Map<string, Map<string, string>>();
+    
+    for (const [fullKey, { value, rootName }] of updates.entries()) {
+        const segments = fullKey.split('.').filter(Boolean);
+        const first = segments[0] || 'Common';
+        let fileName: string;
+        if (first === 'Commons') {
+            fileName = 'commons.json';
+        } else if (rootName) {
+            fileName = `${rootName.toLowerCase()}.json`;
+        } else {
+            const group = first || 'Common';
+            fileName = `${group.toLowerCase()}.json`;
+        }
+
+        let fileMap = fileUpdates.get(fileName);
+        if (!fileMap) {
+            fileMap = new Map<string, string>();
+            fileUpdates.set(fileName, fileMap);
+        }
+        fileMap.set(fullKey, value);
+    }
+
+    // Process each file once
+    for (const [fileName, keyValues] of fileUpdates.entries()) {
+        const fileUri = vscode.Uri.joinPath(localeDir, fileName);
+        
+        try {
+            // Read existing content
+            let root: any = {};
+            try {
+                const data = await vscode.workspace.fs.readFile(fileUri);
+                const raw = sharedDecoder.decode(data);
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    root = parsed;
+                }
+            } catch {
+                // File doesn't exist yet, start with empty object
+            }
+            if (!root || typeof root !== 'object' || Array.isArray(root)) {
+                root = {};
+            }
+
+            // Apply all updates for this file
+            for (const [fullKey, value] of keyValues.entries()) {
+                const segments = fullKey.split('.').filter(Boolean);
+                const container = ensureDeepContainer(root, segments.slice(0, -1));
+                const last = segments[segments.length - 1];
+                container[last] = value;
+                result.written += 1;
+            }
+
+            // Write once
+            const payload = `${JSON.stringify(root, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            result.errors.push(`Failed to write ${fileName}: ${msg}`);
+        }
+    }
+
+    return result;
 }

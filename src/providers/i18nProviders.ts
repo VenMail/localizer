@@ -42,14 +42,18 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             const delayMs = config.get<number>('i18n.hoverDelayMs') ?? 1900;
 
             if (delayMs > 0) {
-                await new Promise<void>((resolve) => {
-                    const handle = setTimeout(() => {
+                // Use a cancellation-aware delay to avoid keeping promises pending
+                const cancelled = await new Promise<boolean>((resolve) => {
+                    const handle = setTimeout(() => resolve(false), delayMs);
+                    // Listen for cancellation to resolve early and clear timer
+                    const disposable = token.onCancellationRequested(() => {
                         clearTimeout(handle);
-                        resolve();
-                    }, delayMs);
+                        disposable.dispose();
+                        resolve(true);
+                    });
                 });
 
-                if (token.isCancellationRequested) {
+                if (cancelled || token.isCancellationRequested) {
                     return undefined;
                 }
             }

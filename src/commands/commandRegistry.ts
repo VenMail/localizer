@@ -6,6 +6,16 @@ import { FileSystemService } from '../services/fileSystemService';
 import { I18nStatusBar } from '../core/statusBar';
 import { DiagnosticAnalyzer, getDiagnosticConfig } from '../services/diagnosticAnalyzer';
 
+// Static imports for command handlers (avoids runtime require() overhead)
+import { ConfigureProjectCommand } from './configureProjectCommand';
+import { ConvertSelectionCommand } from './convertSelectionCommand';
+import { StatusCommand } from './statusCommand';
+import { ScriptCommands } from './scriptCommands';
+import { UntranslatedCommands } from './untranslatedCommands';
+import { ComponentCommands } from './componentCommands';
+import { ScaffoldMessagesCommand } from './scaffoldMessagesCommand';
+import { ProjectFixCommand } from './projectFixCommand';
+
 /**
  * Registry for all extension commands
  */
@@ -36,15 +46,6 @@ export class CommandRegistry {
 
         try {
             this.log.appendLine('[CommandRegistry] Registering commands and diagnostics listeners...');
-            // Import command handlers
-            const { ConfigureProjectCommand } = require('./configureProjectCommand');
-            const { ConvertSelectionCommand } = require('./convertSelectionCommand');
-            const { StatusCommand } = require('./statusCommand');
-            const { ScriptCommands } = require('./scriptCommands');
-            const { UntranslatedCommands } = require('./untranslatedCommands');
-            const { ComponentCommands } = require('./componentCommands');
-            const { ScaffoldMessagesCommand } = require('./scaffoldMessagesCommand');
-            const { ProjectFixCommand } = require('./projectFixCommand');
 
             const untranslatedDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-untranslated');
             disposables.push(untranslatedDiagnostics);

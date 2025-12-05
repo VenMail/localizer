@@ -3,18 +3,27 @@ import * as path from 'path';
 import { I18nIndex, extractKeyAtPosition } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
-import { setTranslationValue, setTranslationValueInFile, deriveRootFromFile } from '../core/i18nFs';
+import { setTranslationValue, setTranslationValueInFile, setTranslationValuesBatch, deriveRootFromFile } from '../core/i18nFs';
 import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
+import { findKeyInHistory, getFileContentAtCommit, getFileDiff } from '../core/gitHistory';
+import { CommitTracker } from '../core/commitTracker';
+// Use shared encoder/decoder instances to avoid repeated allocations
 import { TextDecoder, TextEncoder } from 'util';
+
+const sharedDecoder = new TextDecoder('utf-8');
+const sharedEncoder = new TextEncoder();
 
 /**
  * Commands for handling untranslated strings
  */
 export class UntranslatedCommands {
+    private deletionGuardPending: Map<string, { key: string; value: string; timeout: NodeJS.Timeout }> = new Map();
+
     constructor(
         private i18nIndex: I18nIndex,
         private translationService: TranslationService,
         private projectConfigService: ProjectConfigService,
+        private context?: vscode.ExtensionContext,
     ) {}
 
     async openReport(): Promise<void> {
@@ -163,12 +172,10 @@ export class UntranslatedCommands {
     }
 
     private async setMultipleInFile(fileUri: vscode.Uri, updates: Map<string, string>): Promise<void> {
-        const decoder = new TextDecoder('utf-8');
-        const encoder = new TextEncoder();
         let root: any = {};
         try {
             const data = await vscode.workspace.fs.readFile(fileUri);
-            const raw = decoder.decode(data);
+            const raw = sharedDecoder.decode(data);
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') root = parsed;
         } catch {}
@@ -198,7 +205,7 @@ export class UntranslatedCommands {
         }
 
         const payload = `${JSON.stringify(root, null, 2)}\n`;
-        await vscode.workspace.fs.writeFile(fileUri, encoder.encode(payload));
+        await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
     }
 
     private async pruneUntranslatedReports(
@@ -225,8 +232,6 @@ export class UntranslatedCommands {
         let prunedCompactEntries = 0;
 
         const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
-        const decoder = new TextDecoder('utf-8');
-        const encoder = new TextEncoder();
 
         // Combined untranslated/style report: scripts/.i18n-untranslated-report.json
         try {
@@ -235,7 +240,7 @@ export class UntranslatedCommands {
                 '.i18n-untranslated-report.json',
             );
             const data = await vscode.workspace.fs.readFile(combinedUri);
-            const raw = decoder.decode(data);
+            const raw = sharedDecoder.decode(data);
             const report: any = JSON.parse(raw);
             const issues: any[] = Array.isArray(report.issues) ? report.issues : [];
             if (issues.length) {
@@ -251,7 +256,7 @@ export class UntranslatedCommands {
                     const payload = `${JSON.stringify(report, null, 2)}\n`;
                     await vscode.workspace.fs.writeFile(
                         combinedUri,
-                        encoder.encode(payload),
+                        sharedEncoder.encode(payload),
                     );
                 }
 
@@ -287,7 +292,7 @@ export class UntranslatedCommands {
                 '.i18n-untranslated-untranslated.json',
             );
             const data = await vscode.workspace.fs.readFile(untranslatedUri);
-            const raw = decoder.decode(data);
+            const raw = sharedDecoder.decode(data);
             const report: any = JSON.parse(raw);
             const files: any[] = Array.isArray(report.files) ? report.files : [];
             let changed = false;
@@ -329,7 +334,7 @@ export class UntranslatedCommands {
                 const payload = `${JSON.stringify(report, null, 2)}\n`;
                 await vscode.workspace.fs.writeFile(
                     untranslatedUri,
-                    encoder.encode(payload),
+                    sharedEncoder.encode(payload),
                 );
             }
         } catch {
@@ -344,7 +349,7 @@ export class UntranslatedCommands {
                     '.i18n-untranslated-compact.json',
                 );
                 const data = await vscode.workspace.fs.readFile(compactUri);
-                const raw = decoder.decode(data);
+                const raw = sharedDecoder.decode(data);
                 const report: any = JSON.parse(raw);
                 const files: any[] = Array.isArray(report.files) ? report.files : [];
 
@@ -370,7 +375,7 @@ export class UntranslatedCommands {
                     const payload = `${JSON.stringify(report, null, 2)}\n`;
                     await vscode.workspace.fs.writeFile(
                         compactUri,
-                        encoder.encode(payload),
+                        sharedEncoder.encode(payload),
                     );
                 }
             } catch {
@@ -420,12 +425,11 @@ export class UntranslatedCommands {
             path.join(folder.uri.fsPath, 'scripts', '.i18n-untranslated-report.json'),
         );
 
-        const decoder = new TextDecoder('utf-8');
         let raw: string;
 
         try {
             const data = await vscode.workspace.fs.readFile(reportUri);
-            raw = decoder.decode(data);
+            raw = sharedDecoder.decode(data);
         } catch {
             vscode.window.showInformationMessage(
                 'AI Localizer: Untranslated report not found. Run the fix-untranslated script before applying AI fixes.',
@@ -454,7 +458,7 @@ export class UntranslatedCommands {
                 path.join(folder.uri.fsPath, 'scripts', '.i18n-untranslated-ai-instructions.txt'),
             );
             const instructionsData = await vscode.workspace.fs.readFile(instructionsUri);
-            aiInstructions = decoder.decode(instructionsData).trim() || undefined;
+            aiInstructions = sharedDecoder.decode(instructionsData).trim() || undefined;
         } catch {
             // Instructions file is optional; AI will use default prompt if not found
         }
@@ -498,10 +502,25 @@ export class UntranslatedCommands {
 
             await this.i18nIndex.ensureInitialized();
 
+            // Group updates by locale for batched writes
+            const updatesByLocale = new Map<string, Map<string, { value: string; rootName?: string }>>();
             for (const u of updates) {
                 const record = this.i18nIndex.getRecord(u.keyPath);
                 const rootName = record ? this.getRootNameForRecord(record) : 'common';
-                await setTranslationValue(folder, u.locale, u.keyPath, u.newValue, { rootName });
+                
+                let localeUpdates = updatesByLocale.get(u.locale);
+                if (!localeUpdates) {
+                    localeUpdates = new Map();
+                    updatesByLocale.set(u.locale, localeUpdates);
+                }
+                localeUpdates.set(u.keyPath, { value: u.newValue, rootName });
+            }
+
+            // Write batched updates per locale
+            let totalWritten = 0;
+            for (const [locale, batchUpdates] of updatesByLocale.entries()) {
+                const result = await setTranslationValuesBatch(folder, locale, batchUpdates);
+                totalWritten += result.written;
             }
 
             await this.pruneUntranslatedReports(
@@ -510,7 +529,7 @@ export class UntranslatedCommands {
             );
 
             vscode.window.showInformationMessage(
-                `AI Localizer: Applied ${updates.length} AI translation updates.`,
+                `AI Localizer: Applied ${totalWritten} AI translation updates.`,
             );
         } catch (err) {
             console.error('Failed to apply AI fixes:', err);
@@ -534,8 +553,8 @@ export class UntranslatedCommands {
                 return;
             }
 
-            // Use lightweight sync only for quick fix
-            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
+            // avoid sync for quick fixes for now
+            // await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
 
             await this.i18nIndex.ensureInitialized();
             const record = this.i18nIndex.getRecord(key);
@@ -565,12 +584,23 @@ export class UntranslatedCommands {
 
             const rootName = this.getRootNameForRecord(record);
 
-            // First: sync missing keys with default placeholder values
+            // First: sync missing keys with default placeholder values using batched writes
+            const placeholderUpdates = new Map<string, Map<string, { value: string; rootName?: string }>>();
             for (const locale of targetLocales) {
                 const current = record.locales.get(locale);
                 if (typeof current !== 'string' || !current.trim()) {
-                    await setTranslationValue(folder, locale, key, defaultValue, { rootName });
+                    let localeUpdates = placeholderUpdates.get(locale);
+                    if (!localeUpdates) {
+                        localeUpdates = new Map();
+                        placeholderUpdates.set(locale, localeUpdates);
+                    }
+                    localeUpdates.set(key, { value: defaultValue, rootName });
                 }
+            }
+            
+            // Write placeholder values in batch
+            for (const [locale, updates] of placeholderUpdates.entries()) {
+                await setTranslationValuesBatch(folder, locale, updates);
             }
 
             // Locale file writes trigger watchers which update index + diagnostics incrementally
@@ -597,8 +627,19 @@ export class UntranslatedCommands {
                 return;
             }
 
+            // Write AI translations in batch
+            const translationUpdates = new Map<string, Map<string, { value: string; rootName?: string }>>();
             for (const [locale, newValue] of translations.entries()) {
-                await setTranslationValue(folder, locale, key, newValue, { rootName });
+                let localeUpdates = translationUpdates.get(locale);
+                if (!localeUpdates) {
+                    localeUpdates = new Map();
+                    translationUpdates.set(locale, localeUpdates);
+                }
+                localeUpdates.set(key, { value: newValue, rootName });
+            }
+            
+            for (const [locale, updates] of translationUpdates.entries()) {
+                await setTranslationValuesBatch(folder, locale, updates);
             }
 
             // Locale file writes trigger watchers which update index + diagnostics incrementally
@@ -1028,8 +1069,8 @@ export class UntranslatedCommands {
                         return;
                     }
 
-                    let processed = 0;
-                    let lastReported = 0;
+                    // Build batch updates map for efficient file I/O
+                    const batchUpdates = new Map<string, { value: string; rootName?: string }>();
                     for (const item of keysToTranslate) {
                         if (token.isCancellationRequested) {
                             break;
@@ -1038,23 +1079,25 @@ export class UntranslatedCommands {
                         if (!newValue) {
                             continue;
                         }
-                        try {
-                            const record = this.i18nIndex.getRecord(item.key);
-                            const rootName = record ? this.getRootNameForRecord(record) : 'common';
-                            await setTranslationValue(folder!, targetLocale, item.key, newValue, { rootName });
-                            translatedCount++;
-                            fixed.push({ locale: targetLocale, keyPath: item.key });
-                        } catch (err) {
-                            console.error(`AI Localizer: Failed to write translation for key ${item.key}:`, err);
+                        const record = this.i18nIndex.getRecord(item.key);
+                        const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                        batchUpdates.set(item.key, { value: newValue, rootName });
+                    }
+
+                    if (batchUpdates.size > 0 && !token.isCancellationRequested) {
+                        progress.report({
+                            message: `Writing ${batchUpdates.size} translation(s) to ${targetLocale}...`,
+                        });
+
+                        const writeResult = await setTranslationValuesBatch(folder!, targetLocale, batchUpdates);
+                        translatedCount = writeResult.written;
+
+                        for (const [key] of batchUpdates.entries()) {
+                            fixed.push({ locale: targetLocale, keyPath: key });
                         }
-                        processed += 1;
-                        if (processed % 10 === 0 || processed === keysToTranslate.length) {
-                            const percent = (processed / keysToTranslate.length) * 100;
-                            progress.report({
-                                message: `${processed} of ${keysToTranslate.length} key(s) for ${targetLocale} in ${relPath}`,
-                                increment: percent - lastReported,
-                            });
-                            lastReported = percent;
+
+                        if (writeResult.errors.length > 0) {
+                            console.error('AI Localizer: Some translations failed to write:', writeResult.errors);
                         }
                     }
                 },
@@ -1228,8 +1271,8 @@ export class UntranslatedCommands {
                     return;
                 }
 
-                let processed = 0;
-                let lastReported = 0;
+                // Build batch updates map for efficient file I/O
+                const batchUpdates = new Map<string, { value: string; rootName?: string }>();
                 for (const item of keysToTranslate) {
                     if (token.isCancellationRequested) {
                         break;
@@ -1238,23 +1281,25 @@ export class UntranslatedCommands {
                     if (!newValue) {
                         continue;
                     }
-                    try {
-                        const record = this.i18nIndex.getRecord(item.key);
-                        const rootName = record ? this.getRootNameForRecord(record) : 'common';
-                        await setTranslationValue(folder, selectedLocale, item.key, newValue, { rootName });
-                        translatedCount += 1;
-                        fixed.push({ locale: selectedLocale, keyPath: item.key });
-                    } catch (err) {
-                        console.error(`AI Localizer: Failed to write translation for key ${item.key}:`, err);
+                    const record = this.i18nIndex.getRecord(item.key);
+                    const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                    batchUpdates.set(item.key, { value: newValue, rootName });
+                }
+
+                if (batchUpdates.size > 0 && !token.isCancellationRequested) {
+                    progress.report({
+                        message: `Writing ${batchUpdates.size} translation(s) to ${selectedLocale}...`,
+                    });
+
+                    const writeResult = await setTranslationValuesBatch(folder, selectedLocale, batchUpdates);
+                    translatedCount = writeResult.written;
+
+                    for (const [key] of batchUpdates.entries()) {
+                        fixed.push({ locale: selectedLocale, keyPath: key });
                     }
-                    processed += 1;
-                    if (processed % 10 === 0 || processed === keysToTranslate.length) {
-                        const percent = (processed / keysToTranslate.length) * 100;
-                        progress.report({
-                            message: `${processed} of ${keysToTranslate.length} key(s) for ${selectedLocale} in ${relPath}`,
-                            increment: percent - lastReported,
-                        });
-                        lastReported = percent;
+
+                    if (writeResult.errors.length > 0) {
+                        console.error('AI Localizer: Some translations failed to write:', writeResult.errors);
                     }
                 }
             },
@@ -1452,6 +1497,8 @@ export class UntranslatedCommands {
                                     continue;
                                 }
 
+                                // Build batch updates map for efficient file I/O
+                                const batchUpdates = new Map<string, { value: string; rootName?: string }>();
                                 for (const item of items) {
                                     if (token.isCancellationRequested) {
                                         break;
@@ -1460,17 +1507,21 @@ export class UntranslatedCommands {
                                     if (!newValue) {
                                         continue;
                                     }
-                                    try {
-                                        const record = this.i18nIndex.getRecord(item.key);
-                                        const rootName = record ? this.getRootNameForRecord(record) : 'common';
-                                        await setTranslationValue(folder!, locale, item.key, newValue, { rootName });
-                                        translatedTotal += 1;
-                                        fixed.push({ locale, keyPath: item.key });
-                                    } catch (err) {
-                                        console.error(
-                                            `AI Localizer: Failed to write translation for key ${item.key} in ${locale}:`,
-                                            err,
-                                        );
+                                    const record = this.i18nIndex.getRecord(item.key);
+                                    const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                                    batchUpdates.set(item.key, { value: newValue, rootName });
+                                }
+
+                                if (batchUpdates.size > 0 && !token.isCancellationRequested) {
+                                    const writeResult = await setTranslationValuesBatch(folder!, locale, batchUpdates);
+                                    translatedTotal += writeResult.written;
+
+                                    for (const [key] of batchUpdates.entries()) {
+                                        fixed.push({ locale, keyPath: key });
+                                    }
+
+                                    if (writeResult.errors.length > 0) {
+                                        console.error(`AI Localizer: Some translations failed to write for ${locale}:`, writeResult.errors);
                                     }
                                 }
                             } catch (err) {
@@ -1626,13 +1677,10 @@ export class UntranslatedCommands {
 
             const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
             const autoUri = vscode.Uri.joinPath(scriptsDir, '.i18n-auto-ignore.json');
-            const decoder = new TextDecoder('utf-8');
-            const encoder = new TextEncoder();
-
             let existing: any = {};
             try {
                 const data = await vscode.workspace.fs.readFile(autoUri);
-                const raw = decoder.decode(data);
+                const raw = sharedDecoder.decode(data);
                 const parsed = JSON.parse(raw);
                 if (parsed && typeof parsed === 'object') {
                     existing = parsed;
@@ -1685,7 +1733,7 @@ export class UntranslatedCommands {
 
             const payload = `${JSON.stringify(existing, null, 2)}\n`;
             await vscode.workspace.fs.createDirectory(scriptsDir);
-            await vscode.workspace.fs.writeFile(autoUri, encoder.encode(payload));
+            await vscode.workspace.fs.writeFile(autoUri, sharedEncoder.encode(payload));
 
             vscode.window.showInformationMessage(
                 `AI Localizer: Updated scripts/.i18n-auto-ignore.json with ${newValues.length} pattern(s).`,
@@ -1977,12 +2025,11 @@ export class UntranslatedCommands {
 
             const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
             const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-unused-report.json');
-            const decoder = new TextDecoder('utf-8');
 
             let rawReport: string;
             try {
                 const data = await vscode.workspace.fs.readFile(reportUri);
-                rawReport = decoder.decode(data);
+                rawReport = sharedDecoder.decode(data);
             } catch {
                 const choice = await vscode.window.showQuickPick(
                     [
@@ -2090,9 +2137,8 @@ export class UntranslatedCommands {
                 return;
             }
 
-            const encoder = new TextEncoder();
             const payload = `${JSON.stringify(root, null, 2)}\n`;
-            await vscode.workspace.fs.writeFile(targetUri, encoder.encode(payload));
+            await vscode.workspace.fs.writeFile(targetUri, sharedEncoder.encode(payload));
 
             await this.i18nIndex.updateFile(targetUri);
             await vscode.commands.executeCommand(
@@ -2167,12 +2213,11 @@ export class UntranslatedCommands {
 
             const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
             const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-invalid-report.json');
-            const decoder = new TextDecoder('utf-8');
 
             let rawReport: string;
             try {
                 const data = await vscode.workspace.fs.readFile(reportUri);
-                rawReport = decoder.decode(data);
+                rawReport = sharedDecoder.decode(data);
             } catch {
                 const choice = await vscode.window.showQuickPick(
                     [
@@ -2303,9 +2348,8 @@ export class UntranslatedCommands {
             }
 
             if (deletedKeys.size > 0) {
-                const encoder = new TextEncoder();
                 const payload = `${JSON.stringify(root, null, 2)}\n`;
-                await vscode.workspace.fs.writeFile(targetUri, encoder.encode(payload));
+                await vscode.workspace.fs.writeFile(targetUri, sharedEncoder.encode(payload));
 
                 await this.i18nIndex.updateFile(targetUri);
                 await vscode.commands.executeCommand(
@@ -2436,12 +2480,11 @@ export class UntranslatedCommands {
 
             const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
             const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-unused-report.json');
-            const decoder = new TextDecoder('utf-8');
 
             let rawReport: string;
             try {
                 const data = await vscode.workspace.fs.readFile(reportUri);
-                rawReport = decoder.decode(data);
+                rawReport = sharedDecoder.decode(data);
             } catch {
                 const choice = await vscode.window.showQuickPick(
                     [
@@ -2502,9 +2545,8 @@ export class UntranslatedCommands {
                 return;
             }
 
-            const encoder = new TextEncoder();
             const payload = `${JSON.stringify(root, null, 2)}\n`;
-            await vscode.workspace.fs.writeFile(documentUri, encoder.encode(payload));
+            await vscode.workspace.fs.writeFile(documentUri, sharedEncoder.encode(payload));
 
             await this.i18nIndex.updateFile(documentUri);
             await vscode.commands.executeCommand(
@@ -2550,12 +2592,11 @@ export class UntranslatedCommands {
 
             const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
             const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-invalid-report.json');
-            const decoder = new TextDecoder('utf-8');
 
             let rawReport: string;
             try {
                 const data = await vscode.workspace.fs.readFile(reportUri);
-                rawReport = decoder.decode(data);
+                rawReport = sharedDecoder.decode(data);
             } catch {
                 const choice = await vscode.window.showQuickPick(
                     [
@@ -2657,9 +2698,8 @@ export class UntranslatedCommands {
             if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
 
             if (this.deleteKeyPathInObject(root, keyPath)) {
-                const encoder = new TextEncoder();
                 const payload = `${JSON.stringify(root, null, 2)}\n`;
-                await vscode.workspace.fs.writeFile(documentUri, encoder.encode(payload));
+                await vscode.workspace.fs.writeFile(documentUri, sharedEncoder.encode(payload));
 
                 await this.i18nIndex.updateFile(documentUri);
                 await vscode.commands.executeCommand(
@@ -2710,12 +2750,11 @@ export class UntranslatedCommands {
 
             const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
             const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-invalid-report.json');
-            const decoder = new TextDecoder('utf-8');
 
             let rawReport: string;
             try {
                 const data = await vscode.workspace.fs.readFile(reportUri);
-                rawReport = decoder.decode(data);
+                rawReport = sharedDecoder.decode(data);
             } catch {
                 const choice = await vscode.window.showQuickPick(
                     [
@@ -2995,8 +3034,6 @@ export class UntranslatedCommands {
             return 0;
         }
 
-        const decoder = new TextDecoder('utf-8');
-        const encoder = new TextEncoder();
         const changedUris: vscode.Uri[] = [];
 
         for (const uri of uris) {
@@ -3009,7 +3046,7 @@ export class UntranslatedCommands {
                 let root: any = {};
                 try {
                     const data = await vscode.workspace.fs.readFile(uri);
-                    const raw = decoder.decode(data);
+                    const raw = sharedDecoder.decode(data);
                     const parsed = JSON.parse(raw);
                     if (parsed && typeof parsed === 'object') root = parsed;
                 } catch {
@@ -3022,7 +3059,7 @@ export class UntranslatedCommands {
                 }
 
                 const payload = `${JSON.stringify(root, null, 2)}\n`;
-                await vscode.workspace.fs.writeFile(uri, encoder.encode(payload));
+                await vscode.workspace.fs.writeFile(uri, sharedEncoder.encode(payload));
                 changedUris.push(uri);
             } catch {
                 // Ignore failures for individual locale files
@@ -3069,9 +3106,6 @@ export class UntranslatedCommands {
 
             const scriptsDir = vscode.Uri.joinPath(folderUri, 'scripts');
             const ignoreUri = vscode.Uri.joinPath(scriptsDir, '.i18n-auto-ignore.json');
-            const decoder = new TextDecoder('utf-8');
-            const encoder = new TextEncoder();
-
             let ignoreData: { exact?: string[]; exactInsensitive?: string[]; contains?: string[] } = {
                 exact: [],
                 exactInsensitive: [],
@@ -3080,7 +3114,7 @@ export class UntranslatedCommands {
 
             try {
                 const data = await vscode.workspace.fs.readFile(ignoreUri);
-                const raw = decoder.decode(data);
+                const raw = sharedDecoder.decode(data);
                 const parsed = JSON.parse(raw);
                 if (parsed && typeof parsed === 'object') {
                     ignoreData = {
@@ -3099,7 +3133,7 @@ export class UntranslatedCommands {
             }
 
             const payload = JSON.stringify(ignoreData, null, 2) + '\n';
-            await vscode.workspace.fs.writeFile(ignoreUri, encoder.encode(payload));
+            await vscode.workspace.fs.writeFile(ignoreUri, sharedEncoder.encode(payload));
 
             // Rescan to apply the new ignore pattern
             await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
