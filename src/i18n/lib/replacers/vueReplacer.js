@@ -70,10 +70,13 @@ class VueReplacer extends BaseReplacer {
 
     // 1. Plain text content between tags (not inside {{ }})
     // Matches: >text content<
+    // Skip content that already has {{ $t(...) }} or {{ t(...) }} wrapper
     const textBetweenTagsRegex = /(>)([^<>{}\n]+)(<)/g;
 
     modified = modified.replace(textBetweenTagsRegex, (match, open, text, close) => {
       const trimmed = text.trim();
+      // Skip if already contains $t() or t() calls
+      if (/\{\{\s*\$?t\s*\(/.test(text)) return match;
       if (!trimmed || !canTranslate(trimmed)) return match;
 
       const fullKey = this.lookupKey(keyMap, namespace, 'text', trimmed);
@@ -86,13 +89,17 @@ class VueReplacer extends BaseReplacer {
 
     // 2. Attribute values (non-bound)
     // Matches: placeholder="text", title="text", etc.
+    // Skip already bound attributes (prefixed with : or v-bind:)
     const attrNames = 'placeholder|title|alt|aria-label|label|error-message|helper-text';
     const attrRegex = new RegExp(
-      `(\\s)(${attrNames})(\\s*=\\s*)(['"])([^'"]{2,200})\\4`,
+      `(\\s)(?![:v])(${attrNames})(\\s*=\\s*)(['"])([^'"]{2,200})\\4`,
       'gi'
     );
 
     modified = modified.replace(attrRegex, (match, space, attrName, eq, quote, text) => {
+      // Skip if text looks like a translation key (idempotency guard)
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
+      
       if (!canTranslate(text)) return match;
 
       const kind = this.inferKindFromAttr(attrName);
@@ -105,9 +112,15 @@ class VueReplacer extends BaseReplacer {
 
     // 3. String literals inside {{ }} expressions
     // Matches: {{ condition ? "text1" : "text2" }}
+    // Skip strings that are already inside $t() or t() calls
     const mustacheRegex = /(\{\{[^}]*?)(['"])([^'"]{3,200})\2([^}]*?\}\})/g;
 
     modified = modified.replace(mustacheRegex, (match, before, quote, text, after) => {
+      // Skip if already inside a $t() or t() call (idempotency guard)
+      if (/\$?t\(\s*$/.test(before)) return match;
+      // Skip if text looks like a translation key (dot-separated path)
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
+      
       if (!canTranslate(text)) return match;
 
       const fullKey = this.lookupKey(keyMap, namespace, 'text', text);
@@ -118,12 +131,16 @@ class VueReplacer extends BaseReplacer {
 
     // 4. Bound attribute string values
     // Matches: :placeholder="'text'" or :title="'text'"
+    // Skip if already using $t()
     const boundAttrRegex = new RegExp(
       `(:(?:${attrNames})\\s*=\\s*")(['"])([^'"]{2,200})\\2"`,
       'gi'
     );
 
     modified = modified.replace(boundAttrRegex, (match, prefix, quote, text) => {
+      // Skip if text looks like a translation key (idempotency guard)
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
+      
       if (!canTranslate(text)) return match;
 
       const attrMatch = prefix.match(/:(\S+)\s*=/);
@@ -138,9 +155,13 @@ class VueReplacer extends BaseReplacer {
 
     // 5. v-text and v-html with string literals
     // Matches: v-text="'text'" or v-html="'text'"
+    // Skip if already using $t()
     const vTextRegex = /(v-(?:text|html)\s*=\s*")(['"])([^'"]{2,200})\2"/g;
 
     modified = modified.replace(vTextRegex, (match, prefix, quote, text) => {
+      // Skip if text looks like a translation key (idempotency guard)
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
+      
       if (!canTranslate(text)) return match;
 
       const fullKey = this.lookupKey(keyMap, namespace, 'text', text);

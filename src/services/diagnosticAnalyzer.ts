@@ -984,6 +984,9 @@ export class DiagnosticAnalyzer {
         const allKeysSet = new Set(allKeys);
 
         const diagnostics: vscode.Diagnostic[] = [];
+        
+        // Build comment ranges to skip false positives in comments
+        const commentRanges = this.findCommentRanges(text);
 
         // Match t('key'), t("key"), $t('key'), $t("key") with a word boundary before t
         const tCallRegex = /\b\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g;
@@ -991,6 +994,12 @@ export class DiagnosticAnalyzer {
 
         while ((match = tCallRegex.exec(text)) !== null) {
             const key = match[2];
+            const matchIndex = match.index;
+            
+            // Skip if match is inside a comment
+            if (this.isIndexInRanges(matchIndex, commentRanges)) {
+                continue;
+            }
             
             if (!allKeysSet.has(key)) {
                 // Calculate position
@@ -1017,6 +1026,47 @@ export class DiagnosticAnalyzer {
             `[DiagnosticAnalyzer] Found ${diagnostics.length} missing reference(s) in source file: ${uri.fsPath}`,
         );
         return diagnostics;
+    }
+    
+    /**
+     * Find all comment ranges in source text (single-line // and multi-line /* *\/)
+     * Also handles HTML comments <!-- --> for Vue templates
+     */
+    private findCommentRanges(text: string): Array<{ start: number; end: number }> {
+        const ranges: Array<{ start: number; end: number }> = [];
+        
+        // Match single-line comments: // ... until end of line
+        const singleLineRegex = /\/\/[^\n]*/g;
+        let match;
+        while ((match = singleLineRegex.exec(text)) !== null) {
+            ranges.push({ start: match.index, end: match.index + match[0].length });
+        }
+        
+        // Match multi-line comments: /* ... */
+        const multiLineRegex = /\/\*[\s\S]*?\*\//g;
+        while ((match = multiLineRegex.exec(text)) !== null) {
+            ranges.push({ start: match.index, end: match.index + match[0].length });
+        }
+        
+        // Match HTML comments: <!-- ... --> (for Vue templates)
+        const htmlCommentRegex = /<!--[\s\S]*?-->/g;
+        while ((match = htmlCommentRegex.exec(text)) !== null) {
+            ranges.push({ start: match.index, end: match.index + match[0].length });
+        }
+        
+        return ranges;
+    }
+    
+    /**
+     * Check if an index falls within any of the given ranges
+     */
+    private isIndexInRanges(index: number, ranges: Array<{ start: number; end: number }>): boolean {
+        for (const range of ranges) {
+            if (index >= range.start && index < range.end) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -47,6 +47,7 @@ class JsxReplacer extends BaseReplacer {
 
     // 1. Object property values with known keys
     // Matches: title: "text", description: "text", message: "text", etc.
+    // Skip values that are already t() calls
     const propNames = 'title|description|message|label|placeholder|cta|text|error|heading|alt|reason';
     const objPropRegex = new RegExp(
       `(\\b(?:${propNames})\\s*:\\s*)(['"\`])([^'"\`\\n]{2,200})\\2`,
@@ -54,6 +55,8 @@ class JsxReplacer extends BaseReplacer {
     );
 
     modified = modified.replace(objPropRegex, (match, prefix, quote, text) => {
+      // Idempotency guard: skip if text looks like a translation key
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       if (!canTranslate(text)) return match;
 
       const propMatch = prefix.match(/(\w+)\s*:/);
@@ -76,6 +79,8 @@ class JsxReplacer extends BaseReplacer {
     );
 
     modified = modified.replace(varDeclRegex, (match, prefix, varName, quote, text) => {
+      // Idempotency guard: skip if text looks like a translation key
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       if (!canTranslate(text)) return match;
 
       const kind = this.inferKindFromVarName(varName);
@@ -91,6 +96,8 @@ class JsxReplacer extends BaseReplacer {
     const toastRegex = /(toast\.(?:success|error|warning|info|show|message)\s*\(\s*)(['"`])([^'"`\n]{2,200})\2/g;
 
     modified = modified.replace(toastRegex, (match, prefix, quote, text) => {
+      // Idempotency guard: skip if text looks like a translation key
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       if (!canTranslate(text)) return match;
 
       const fullKey = this.lookupKey(keyMap, namespace, 'toast', text);
@@ -102,6 +109,7 @@ class JsxReplacer extends BaseReplacer {
 
     // 4. JSX text content between tags
     // Matches: <Tag>text content</Tag>
+    // Skip already translated text {t('...')}
     const jsxTags = 'h[1-6]|p|span|div|label|button|a|li|td|th|strong|em|b|i|small|Link|Button|Text|Title|Heading';
     const jsxTextRegex = new RegExp(
       `(<(?:${jsxTags})(?:\\s[^>]*)?>)([^<>{}\`]+)(<\\/(?:${jsxTags})>)`,
@@ -110,6 +118,8 @@ class JsxReplacer extends BaseReplacer {
 
     modified = modified.replace(jsxTextRegex, (match, openTag, text, closeTag) => {
       const trimmed = text.trim();
+      // Idempotency guard: skip if already contains t() call pattern
+      if (/\{t\s*\(/.test(text)) return match;
       if (!trimmed || !canTranslate(trimmed)) return match;
 
       const tagMatch = openTag.match(/<(\w+)/);
@@ -127,9 +137,12 @@ class JsxReplacer extends BaseReplacer {
 
     // 5. JSX expression containers with string literals
     // Matches: {"text"} or {'text'}
+    // Skip strings that are already t() arguments
     const jsxExprRegex = /(\{)(['"])([^'"}{]{2,200})\2(\})/g;
 
     modified = modified.replace(jsxExprRegex, (match, open, quote, text, close) => {
+      // Idempotency guard: skip if text looks like a translation key
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       if (!canTranslate(text)) return match;
 
       const fullKey = this.lookupKey(keyMap, namespace, 'text', text);
@@ -141,6 +154,7 @@ class JsxReplacer extends BaseReplacer {
 
     // 6. JSX attributes with string values
     // Matches: placeholder="text", title="text", etc.
+    // Skip attributes that already use t() via expression {t('key')}
     const attrNames = 'placeholder|title|alt|aria-label|label';
     const jsxAttrRegex = new RegExp(
       `((?:${attrNames})\\s*=\\s*)(['"])([^'"]{2,200})\\2`,
@@ -148,6 +162,8 @@ class JsxReplacer extends BaseReplacer {
     );
 
     modified = modified.replace(jsxAttrRegex, (match, prefix, quote, text) => {
+      // Idempotency guard: skip if text looks like a translation key
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       if (!canTranslate(text)) return match;
 
       const attrMatch = prefix.match(/(\S+)\s*=/);
@@ -166,6 +182,8 @@ class JsxReplacer extends BaseReplacer {
     const returnRegex = /(return\s+)(['"])([^'"]{3,200})\2(\s*[;\n])/g;
 
     modified = modified.replace(returnRegex, (match, prefix, quote, text, suffix) => {
+      // Idempotency guard: skip if text looks like a translation key
+      if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       if (!canTranslate(text)) return match;
 
       const fullKey = this.lookupKey(keyMap, namespace, 'text', text);
