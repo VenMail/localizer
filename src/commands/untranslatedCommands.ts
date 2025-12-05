@@ -25,6 +25,7 @@ export class UntranslatedCommands {
         private translationService: TranslationService,
         private projectConfigService: ProjectConfigService,
         private context?: vscode.ExtensionContext,
+        private log?: vscode.OutputChannel,
     ) {}
 
     /**
@@ -3471,6 +3472,10 @@ export class UntranslatedCommands {
                 return;
             }
 
+            this.log?.appendLine(
+                `[BulkFixMissingRefs] Starting for ${documentUri.fsPath} (lang=${languageId})`,
+            );
+
             // Extract all translation keys from the file
             const text = doc.getText();
             const commentRanges = this.findCommentRanges(text);
@@ -3557,6 +3562,11 @@ export class UntranslatedCommands {
 
                     // Pre-fetch locale URIs once (not inside the loop)
                     const localeUris = await this.getLocaleFileUris(folder!, defaultLocale);
+                    if (!localeUris.length) {
+                        const msg = `No locale files found for default locale "${defaultLocale}".`;
+                        this.log?.appendLine(`[BulkFixMissingRefs] ${msg}`);
+                        throw new Error(msg);
+                    }
                     
                     // Pre-fetch commit ref once
                     const extractRef = this.context 
@@ -3567,17 +3577,25 @@ export class UntranslatedCommands {
                     const commitContentCache = new Map<string, any>();
                     if (extractRef) {
                         for (const localeUri of localeUris) {
-                            const content = await getFileContentAtCommit(
-                                folder!,
-                                localeUri.fsPath,
-                                extractRef.commitHash,
-                            );
-                            if (content) {
-                                try {
-                                    commitContentCache.set(localeUri.fsPath, JSON.parse(content));
-                                } catch {
-                                    // Invalid JSON
+                            try {
+                                const content = await getFileContentAtCommit(
+                                    folder!,
+                                    localeUri.fsPath,
+                                    extractRef.commitHash,
+                                );
+                                if (content) {
+                                    try {
+                                        commitContentCache.set(localeUri.fsPath, JSON.parse(content));
+                                    } catch (jsonErr) {
+                                        this.log?.appendLine(
+                                            `[BulkFixMissingRefs] Failed to parse cached commit content for ${localeUri.fsPath}: ${String(jsonErr)}`,
+                                        );
+                                    }
                                 }
+                            } catch (gitErr) {
+                                this.log?.appendLine(
+                                    `[BulkFixMissingRefs] Git content lookup failed for ${localeUri.fsPath} @ ${extractRef.commitHash}: ${String(gitErr)}`,
+                                );
                             }
                         }
                     }
@@ -3603,10 +3621,16 @@ export class UntranslatedCommands {
                         if (hasVariables) {
                             // Search git history with extended time window (90 days) for keys with variables
                             for (const localeUri of localeUris) {
-                                const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 90);
-                                if (historyResult && historyResult.value) {
-                                    recoveredValue = historyResult.value;
-                                    break;
+                                try {
+                                    const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 90);
+                                    if (historyResult && historyResult.value) {
+                                        recoveredValue = historyResult.value;
+                                        break;
+                                    }
+                                } catch (historyErr) {
+                                    this.log?.appendLine(
+                                        `[BulkFixMissingRefs] History lookup failed for key ${key} in ${localeUri.fsPath}: ${String(historyErr)}`,
+                                    );
                                 }
                             }
 
@@ -3659,10 +3683,16 @@ export class UntranslatedCommands {
                             // Try to recover from git history (for keys without variables or if similar key not found)
                             if (!hasVariables) {
                                 for (const localeUri of localeUris) {
-                                    const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 30);
-                                    if (historyResult && historyResult.value) {
-                                        recoveredValue = historyResult.value;
-                                        break;
+                                    try {
+                                        const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 30);
+                                        if (historyResult && historyResult.value) {
+                                            recoveredValue = historyResult.value;
+                                            break;
+                                        }
+                                    } catch (historyErr) {
+                                        this.log?.appendLine(
+                                            `[BulkFixMissingRefs] History lookup failed for key ${key} in ${localeUri.fsPath}: ${String(historyErr)}`,
+                                        );
                                     }
                                 }
 
@@ -3706,7 +3736,14 @@ export class UntranslatedCommands {
 
                     // Batch create missing keys
                     if (batchUpdates.size > 0) {
-                        await setTranslationValuesBatch(folder!, defaultLocale, batchUpdates);
+                        try {
+                            await setTranslationValuesBatch(folder!, defaultLocale, batchUpdates);
+                        } catch (applyErr) {
+                            this.log?.appendLine(
+                                `[BulkFixMissingRefs] Failed to write ${batchUpdates.size} batch update(s): ${String(applyErr)}`,
+                            );
+                            throw applyErr;
+                        }
                     }
 
                     const message = `Fixed ${fixedCount} reference(s) and created ${createdCount} new key(s).`;
@@ -3714,8 +3751,16 @@ export class UntranslatedCommands {
                 },
             );
         } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            const stack = err instanceof Error && err.stack ? err.stack : '';
+            this.log?.appendLine(`[BulkFixMissingRefs] Failed: ${detail}`);
+            if (stack) {
+                this.log?.appendLine(stack);
+            }
             console.error('AI Localizer: Failed to bulk fix missing key references:', err);
-            vscode.window.showErrorMessage('AI Localizer: Failed to bulk fix missing key references.');
+            vscode.window.showErrorMessage(
+                `AI Localizer: Failed to bulk fix missing key references. ${detail}`,
+            );
         }
     }
 

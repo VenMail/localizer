@@ -338,6 +338,7 @@ export class CommandRegistry {
             this.translationService,
             this.projectConfigService,
             this.context,
+            this.log,
         );
         // Register cleanup for UntranslatedCommands
         disposables.push({ dispose: () => untranslatedCmds.dispose() });

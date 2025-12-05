@@ -169,6 +169,12 @@ export class ProjectFixCommand {
                         return;
                     }
 
+                    progress.report({ message: 'Bulk fixing missing key references across source files...' });
+                    await this.bulkFixMissingReferencesInProject(folder, token);
+                    if (token.isCancellationRequested) {
+                        return;
+                    }
+
                     progress.report({ message: 'Detecting untranslated strings (i18n:fix-untranslated)...' });
                     await vscode.commands.executeCommand('ai-localizer.i18n.runFixUntranslatedScript');
                     if (token.isCancellationRequested) {
@@ -219,6 +225,52 @@ export class ProjectFixCommand {
             vscode.window.showErrorMessage(
                 `AI Localizer: Failed to run project-wide i18n cleanup. ${msg}`,
             );
+        }
+    }
+
+    private async bulkFixMissingReferencesInProject(
+        folder: vscode.WorkspaceFolder,
+        token: vscode.CancellationToken,
+    ): Promise<void> {
+        const cfg = vscode.workspace.getConfiguration('ai-localizer');
+        const includeGlobs =
+            cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
+        const excludeGlobs =
+            cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
+                '**/node_modules/**',
+                '**/.git/**',
+                '**/dist/**',
+                '**/build/**',
+                '**/.next/**',
+                '**/.nuxt/**',
+                '**/.vite/**',
+                '**/coverage/**',
+                '**/out/**',
+                '**/.turbo/**',
+            ];
+
+        const include =
+            includeGlobs.length === 1 ? includeGlobs[0] : `{${includeGlobs.join(',')}}`;
+        const exclude = excludeGlobs.length ? `{${excludeGlobs.join(',')}}` : undefined;
+
+        const uris = await vscode.workspace.findFiles(include, exclude);
+        if (!uris.length) {
+            return;
+        }
+
+        for (const uri of uris) {
+            if (token.isCancellationRequested) {
+                return;
+            }
+            try {
+                await vscode.commands.executeCommand('ai-localizer.i18n.bulkFixMissingKeyReferences', uri);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                vscode.window.showWarningMessage(
+                    `AI Localizer: Bulk fix missing references failed for ${uri.fsPath}. ${msg}`,
+                );
+                throw err;
+            }
         }
     }
 }
