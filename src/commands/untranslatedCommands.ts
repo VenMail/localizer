@@ -1199,138 +1199,178 @@ export class UntranslatedCommands {
         }
 
         const localeEntries = Array.from(missingPerLocale.entries());
-        let selectedLocale: string;
-        let keysToTranslate: { key: string; defaultValue: string; defaultLocale: string }[];
+        let selectedLocales: string[];
+        let translateAll = false;
 
         if (localeEntries.length === 1) {
-            [selectedLocale, keysToTranslate] = localeEntries[0];
+            selectedLocales = [localeEntries[0][0]];
         } else {
-            const items = localeEntries.map(([locale, list]) => {
-                const count = list.length;
-                return {
-                    label: `${locale} (${count} key${count === 1 ? '' : 's'})`,
-                    description: undefined,
-                    locale,
-                    count,
-                } as vscode.QuickPickItem & { locale: string; count: number };
-            });
+            const totalKeys = localeEntries.reduce((sum, [, list]) => sum + list.length, 0);
+            const items: Array<vscode.QuickPickItem & { locale?: string; isAll?: boolean }> = [
+                {
+                    label: `$(globe) All locales (${localeEntries.length} locales, ${totalKeys} keys)`,
+                    description: `Translate all missing keys for all ${localeEntries.length} locales at once`,
+                    isAll: true,
+                },
+                { label: '---', kind: vscode.QuickPickItemKind.Separator },
+                ...localeEntries.map(([locale, list]) => {
+                    const count = list.length;
+                    return {
+                        label: `${locale} (${count} key${count === 1 ? '' : 's'})`,
+                        description: undefined,
+                        locale,
+                    };
+                }),
+            ];
 
             const choice = await vscode.window.showQuickPick(items, {
                 placeHolder:
-                    'AI Localizer: Select target locale to translate missing keys for this file',
+                    'AI Localizer: Select target locale(s) to translate missing keys for this file',
             });
             if (!choice) {
                 return;
             }
 
-            selectedLocale = (choice as any).locale;
-            keysToTranslate = missingPerLocale.get(selectedLocale) || [];
+            if ((choice as any).isAll) {
+                translateAll = true;
+                selectedLocales = localeEntries.map(([locale]) => locale);
+            } else {
+                const selectedLocale = (choice as any).locale;
+                if (!selectedLocale) {
+                    return;
+                }
+                selectedLocales = [selectedLocale];
+            }
         }
 
-        if (!keysToTranslate || !keysToTranslate.length) {
-            vscode.window.showInformationMessage(
-                `AI Localizer: No untranslated keys found for locale ${selectedLocale} in this file.`,
-            );
-            return;
-        }
+        // Confirm with user
+        const totalKeysToTranslate = translateAll
+            ? localeEntries.reduce((sum, [, list]) => sum + list.length, 0)
+            : missingPerLocale.get(selectedLocales[0])?.length || 0;
+
+        const confirmLabel = translateAll
+            ? `Translate all ${totalKeysToTranslate} key(s) to ${selectedLocales.length} locale(s)`
+            : `Translate ${totalKeysToTranslate} key(s) to ${selectedLocales[0]}`;
 
         const confirm = await vscode.window.showQuickPick(
             [
                 {
-                    label: `Translate ${keysToTranslate.length} key(s)`,
-                    description: `Use AI to translate ${keysToTranslate.length} untranslated key(s) to ${selectedLocale}`,
+                    label: confirmLabel,
+                    description: translateAll
+                        ? `Use AI to translate missing keys for all ${selectedLocales.length} locales`
+                        : `Use AI to translate ${totalKeysToTranslate} untranslated key(s) to ${selectedLocales[0]}`,
                 },
                 { label: 'Cancel', description: 'Do not translate' },
             ],
             {
-                placeHolder: `AI Localizer: Translate ${keysToTranslate.length} untranslated key(s) in this file?`,
+                placeHolder: `AI Localizer: ${confirmLabel}?`,
             },
         );
         if (!confirm || confirm.label === 'Cancel') {
             return;
         }
 
-        let translatedCount = 0;
-        const fixed: { locale: string; keyPath: string }[] = [];
-
         const relPath = vscode.workspace.asRelativePath(documentUri);
-        const progressTitle = `AI Localizer: Translating ${selectedLocale} (${relPath})...`;
+        let totalTranslatedCount = 0;
+        const fixed: { locale: string; keyPath: string }[] = [];
 
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
-                title: progressTitle,
+                title: translateAll
+                    ? `AI Localizer: Translating ${selectedLocales.length} locale(s) (${relPath})...`
+                    : `AI Localizer: Translating ${selectedLocales[0]} (${relPath})...`,
                 cancellable: true,
             },
             async (progress, token) => {
-                if (token.isCancellationRequested) {
-                    return;
-                }
-
-                const batchItems = keysToTranslate.map((item) => ({
-                    id: item.key,
-                    text: item.defaultValue,
-                    defaultLocale: item.defaultLocale,
-                }));
-
-                const translations = await this.translationService.translateBatchToLocale(
-                    batchItems,
-                    selectedLocale,
-                    'text',
-                    true,
-                );
-
-                if (!translations || translations.size === 0 || token.isCancellationRequested) {
-                    return;
-                }
-
-                // Build batch updates map for efficient file I/O
-                const batchUpdates = new Map<string, { value: string; rootName?: string }>();
-                for (const item of keysToTranslate) {
+                for (let i = 0; i < selectedLocales.length; i++) {
                     if (token.isCancellationRequested) {
                         break;
                     }
-                    const newValue = translations.get(item.key);
-                    if (!newValue) {
+
+                    const selectedLocale = selectedLocales[i];
+                    const keysToTranslate = missingPerLocale.get(selectedLocale) || [];
+
+                    if (!keysToTranslate.length) {
                         continue;
                     }
-                    const record = this.i18nIndex.getRecord(item.key);
-                    const rootName = record ? this.getRootNameForRecord(record) : 'common';
-                    batchUpdates.set(item.key, { value: newValue, rootName });
-                }
 
-                if (batchUpdates.size > 0 && !token.isCancellationRequested) {
                     progress.report({
-                        message: `Writing ${batchUpdates.size} translation(s) to ${selectedLocale}...`,
+                        message: `Translating ${selectedLocale} (${i + 1}/${selectedLocales.length}): ${keysToTranslate.length} key(s)...`,
+                        increment: (100 / selectedLocales.length) * (i === 0 ? 0 : 1),
                     });
 
-                    const writeResult = await setTranslationValuesBatch(folder, selectedLocale, batchUpdates);
-                    translatedCount = writeResult.written;
+                    const batchItems = keysToTranslate.map((item) => ({
+                        id: item.key,
+                        text: item.defaultValue,
+                        defaultLocale: item.defaultLocale,
+                    }));
 
-                    for (const [key] of batchUpdates.entries()) {
-                        fixed.push({ locale: selectedLocale, keyPath: key });
+                    const translations = await this.translationService.translateBatchToLocale(
+                        batchItems,
+                        selectedLocale,
+                        'text',
+                        true,
+                    );
+
+                    if (!translations || translations.size === 0 || token.isCancellationRequested) {
+                        continue;
                     }
 
-                    if (writeResult.errors.length > 0) {
-                        console.error('AI Localizer: Some translations failed to write:', writeResult.errors);
+                    // Build batch updates map for efficient file I/O
+                    const batchUpdates = new Map<string, { value: string; rootName?: string }>();
+                    for (const item of keysToTranslate) {
+                        if (token.isCancellationRequested) {
+                            break;
+                        }
+                        const newValue = translations.get(item.key);
+                        if (!newValue) {
+                            continue;
+                        }
+                        const record = this.i18nIndex.getRecord(item.key);
+                        const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                        batchUpdates.set(item.key, { value: newValue, rootName });
                     }
+
+                    if (batchUpdates.size > 0 && !token.isCancellationRequested) {
+                        progress.report({
+                            message: `Writing ${batchUpdates.size} translation(s) to ${selectedLocale}...`,
+                            increment: (100 / selectedLocales.length) * 0.5,
+                        });
+
+                        const writeResult = await setTranslationValuesBatch(folder, selectedLocale, batchUpdates);
+                        totalTranslatedCount += writeResult.written;
+
+                        for (const [key] of batchUpdates.entries()) {
+                            fixed.push({ locale: selectedLocale, keyPath: key });
+                        }
+
+                        if (writeResult.errors.length > 0) {
+                            console.error(
+                                `AI Localizer: Some translations failed to write for ${selectedLocale}:`,
+                                writeResult.errors,
+                            );
+                        }
+                    }
+
+                    progress.report({
+                        increment: (100 / selectedLocales.length) * 0.5,
+                    });
                 }
             },
         );
 
         if (fixed.length > 0) {
-            await this.pruneUntranslatedReports(
-                folder,
-                fixed,
-            );
+            await this.pruneUntranslatedReports(folder, fixed);
         }
 
         // Locale file writes trigger watchers which update index + diagnostics incrementally
 
-        if (translatedCount > 0) {
-            vscode.window.showInformationMessage(
-                `AI Localizer: Translated ${translatedCount} key(s) in ${selectedLocale}.`,
-            );
+        if (totalTranslatedCount > 0) {
+            const localeSummary = translateAll
+                ? `${totalTranslatedCount} key(s) across ${selectedLocales.length} locale(s)`
+                : `${totalTranslatedCount} key(s) in ${selectedLocales[0]}`;
+            vscode.window.showInformationMessage(`AI Localizer: Translated ${localeSummary}.`);
         } else {
             const apiChoice = await vscode.window.showInformationMessage(
                 'AI Localizer: No translations were generated (check API key and settings).',
@@ -3328,13 +3368,17 @@ export class UntranslatedCommands {
             const text = doc.getText();
             const keyMatches: Array<{ key: string; range: vscode.Range }> = [];
             
-            // Match t('key') or t("key") patterns
-            const tCallRegex = /t\(['"]([A-Za-z0-9_.]+)['"]\)/g;
+            // Match t('key') or t('key', { ... }) patterns
+            // Handles: t('key'), t("key"), t('key', { vars }), $t('key'), etc.
+            // Pattern: t( followed by quoted key, then either ) or , (for additional args)
+            const tCallRegex = /\$?t\(\s*(['"])([A-Za-z0-9_.]+)\1\s*[,)]/g;
             let match;
             while ((match = tCallRegex.exec(text)) !== null) {
-                const key = match[1];
-                const startPos = doc.positionAt(match.index + 3); // After t('
-                const endPos = doc.positionAt(match.index + match[0].length - 2); // Before ')
+                const key = match[2];
+                // Calculate position: match.index + '$?t(' length + whitespace + opening quote
+                const keyStartInMatch = match[0].indexOf(match[1]) + 1; // After opening quote
+                const startPos = doc.positionAt(match.index + keyStartInMatch);
+                const endPos = doc.positionAt(match.index + keyStartInMatch + key.length);
                 const range = new vscode.Range(startPos, endPos);
                 keyMatches.push({ key, range });
             }

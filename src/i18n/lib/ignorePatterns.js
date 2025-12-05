@@ -122,7 +122,7 @@ function isCssUtilityString(text) {
     // Check for Tailwind-style classes: text-gray-200, stroke-current, etc.
     if (/^[a-z]+(?:-[a-z0-9]+)+$/i.test(token) && 
         (/\d+/.test(token) || /^(text|bg|border|p|m|w|h|flex|grid|items|justify|self|place|gap|space|divide|ring|shadow|opacity|z|top|left|right|bottom|inset|rounded|cursor|overflow|display|position|stroke|fill|animate|transition|transform|scale|rotate|translate|skew|origin|filter|backdrop|brightness|contrast|blur|saturate|hue|current|auto|full|none|start|end|center|stretch|between|around|evenly|primary|secondary|success|danger|warning|info|light|dark|white|black|gray|grey|red|blue|green|yellow|purple|pink|indigo|teal|orange|cyan|amber|lime|emerald|sky|violet|fuchsia|rose)-/i.test(token) || 
-         /current|auto|full|none|start|end|center|stretch|between|around|evenly$/i.test(token))) {
+         /^(current|auto|full|none|start|end|center|stretch|between|around|evenly)$/i.test(token))) {
       return true;
     }
   }
@@ -178,6 +178,7 @@ function isCssUtilityString(text) {
       continue;
     }
     // CSS color/value keywords: current, auto, full, none, etc.
+    // Use exact word boundaries to prevent substring matching
     if (/^(current|auto|full|none|start|end|center|stretch|between|around|evenly|primary|secondary|success|danger|warning|info|light|dark|white|black|gray|grey|red|blue|green|yellow|purple|pink|indigo|teal|orange|cyan|amber|lime|emerald|sky|violet|fuchsia|rose)$/i.test(lower)) {
       cssLikeCount += 1;
     }
