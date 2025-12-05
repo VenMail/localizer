@@ -173,7 +173,9 @@ export class ProjectFixCommand {
                 async (progress, token) => {
                     if (token.isCancellationRequested) return;
 
-                    // Phase 1: Extract and rewrite source files
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 1: Extract and rewrite source files
+                    // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Extracting translatable strings (i18n:extract)...' });
                     await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');
                     if (token.isCancellationRequested) return;
@@ -186,18 +188,34 @@ export class ProjectFixCommand {
                     await vscode.commands.executeCommand('ai-localizer.i18n.runRewriteBladeScript');
                     if (token.isCancellationRequested) return;
 
-                    // Phase 2: Initial sync to populate all locales
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 2: Initial sync to populate all locales (ONLY sync needed)
+                    // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Syncing locales (i18n:sync)...' });
-                    await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
+                    // Use runSyncScriptOnly to avoid triggering fix-untranslated cascade
+                    await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
                     if (token.isCancellationRequested) return;
 
-                    // Phase 3: Build index and track keys before cleanup
-                    progress.report({ message: 'Rebuilding index before cleanup...' });
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 3: Build index and fix missing refs BEFORE cleanup
+                    // This ensures cleanup sees accurate key usage from source files
+                    // ═══════════════════════════════════════════════════════════════
+                    progress.report({ message: 'Building index...' });
                     await this.i18nIndex.ensureInitialized(true);
                     const keysBeforeCleanup = new Set(this.i18nIndex.getAllKeys());
                     if (token.isCancellationRequested) return;
 
-                    // Phase 4: Cleanup unused keys (analyze + delete from all locale files)
+                    progress.report({ message: 'Fixing missing key references (before cleanup)...' });
+                    await this.bulkFixMissingReferences(folder, token, progress);
+                    if (token.isCancellationRequested) return;
+
+                    // Rebuild index after fixing refs so cleanup sees correct usage
+                    await this.i18nIndex.ensureInitialized(true);
+                    if (token.isCancellationRequested) return;
+
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 4: Cleanup unused keys (now sees correct usage)
+                    // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Analyzing unused keys (i18n:cleanup-unused)...' });
                     await runI18nScript('i18n:cleanup-unused', { folder });
                     if (token.isCancellationRequested) return;
@@ -206,7 +224,9 @@ export class ProjectFixCommand {
                     await this.applyUnusedReportAcrossLocales(folder, token);
                     if (token.isCancellationRequested) return;
 
-                    // Phase 5: Cleanup invalid/non-translatable keys
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 5: Cleanup invalid/non-translatable keys
+                    // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Analyzing invalid/non-translatable keys (i18n:restore-invalid)...' });
                     await runI18nScript('i18n:restore-invalid', { folder });
                     if (token.isCancellationRequested) return;
@@ -215,30 +235,14 @@ export class ProjectFixCommand {
                     await this.applyInvalidReportAcrossLocales(folder, token);
                     if (token.isCancellationRequested) return;
 
-                    // Phase 6: Re-sync after cleanup to ensure consistency
-                    progress.report({ message: 'Resyncing locales after cleanup (i18n:sync)...' });
-                    await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
-                    if (token.isCancellationRequested) return;
-
-                    // Phase 7: Final cleanup pass (sync may have reintroduced unused keys)
-                    progress.report({ message: 'Final cleanup pass: analyzing unused keys...' });
-                    await runI18nScript('i18n:cleanup-unused', { folder });
-                    if (token.isCancellationRequested) return;
-
-                    progress.report({ message: 'Final cleanup pass: removing unused keys...' });
-                    await this.applyUnusedReportAcrossLocales(folder, token);
-                    if (token.isCancellationRequested) return;
-
-                    // Phase 8: Rebuild index and fix missing key references
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 6: Rebuild index and track removed keys
+                    // NOTE: We do NOT re-sync here! Sync would bring back cleaned keys.
+                    // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Rebuilding index after cleanup...' });
                     await this.i18nIndex.ensureInitialized(true);
                     if (token.isCancellationRequested) return;
 
-                    progress.report({ message: 'Fixing missing key references across source files...' });
-                    await this.bulkFixMissingReferencesInProject(folder, token);
-                    if (token.isCancellationRequested) return;
-
-                    // Track removed keys for auto-ignore
                     const keysAfterCleanup = new Set(this.i18nIndex.getAllKeys());
                     const removedKeys: string[] = [];
                     for (const k of keysBeforeCleanup) {
@@ -250,20 +254,36 @@ export class ProjectFixCommand {
                         await this.appendKeysToAutoIgnore(folder, removedKeys);
                     }
 
-                    // Phase 9: Rescan diagnostics to check for remaining issues
-                    progress.report({ message: 'Scanning for remaining i18n issues...' });
-                    await this.i18nIndex.ensureInitialized(true);
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 7: Final check for remaining issues
+                    // ═══════════════════════════════════════════════════════════════
+                    progress.report({ message: 'Final verification scan...' });
                     await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
                     if (token.isCancellationRequested) return;
 
-                    // Phase 10: Guard check before AI translation
-                    const remainingIssues = this.countRemainingI18nIssues(folder);
-                    if (remainingIssues.unusedKeys > 0 || remainingIssues.missingReferences > 0) {
+                    // Re-run missing refs fix in case cleanup created orphans
+                    const postCleanupMissing = await this.scanSourceFilesForMissingRefs(folder);
+                    if (postCleanupMissing.missingReferences > 0) {
+                        progress.report({ message: 'Fixing any orphaned references after cleanup...' });
+                        await this.bulkFixMissingReferences(folder, token, progress);
+                        await this.i18nIndex.ensureInitialized(true);
+                    }
+                    if (token.isCancellationRequested) return;
+
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 8: Guard check before AI translation
+                    // ═══════════════════════════════════════════════════════════════
+                    // Re-run cleanup analysis to verify all issues resolved
+                    await runI18nScript('i18n:cleanup-unused', { folder });
+                    const unusedKeysCount = await this.countUnusedKeysFromReport(folder);
+                    const missingRefsResult = await this.scanSourceFilesForMissingRefs(folder);
+                    
+                    if (unusedKeysCount > 0 || missingRefsResult.missingReferences > 0) {
                         const skipChoice = await vscode.window.showQuickPick(
                             [
                                 {
                                     label: 'Skip AI translation',
-                                    description: `There are still ${remainingIssues.unusedKeys} unused key(s) and ${remainingIssues.missingReferences} missing reference(s). Fix these first.`,
+                                    description: `There are still ${unusedKeysCount} unused key(s) and ${missingRefsResult.missingReferences} missing reference(s). Fix these manually first.`,
                                 },
                                 {
                                     label: 'Continue anyway',
@@ -282,12 +302,16 @@ export class ProjectFixCommand {
                         }
                     }
 
-                    // Phase 11: AI translation for untranslated strings
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 9: AI translation for untranslated strings
+                    // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Detecting and translating untranslated strings (i18n:fix-untranslated)...' });
                     await vscode.commands.executeCommand('ai-localizer.i18n.runFixUntranslatedScript');
                     if (token.isCancellationRequested) return;
 
-                    // Phase 12: Final rebuild and report
+                    // ═══════════════════════════════════════════════════════════════
+                    // PHASE 10: Final rebuild and report
+                    // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Rebuilding translation index and diagnostics...' });
                     await this.i18nIndex.ensureInitialized(true);
                     await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
@@ -314,70 +338,120 @@ export class ProjectFixCommand {
         }
     }
 
-    private countRemainingI18nIssues(folder: vscode.WorkspaceFolder): { unusedKeys: number; missingReferences: number } {
-        const allDiagnostics = vscode.languages.getDiagnostics();
-        let unusedKeys = 0;
-        let missingReferences = 0;
-
-        for (const [uri, diagnostics] of allDiagnostics) {
-            if (!uri.fsPath.startsWith(folder.uri.fsPath)) continue;
-
-            for (const diag of diagnostics) {
-                const code = String(diag.code);
-                if (code === 'ai-i18n.unused') {
-                    unusedKeys += 1;
-                } else if (code === 'ai-i18n.missing-reference' || code === 'ai-i18n.missing') {
-                    missingReferences += 1;
-                }
-            }
+    private async countUnusedKeysFromReport(folder: vscode.WorkspaceFolder): Promise<number> {
+        const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+        const reportUri = vscode.Uri.joinPath(scriptsDir, '.i18n-unused-report.json');
+        try {
+            const data = await vscode.workspace.fs.readFile(reportUri);
+            const report = JSON.parse(sharedDecoder.decode(data)) as UnusedReport;
+            return Array.isArray(report.unused) ? report.unused.length : 0;
+        } catch {
+            return 0;
         }
-
-        return { unusedKeys, missingReferences };
     }
 
-    private async bulkFixMissingReferencesInProject(
-        folder: vscode.WorkspaceFolder,
-        token: vscode.CancellationToken,
-    ): Promise<void> {
+    private async scanSourceFilesForMissingRefs(folder: vscode.WorkspaceFolder): Promise<{
+        missingReferences: number;
+        filesWithMissingRefs: vscode.Uri[];
+    }> {
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
-        const includeGlobs =
-            cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
-        const excludeGlobs =
-            cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
-                '**/node_modules/**',
-                '**/.git/**',
-                '**/dist/**',
-                '**/build/**',
-                '**/.next/**',
-                '**/.nuxt/**',
-                '**/.vite/**',
-                '**/coverage/**',
-                '**/out/**',
-                '**/.turbo/**',
-            ];
+        const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
+        const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
+            '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
+            '**/.next/**', '**/.nuxt/**', '**/.vite/**', '**/coverage/**', '**/out/**', '**/.turbo/**',
+        ];
 
-        const include =
-            includeGlobs.length === 1 ? includeGlobs[0] : `{${includeGlobs.join(',')}}`;
-        const exclude = excludeGlobs.length ? `{${excludeGlobs.join(',')}}` : undefined;
-        const includePattern = new vscode.RelativePattern(folder, include);
-        const excludePattern = exclude ? new vscode.RelativePattern(folder, exclude) : undefined;
+        const include = sourceGlobs.length === 1 ? sourceGlobs[0] : `{${sourceGlobs.join(',')}}`;
+        const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
+        
+        const pattern = new vscode.RelativePattern(folder, include);
+        const uris = await vscode.workspace.findFiles(pattern, exclude);
 
-        const uris = await vscode.workspace.findFiles(includePattern, excludePattern, undefined, token);
-        if (!uris.length) {
-            return;
-        }
+        await this.i18nIndex.ensureInitialized();
+        const allKeysSet = new Set(this.i18nIndex.getAllKeys());
+        
+        // Regex to match t('key'), $t('key'), t("key"), etc.
+        const tCallRegex = /\b\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g;
+
+        let missingReferences = 0;
+        const filesWithMissingRefs: vscode.Uri[] = [];
 
         for (const uri of uris) {
-            if (token.isCancellationRequested) {
-                return;
-            }
             try {
-                await vscode.commands.executeCommand('ai-localizer.i18n.bulkFixMissingKeyReferences', uri);
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.warn(`AI Localizer: Bulk fix missing references failed for ${uri.fsPath}. ${msg}`);
+                const data = await vscode.workspace.fs.readFile(uri);
+                const text = sharedDecoder.decode(data);
+                
+                let hasMissing = false;
+                let match;
+                tCallRegex.lastIndex = 0;
+                
+                while ((match = tCallRegex.exec(text)) !== null) {
+                    const key = match[2];
+                    if (!allKeysSet.has(key)) {
+                        missingReferences++;
+                        hasMissing = true;
+                    }
+                }
+                
+                if (hasMissing) {
+                    filesWithMissingRefs.push(uri);
+                }
+            } catch {
+                // Skip files that can't be read
             }
         }
+
+        return { missingReferences, filesWithMissingRefs };
+    }
+
+    private async bulkFixMissingReferences(
+        folder: vscode.WorkspaceFolder,
+        token: vscode.CancellationToken,
+        progress: vscode.Progress<{ message?: string }>,
+    ): Promise<number> {
+        const maxPasses = 3;
+        let totalFixed = 0;
+
+        for (let pass = 1; pass <= maxPasses; pass++) {
+            if (token.isCancellationRequested) return totalFixed;
+
+            // Scan source files directly for missing references (more reliable than diagnostics)
+            const issues = await this.scanSourceFilesForMissingRefs(folder);
+            if (issues.missingReferences === 0 || issues.filesWithMissingRefs.length === 0) {
+                break;
+            }
+
+            progress.report({
+                message: `Pass ${pass}/${maxPasses}: Fixing ${issues.missingReferences} missing refs in ${issues.filesWithMissingRefs.length} file(s)...`,
+            });
+
+            let fixedThisPass = 0;
+            for (const uri of issues.filesWithMissingRefs) {
+                if (token.isCancellationRequested) return totalFixed;
+
+                try {
+                    await vscode.commands.executeCommand('ai-localizer.i18n.bulkFixMissingKeyReferences', uri);
+                    fixedThisPass += 1;
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.warn(`AI Localizer: Bulk fix failed for ${uri.fsPath}. ${msg}`);
+                }
+            }
+
+            totalFixed += fixedThisPass;
+
+            // Rebuild index after fixes to pick up newly created keys
+            await this.i18nIndex.ensureInitialized(true);
+
+            // Check if we made progress
+            const afterIssues = await this.scanSourceFilesForMissingRefs(folder);
+            if (afterIssues.missingReferences >= issues.missingReferences) {
+                // No progress made, stop iterating
+                break;
+            }
+        }
+
+        return totalFixed;
     }
 
     private async appendKeysToAutoIgnore(folder: vscode.WorkspaceFolder, keys: string[]): Promise<void> {

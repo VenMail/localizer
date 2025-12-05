@@ -3670,44 +3670,62 @@ export class UntranslatedCommands {
     }
 
     /**
-     * Get locale file URIs for a locale
+     * Get locale file URIs for a locale using the i18n index.
+     * Falls back to common directory patterns if index doesn't have files.
      */
     private async getLocaleFileUris(
         folder: vscode.WorkspaceFolder,
         locale: string,
     ): Promise<vscode.Uri[]> {
-        const uris: vscode.Uri[] = [];
-        const localeDir = vscode.Uri.joinPath(
-            folder.uri,
-            'resources',
-            'js',
-            'i18n',
-            'auto',
-            locale,
-        );
-
-        try {
-            const entries = await vscode.workspace.fs.readDirectory(localeDir);
-            for (const [name, type] of entries) {
-                if (type === vscode.FileType.File && name.endsWith('.json')) {
-                    uris.push(vscode.Uri.joinPath(localeDir, name));
+        // First, try to get URIs from the i18n index (most reliable)
+        await this.i18nIndex.ensureInitialized();
+        const allKeys = this.i18nIndex.getAllKeys();
+        const urisFromIndex = new Set<string>();
+        
+        for (const key of allKeys) {
+            const record = this.i18nIndex.getRecord(key);
+            if (!record) continue;
+            for (const loc of record.locations) {
+                if (loc.locale === locale) {
+                    urisFromIndex.add(loc.uri.toString());
                 }
             }
-        } catch {
-            // Try single file format
-            const singleFile = vscode.Uri.joinPath(
-                folder.uri,
-                'resources',
-                'js',
-                'i18n',
-                'auto',
-                `${locale}.json`,
-            );
+        }
+        
+        if (urisFromIndex.size > 0) {
+            return Array.from(urisFromIndex).map(s => vscode.Uri.parse(s));
+        }
+
+        // Fallback: Try common directory patterns
+        const uris: vscode.Uri[] = [];
+        const basePaths = [
+            ['resources', 'js', 'i18n', 'auto'],
+            ['src', 'i18n'],
+            ['src', 'locales'],
+            ['locales'],
+            ['i18n'],
+        ];
+
+        for (const basePath of basePaths) {
+            const localeDir = vscode.Uri.joinPath(folder.uri, ...basePath, locale);
             try {
-                await vscode.workspace.fs.stat(singleFile);
-                uris.push(singleFile);
+                const entries = await vscode.workspace.fs.readDirectory(localeDir);
+                for (const [name, type] of entries) {
+                    if (type === vscode.FileType.File && name.endsWith('.json')) {
+                        uris.push(vscode.Uri.joinPath(localeDir, name));
+                    }
+                }
+                if (uris.length > 0) break; // Found files, stop searching
             } catch {
-                // File doesn't exist
+                // Try single file format
+                const singleFile = vscode.Uri.joinPath(folder.uri, ...basePath, `${locale}.json`);
+                try {
+                    await vscode.workspace.fs.stat(singleFile);
+                    uris.push(singleFile);
+                    break; // Found file, stop searching
+                } catch {
+                    // Continue to next base path
+                }
             }
         }
 
