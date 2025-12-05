@@ -21,6 +21,7 @@ import { ProjectFixCommand } from './projectFixCommand';
  */
 export class CommandRegistry {
     private diagnosticAnalyzer: DiagnosticAnalyzer;
+    private refreshAllDiagnosticsPromise: Promise<void> | null = null;
 
     constructor(
         private context: vscode.ExtensionContext,
@@ -49,6 +50,9 @@ export class CommandRegistry {
 
             const untranslatedDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-untranslated');
             disposables.push(untranslatedDiagnostics);
+            const sourceFileDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-missing-refs');
+            disposables.push(sourceFileDiagnostics);
+            let refreshAllSourceDiagnosticsPromise: Promise<void> | null = null;
 
         // Rescan command
         disposables.push(
@@ -120,6 +124,7 @@ export class CommandRegistry {
                 }
 
                 await this.refreshAllDiagnostics(untranslatedDiagnostics);
+                await refreshAllSourceDiagnostics();
             }),
         );
 
@@ -524,6 +529,36 @@ export class CommandRegistry {
                 'i18n/**/*.json',
             ];
 
+        const sourceIncludeGlobs =
+            globalCfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
+        const sourceExcludeGlobs =
+            globalCfg.get<string[]>('i18n.sourceExcludeGlobs') || [
+                '**/node_modules/**',
+                '**/.git/**',
+                '**/dist/**',
+                '**/build/**',
+                '**/.next/**',
+                '**/.nuxt/**',
+                '**/.vite/**',
+                '**/coverage/**',
+                '**/out/**',
+                '**/.turbo/**',
+            ];
+
+        const collectSourceFileUris = async (): Promise<vscode.Uri[]> => {
+            const include =
+                sourceIncludeGlobs.length === 1
+                    ? sourceIncludeGlobs[0]
+                    : `{${sourceIncludeGlobs.join(',')}}`;
+            const exclude =
+                sourceExcludeGlobs.length > 0 ? `{${sourceExcludeGlobs.join(',')}}` : undefined;
+            const uris = await vscode.workspace.findFiles(include, exclude);
+            this.log.appendLine(
+                `[Diagnostics] Collected ${uris.length} source file(s) for missing reference scan.`,
+            );
+            return uris;
+        };
+
         const handleLocaleChange = async (uri: vscode.Uri) => {
             this.log.appendLine(`[Watch] Locale file change detected: ${uri.fsPath}`);
 
@@ -585,10 +620,6 @@ export class CommandRegistry {
             }
         };
 
-        // Source file diagnostics for missing translation key references
-        const sourceFileDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-missing-refs');
-        disposables.push(sourceFileDiagnostics);
-
         const isSourceFile = (languageId: string): boolean => {
             return ['typescript', 'typescriptreact', 'javascript', 'javascriptreact', 'vue'].includes(languageId);
         };
@@ -644,6 +675,45 @@ export class CommandRegistry {
             }
         };
 
+        const refreshAllSourceDiagnostics = async (): Promise<void> => {
+            if (refreshAllSourceDiagnosticsPromise) {
+                await refreshAllSourceDiagnosticsPromise;
+                return;
+            }
+
+            refreshAllSourceDiagnosticsPromise = (async () => {
+                const config = getDiagnosticConfig();
+                if (!config.enabled || !config.missingReferenceEnabled) {
+                    sourceFileDiagnostics.clear();
+                    return;
+                }
+
+                await this.i18nIndex.ensureInitialized();
+                const uris = await collectSourceFileUris();
+                this.log.appendLine(
+                    `[Diagnostics] Scanning ${uris.length} source file(s) for missing translation key references...`,
+                );
+
+                const results = await Promise.all(
+                    uris.map(async (uri) => {
+                        const diagnostics = await this.diagnosticAnalyzer.analyzeSourceFile(uri, config);
+                        return { uri, diagnostics };
+                    }),
+                );
+
+                sourceFileDiagnostics.clear();
+                for (const { uri, diagnostics } of results) {
+                    sourceFileDiagnostics.set(uri, diagnostics);
+                }
+            })();
+
+            try {
+                await refreshAllSourceDiagnosticsPromise;
+            } finally {
+                refreshAllSourceDiagnosticsPromise = null;
+            }
+        };
+
         // Register watchers ONCE with the enhanced handler (avoids duplicate registrations)
         for (const folder of folders) {
             for (const glob of localeGlobs) {
@@ -657,6 +727,7 @@ export class CommandRegistry {
         }
 
         void this.refreshAllDiagnostics(untranslatedDiagnostics);
+        void refreshAllSourceDiagnostics();
         
         // Cleanup debounce timers on dispose
         disposables.push({
@@ -761,6 +832,12 @@ export class CommandRegistry {
     private async refreshAllDiagnostics(
         collection: vscode.DiagnosticCollection,
     ): Promise<void> {
+        if (this.refreshAllDiagnosticsPromise) {
+            await this.refreshAllDiagnosticsPromise;
+            return;
+        }
+
+        this.refreshAllDiagnosticsPromise = (async () => {
         this.diagnosticAnalyzer.resetCaches();
         await this.i18nIndex.ensureInitialized();
 
@@ -799,5 +876,12 @@ export class CommandRegistry {
         this.log.appendLine(
             `[Diagnostics] Updated diagnostics for ${diagnosticMap.size} locale file(s).`,
         );
+        })();
+
+        try {
+            await this.refreshAllDiagnosticsPromise;
+        } finally {
+            this.refreshAllDiagnosticsPromise = null;
+        }
     }
 }
