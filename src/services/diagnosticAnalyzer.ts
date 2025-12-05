@@ -985,8 +985,8 @@ export class DiagnosticAnalyzer {
 
         const diagnostics: vscode.Diagnostic[] = [];
 
-        // Match t('key'), t("key"), $t('key'), $t("key") patterns
-        const tCallRegex = /\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g;
+        // Match t('key'), t("key"), $t('key'), $t("key") with a word boundary before t
+        const tCallRegex = /\b\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g;
         let match;
 
         while ((match = tCallRegex.exec(text)) !== null) {

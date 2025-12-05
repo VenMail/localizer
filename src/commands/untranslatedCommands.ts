@@ -3334,6 +3334,113 @@ export class UntranslatedCommands {
     }
 
     /**
+     * Check if a character is escaped (has odd number of backslashes before it)
+     */
+    private isEscaped(text: string, position: number): boolean {
+        let backslashCount = 0;
+        let i = position - 1;
+        while (i >= 0 && text[i] === '\\') {
+            backslashCount++;
+            i--;
+        }
+        return backslashCount % 2 === 1;
+    }
+
+    /**
+     * Find all comment ranges in the text (single-line and multi-line)
+     * Returns an array of { start: number, end: number } ranges
+     */
+    private findCommentRanges(text: string): Array<{ start: number; end: number }> {
+        const commentRanges: Array<{ start: number; end: number }> = [];
+        const len = text.length;
+        let i = 0;
+        let inString: 'single' | 'double' | 'template' | null = null;
+        let stringStart = -1;
+        let templateDepth = 0;
+
+        while (i < len) {
+            const char = text[i];
+            const nextChar = i + 1 < len ? text[i + 1] : '';
+
+            // Handle string literals (skip comments inside strings)
+            if (inString === null) {
+                if (char === "'" && !this.isEscaped(text, i)) {
+                    inString = 'single';
+                    stringStart = i;
+                } else if (char === '"' && !this.isEscaped(text, i)) {
+                    inString = 'double';
+                    stringStart = i;
+                } else if (char === '`' && !this.isEscaped(text, i)) {
+                    inString = 'template';
+                    stringStart = i;
+                    templateDepth = 1;
+                }
+            } else {
+                if (inString === 'single' && char === "'" && !this.isEscaped(text, i)) {
+                    inString = null;
+                } else if (inString === 'double' && char === '"' && !this.isEscaped(text, i)) {
+                    inString = null;
+                } else if (inString === 'template') {
+                    if (char === '`' && !this.isEscaped(text, i)) {
+                        templateDepth--;
+                        if (templateDepth === 0) {
+                            inString = null;
+                        }
+                    } else if (char === '$' && nextChar === '{' && !this.isEscaped(text, i)) {
+                        templateDepth++;
+                    } else if (char === '}' && !this.isEscaped(text, i) && templateDepth > 1) {
+                        templateDepth--;
+                    }
+                }
+            }
+
+            // Only check for comments outside of strings
+            if (inString === null) {
+                // Single-line comment: //
+                if (char === '/' && nextChar === '/') {
+                    const commentStart = i;
+                    // Find end of line
+                    let commentEnd = i + 2;
+                    while (commentEnd < len && text[commentEnd] !== '\n' && text[commentEnd] !== '\r') {
+                        commentEnd++;
+                    }
+                    commentRanges.push({ start: commentStart, end: commentEnd });
+                    i = commentEnd;
+                    continue;
+                }
+
+                // Multi-line comment: /* */
+                if (char === '/' && nextChar === '*') {
+                    const commentStart = i;
+                    let commentEnd = i + 2;
+                    // Find closing */
+                    while (commentEnd < len - 1) {
+                        if (text[commentEnd] === '*' && text[commentEnd + 1] === '/') {
+                            commentEnd += 2;
+                            break;
+                        }
+                        commentEnd++;
+                    }
+                    commentRanges.push({ start: commentStart, end: commentEnd });
+                    i = commentEnd;
+                    continue;
+                }
+            }
+
+            i++;
+        }
+
+        return commentRanges;
+    }
+
+    /**
+     * Check if a position (byte offset) is inside any comment range
+     */
+    private isPositionInComment(position: number, commentRanges: Array<{ start: number; end: number }>): boolean {
+        return commentRanges.some(range => position >= range.start && position < range.end);
+    }
+
+    /**
      * Bulk fix missing translation key references in a ts/tsx file
      * Scans the file for all t('key') calls and fixes missing keys
      */
@@ -3366,21 +3473,39 @@ export class UntranslatedCommands {
 
             // Extract all translation keys from the file
             const text = doc.getText();
-            const keyMatches: Array<{ key: string; range: vscode.Range }> = [];
+            const commentRanges = this.findCommentRanges(text);
+            const keyMatches: Array<{ key: string; range: vscode.Range; hasVariables: boolean }> = [];
             
-            // Match t('key') or t('key', { ... }) patterns
+            // Match t('key') or t('key', { ... }) patterns with a word boundary before t
             // Handles: t('key'), t("key"), t('key', { vars }), $t('key'), etc.
-            // Pattern: t( followed by quoted key, then either ) or , (for additional args)
-            const tCallRegex = /\$?t\(\s*(['"])([A-Za-z0-9_.]+)\1\s*[,)]/g;
+            const tCallRegex = /\b(\$?)t\(\s*(['"])([A-Za-z0-9_.]+)\2\s*([,)])/g;
             let match;
             while ((match = tCallRegex.exec(text)) !== null) {
-                const key = match[2];
-                // Calculate position: match.index + '$?t(' length + whitespace + opening quote
-                const keyStartInMatch = match[0].indexOf(match[1]) + 1; // After opening quote
-                const startPos = doc.positionAt(match.index + keyStartInMatch);
-                const endPos = doc.positionAt(match.index + keyStartInMatch + key.length);
+                // match[0] includes the optional $, match[1] is optional $, match[2] is quote, match[3] is key
+                // \b is zero-width; do not offset the index for it
+                const dollarSignLength = match[1] ? 1 : 0;
+                const tCallStart = match.index + dollarSignLength;
+                
+                // Skip if the match is inside a comment
+                if (this.isPositionInComment(tCallStart, commentRanges)) {
+                    continue;
+                }
+                
+                const key = match[3];
+                const afterKey = match[4]; // Either ',' or ')'
+                const hasVariables = afterKey === ','; // If comma, there are likely variables
+                
+                // Find the quote position: search for the quote char after "t(" in the full match
+                const quoteChar = match[2];
+                const searchStart = dollarSignLength + 2; // After "$?t("
+                const quotePosInMatch = match[0].indexOf(quoteChar, searchStart);
+                const keyStartPosition = match.index + quotePosInMatch + 1; // +1 to get past the quote
+                
+                // Calculate position for the key range
+                const startPos = doc.positionAt(keyStartPosition);
+                const endPos = doc.positionAt(keyStartPosition + key.length);
                 const range = new vscode.Range(startPos, endPos);
-                keyMatches.push({ key, range });
+                keyMatches.push({ key, range, hasVariables });
             }
 
             if (keyMatches.length === 0) {
@@ -3394,12 +3519,12 @@ export class UntranslatedCommands {
             const allKeys = this.i18nIndex.getAllKeys();
             // Use Set for O(1) lookup instead of O(n) includes()
             const allKeysSet = new Set(allKeys);
-            const missingKeys: Array<{ key: string; range: vscode.Range }> = [];
+            const missingKeys: Array<{ key: string; range: vscode.Range; hasVariables: boolean }> = [];
 
             // Check which keys are missing
-            for (const { key, range } of keyMatches) {
+            for (const { key, range, hasVariables } of keyMatches) {
                 if (!allKeysSet.has(key)) {
-                    missingKeys.push({ key, range });
+                    missingKeys.push({ key, range, hasVariables });
                 }
             }
 
@@ -3471,68 +3596,99 @@ export class UntranslatedCommands {
                         keysByPrefix.get(prefix)!.push({ key: candidate, leaf });
                     }
 
-                    for (const { key, range } of missingKeys) {
-                        // Try to find a similar key
-                        const keyParts = key.split('.').filter(Boolean);
-                        const keyPrefix = keyParts.slice(0, -1).join('.');
-                        const keyLeaf = keyParts[keyParts.length - 1] || '';
-
-                        let bestKey: string | null = null;
-                        let bestScore = Number.POSITIVE_INFINITY;
-
-                        // Only check candidates with matching prefix (O(1) lookup + small set iteration)
-                        const candidates = keysByPrefix.get(keyPrefix) || [];
-                        for (const { key: candidateKey, leaf } of candidates) {
-                            const score = this.computeEditDistance(keyLeaf, leaf);
-                            if (score < bestScore) {
-                                bestScore = score;
-                                bestKey = candidateKey;
-                            }
-                        }
-
-                        if (bestKey) {
-                            const bestParts = bestKey.split('.').filter(Boolean);
-                            const bestLeaf = bestParts[bestParts.length - 1] || '';
-                            const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
-                            if (maxLen > 0 && bestScore <= Math.max(2, Math.floor(maxLen / 2))) {
-                                // Replace with best matching key
-                                edit.replace(documentUri, range, bestKey);
-                                fixedCount++;
-                                continue;
-                            }
-                        }
-
-                        // Try to recover from git history
+                    for (const { key, range, hasVariables } of missingKeys) {
+                        // For keys with variables, prioritize git history search before similar key matching
                         let recoveredValue: string | null = null;
+                        
+                        if (hasVariables) {
+                            // Search git history with extended time window (90 days) for keys with variables
+                            for (const localeUri of localeUris) {
+                                const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 90);
+                                if (historyResult && historyResult.value) {
+                                    recoveredValue = historyResult.value;
+                                    break;
+                                }
+                            }
 
-                        for (const localeUri of localeUris) {
-                            const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 30);
-                            if (historyResult && historyResult.value) {
-                                recoveredValue = historyResult.value;
-                                break;
+                            // Try to recover from cached commit refs
+                            if (!recoveredValue && extractRef) {
+                                for (const localeUri of localeUris) {
+                                    const cachedJson = commitContentCache.get(localeUri.fsPath);
+                                    if (cachedJson) {
+                                        const value = this.getNestedValue(cachedJson, key);
+                                        if (value && typeof value === 'string') {
+                                            recoveredValue = value;
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                         }
 
-                        // Try to recover from cached commit refs
-                        if (!recoveredValue && extractRef) {
-                            for (const localeUri of localeUris) {
-                                const cachedJson = commitContentCache.get(localeUri.fsPath);
-                                if (cachedJson) {
-                                    const value = this.getNestedValue(cachedJson, key);
-                                    if (value && typeof value === 'string') {
-                                        recoveredValue = value;
+                        // If not recovered from git history, try to find a similar key
+                        if (!recoveredValue) {
+                            const keyParts = key.split('.').filter(Boolean);
+                            const keyPrefix = keyParts.slice(0, -1).join('.');
+                            const keyLeaf = keyParts[keyParts.length - 1] || '';
+
+                            let bestKey: string | null = null;
+                            let bestScore = Number.POSITIVE_INFINITY;
+
+                            // Only check candidates with matching prefix (O(1) lookup + small set iteration)
+                            const candidates = keysByPrefix.get(keyPrefix) || [];
+                            for (const { key: candidateKey, leaf } of candidates) {
+                                const score = this.computeEditDistance(keyLeaf, leaf);
+                                if (score < bestScore) {
+                                    bestScore = score;
+                                    bestKey = candidateKey;
+                                }
+                            }
+
+                            if (bestKey) {
+                                const bestParts = bestKey.split('.').filter(Boolean);
+                                const bestLeaf = bestParts[bestParts.length - 1] || '';
+                                const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
+                                if (maxLen > 0 && bestScore <= Math.max(2, Math.floor(maxLen / 2))) {
+                                    // Replace with best matching key
+                                    edit.replace(documentUri, range, bestKey);
+                                    fixedCount++;
+                                    continue;
+                                }
+                            }
+
+                            // Try to recover from git history (for keys without variables or if similar key not found)
+                            if (!hasVariables) {
+                                for (const localeUri of localeUris) {
+                                    const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 30);
+                                    if (historyResult && historyResult.value) {
+                                        recoveredValue = historyResult.value;
                                         break;
+                                    }
+                                }
+
+                                // Try to recover from cached commit refs
+                                if (!recoveredValue && extractRef) {
+                                    for (const localeUri of localeUris) {
+                                        const cachedJson = commitContentCache.get(localeUri.fsPath);
+                                        if (cachedJson) {
+                                            const value = this.getNestedValue(cachedJson, key);
+                                            if (value && typeof value === 'string') {
+                                                recoveredValue = value;
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
 
                         if (recoveredValue) {
-                            // Restore the value
+                            // Restore the value from git history
                             batchUpdates.set(key, { value: recoveredValue, rootName });
                             createdCount++;
                         } else {
-                            // Create new key with label from key segment
+                            // Create new key with label from key segment (only if not found in git history)
+                            const keyParts = key.split('.').filter(Boolean);
                             const lastSegment = keyParts[keyParts.length - 1] || '';
                             const label = this.buildLabelFromKeySegment(lastSegment) || key;
                             batchUpdates.set(key, { value: label, rootName });
