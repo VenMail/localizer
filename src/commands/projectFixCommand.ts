@@ -163,8 +163,14 @@ export class ProjectFixCommand {
                         return;
                     }
 
-                    progress.report({ message: 'Syncing locales and applying AI fixes (i18n:sync + fix-untranslated)...' });
+                    progress.report({ message: 'Syncing locales (i18n:sync)...' });
                     await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
+                    if (token.isCancellationRequested) {
+                        return;
+                    }
+
+                    progress.report({ message: 'Detecting untranslated strings (i18n:fix-untranslated)...' });
+                    await vscode.commands.executeCommand('ai-localizer.i18n.runFixUntranslatedScript');
                     if (token.isCancellationRequested) {
                         return;
                     }

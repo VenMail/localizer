@@ -238,11 +238,52 @@ export async function runI18nScript(
     output.show(true);
     output.appendLine(`> (${folder.name}) ${command}`);
 
+    // Timeout for scripts (5 minutes default, can be long for large projects)
+    const timeoutMs = 5 * 60 * 1000;
+
     await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let timeoutId: NodeJS.Timeout | undefined;
+
         const child = spawn(command, {
             cwd: folder!.uri.fsPath,
             shell: true,
+            stdio: ['pipe', 'pipe', 'pipe'], // Explicit stdio configuration
         });
+
+        // Close stdin immediately to signal we won't provide input
+        // This prevents scripts from hanging waiting for input
+        if (child.stdin) {
+            child.stdin.end();
+        }
+
+        const settle = (error?: Error) => {
+            if (settled) return;
+            settled = true;
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+            if (error) {
+                reject(error);
+            } else {
+                resolve();
+            }
+        };
+
+        // Set timeout to prevent infinite hanging
+        timeoutId = setTimeout(() => {
+            if (!settled) {
+                output.appendLine(`\n[ai-i18n] Script ${scriptName} timed out after ${timeoutMs / 1000}s.`);
+                try {
+                    child.kill('SIGTERM');
+                    // Force kill after grace period
+                    setTimeout(() => {
+                        try { child.kill('SIGKILL'); } catch { /* ignore */ }
+                    }, 5000);
+                } catch { /* ignore */ }
+                settle(new Error(`Script ${scriptName} timed out`));
+            }
+        }, timeoutMs);
 
         if (child.stdout) {
             child.stdout.on('data', (data: Buffer) => {
@@ -259,19 +300,40 @@ export async function runI18nScript(
         child.on('error', (err) => {
             const msg = err instanceof Error ? err.message : String(err);
             output.appendLine(`\n[ai-i18n] Failed to start script ${scriptName}: ${msg}`);
-            reject(err);
+            settle(err instanceof Error ? err : new Error(msg));
         });
 
+        // Handle both 'exit' and 'close' events
+        // 'exit' fires when process ends, 'close' fires when stdio streams close
+        // We use 'close' as primary since it ensures all output has been captured
         child.on('close', (code) => {
-            if (code === 0) {
+            if (settled) return;
+            if (code === 0 || code === null) {
                 output.appendLine(`[ai-i18n] Script ${scriptName} completed successfully.`);
-                resolve();
+                settle();
             } else {
                 const message = `[ai-i18n] Script ${scriptName} exited with code ${code}.`;
                 output.appendLine(message);
                 vscode.window.showErrorMessage(`AI Localizer: ${message}`);
-                reject(new Error(message));
+                settle(new Error(message));
             }
+        });
+
+        // Fallback: handle 'exit' in case 'close' doesn't fire
+        child.on('exit', (code) => {
+            // Give 'close' event a chance to fire first with all output
+            setTimeout(() => {
+                if (!settled) {
+                    if (code === 0 || code === null) {
+                        output.appendLine(`[ai-i18n] Script ${scriptName} completed (via exit).`);
+                        settle();
+                    } else {
+                        const message = `[ai-i18n] Script ${scriptName} exited with code ${code}.`;
+                        output.appendLine(message);
+                        settle(new Error(message));
+                    }
+                }
+            }, 100);
         });
     });
 }
