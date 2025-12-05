@@ -175,12 +175,7 @@ export class ProjectFixCommand {
                         return;
                     }
 
-                    progress.report({ message: 'Detecting untranslated strings (i18n:fix-untranslated)...' });
-                    await vscode.commands.executeCommand('ai-localizer.i18n.runFixUntranslatedScript');
-                    if (token.isCancellationRequested) {
-                        return;
-                    }
-
+                    // Clean up unused/invalid before invoking AI translations to avoid waste
                     progress.report({ message: 'Cleaning up unused keys across locales (i18n:cleanup-unused --apply)...' });
                     await runI18nScript('i18n:cleanup-unused', {
                         folder,
@@ -195,6 +190,12 @@ export class ProjectFixCommand {
                         folder,
                         extraArgs: ['--apply'],
                     });
+                    if (token.isCancellationRequested) {
+                        return;
+                    }
+
+                    progress.report({ message: 'Detecting untranslated strings (i18n:fix-untranslated)...' });
+                    await vscode.commands.executeCommand('ai-localizer.i18n.runFixUntranslatedScript');
                     if (token.isCancellationRequested) {
                         return;
                     }

@@ -953,13 +953,20 @@ export class TranslationService {
             // Strip markdown code fences if present
             content = this.stripMarkdownFences(content);
 
+            if (!content.trim()) {
+                this.log?.appendLine(`[getUntranslatedFixes] Empty AI response for batch ${i + 1}/${batches.length}.`);
+                continue;
+            }
+
             let parsed: any;
             try {
                 parsed = JSON.parse(content);
             } catch (err) {
                 console.error('AI Localizer: Failed to parse AI response as JSON:', err);
-                this.log?.appendLine(`[getUntranslatedFixes] Failed to parse AI response: ${content.slice(0, 500)}`);
-                return [];
+                this.log?.appendLine(
+                    `[getUntranslatedFixes] Failed to parse AI response for batch ${i + 1}/${batches.length}: ${content.slice(0, 500)}`,
+                );
+                continue;
             }
 
             if (Array.isArray(parsed.updates)) {
@@ -977,6 +984,10 @@ export class TranslationService {
                         });
                     }
                 }
+            } else {
+                this.log?.appendLine(
+                    `[getUntranslatedFixes] No updates array in AI response for batch ${i + 1}/${batches.length}.`,
+                );
             }
         }
 

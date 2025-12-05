@@ -6,7 +6,7 @@ import { ProjectConfigService } from '../services/projectConfigService';
 import { getGranularSyncService } from '../services/granularSyncService';
 import { setTranslationValue, setTranslationValueInFile, setTranslationValuesBatch, deriveRootFromFile } from '../core/i18nFs';
 import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
-import { findKeyInHistory, getFileContentAtCommit, getFileDiff } from '../core/gitHistory';
+import { findKeyInHistory, getFileContentAtCommit, getFileDiff, getFileHistory } from '../core/gitHistory';
 import { CommitTracker } from '../core/commitTracker';
 // Use shared encoder/decoder instances to avoid repeated allocations
 import { TextDecoder, TextEncoder } from 'util';
@@ -19,6 +19,7 @@ const sharedEncoder = new TextEncoder();
  */
 export class UntranslatedCommands {
     private deletionGuardPending: Map<string, { key: string; value: string; timeout: NodeJS.Timeout }> = new Map();
+    private gitRecoveryCache = new Map<string, { value: string; source: string }>();
 
     constructor(
         private i18nIndex: I18nIndex,
@@ -3048,56 +3049,23 @@ export class UntranslatedCommands {
                 }
             }
 
-            // STEP 2: Try to recover value from git history
+            // STEP 2: Try to recover value from git history (enhanced with caching and smarter scanning)
             const localeUris = await this.getLocaleFileUris(folder, defaultLocale);
-            let recoveredValue: string | null = null;
-            let recoveredSource: string | null = null;
+            const recovery = await this.recoverKeyFromGit(folder, localeUris, key, defaultLocale, {
+                daysBack: 60,
+                maxCommits: 40,
+                perDayCommitLimit: 3,
+                logPrefix: '[MissingRefFix]',
+            });
 
-            // Try recent git history (within last 30 days)
-            for (const localeUri of localeUris) {
-                const historyResult = await findKeyInHistory(folder, localeUri.fsPath, key, 30);
-                if (historyResult && historyResult.value) {
-                    recoveredValue = historyResult.value;
-                    recoveredSource = 'git history';
-                    break;
-                }
-            }
-
-            // Try commit ref tracking (extract/replace commits)
-            if (!recoveredValue && this.context) {
-                const extractRef = CommitTracker.getExtractCommitRef(this.context, folder);
-                if (extractRef) {
-                    for (const localeUri of localeUris) {
-                        const content = await getFileContentAtCommit(
-                            folder,
-                            localeUri.fsPath,
-                            extractRef.commitHash,
-                        );
-                        if (content) {
-                            try {
-                                const json = JSON.parse(content);
-                                const value = this.getNestedValue(json, key);
-                                if (value && typeof value === 'string') {
-                                    recoveredValue = value;
-                                    recoveredSource = 'pre-extract commit';
-                                    break;
-                                }
-                            } catch {
-                                // Invalid JSON
-                            }
-                        }
-                    }
-                }
-            }
-
-            // If recovered from git, auto-restore
-            if (recoveredValue) {
-                await setTranslationValue(folder, defaultLocale, key, recoveredValue, { rootName });
+            if (recovery) {
+                await setTranslationValue(folder, defaultLocale, key, recovery.value, { rootName });
                 vscode.window.showInformationMessage(
-                    `AI Localizer: Restored "${key}" from ${recoveredSource}.`,
+                    `AI Localizer: Restored "${key}" from ${recovery.source}.`,
                 );
                 return;
             }
+            this.log?.appendLine(`[MissingRefFix] Git recovery failed for "${key}".`);
 
             // STEP 3: Show options (only as fallback)
             const items: vscode.QuickPickItem[] = [];
@@ -3567,38 +3535,10 @@ export class UntranslatedCommands {
                         this.log?.appendLine(`[BulkFixMissingRefs] ${msg}`);
                         throw new Error(msg);
                     }
-                    
-                    // Pre-fetch commit ref once
-                    const extractRef = this.context 
+
+                    const extractRef = this.context
                         ? CommitTracker.getExtractCommitRef(this.context, folder!)
                         : null;
-                    
-                    // Cache commit content to avoid repeated git calls
-                    const commitContentCache = new Map<string, any>();
-                    if (extractRef) {
-                        for (const localeUri of localeUris) {
-                            try {
-                                const content = await getFileContentAtCommit(
-                                    folder!,
-                                    localeUri.fsPath,
-                                    extractRef.commitHash,
-                                );
-                                if (content) {
-                                    try {
-                                        commitContentCache.set(localeUri.fsPath, JSON.parse(content));
-                                    } catch (jsonErr) {
-                                        this.log?.appendLine(
-                                            `[BulkFixMissingRefs] Failed to parse cached commit content for ${localeUri.fsPath}: ${String(jsonErr)}`,
-                                        );
-                                    }
-                                }
-                            } catch (gitErr) {
-                                this.log?.appendLine(
-                                    `[BulkFixMissingRefs] Git content lookup failed for ${localeUri.fsPath} @ ${extractRef.commitHash}: ${String(gitErr)}`,
-                                );
-                            }
-                        }
-                    }
 
                     // Build prefix index for faster candidate lookup
                     const keysByPrefix = new Map<string, Array<{ key: string; leaf: string }>>();
@@ -3619,33 +3559,15 @@ export class UntranslatedCommands {
                         let recoveredValue: string | null = null;
                         
                         if (hasVariables) {
-                            // Search git history with extended time window (90 days) for keys with variables
-                            for (const localeUri of localeUris) {
-                                try {
-                                    const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 90);
-                                    if (historyResult && historyResult.value) {
-                                        recoveredValue = historyResult.value;
-                                        break;
-                                    }
-                                } catch (historyErr) {
-                                    this.log?.appendLine(
-                                        `[BulkFixMissingRefs] History lookup failed for key ${key} in ${localeUri.fsPath}: ${String(historyErr)}`,
-                                    );
-                                }
-                            }
-
-                            // Try to recover from cached commit refs
-                            if (!recoveredValue && extractRef) {
-                                for (const localeUri of localeUris) {
-                                    const cachedJson = commitContentCache.get(localeUri.fsPath);
-                                    if (cachedJson) {
-                                        const value = this.getNestedValue(cachedJson, key);
-                                        if (value && typeof value === 'string') {
-                                            recoveredValue = value;
-                                            break;
-                                        }
-                                    }
-                                }
+                            const rec = await this.recoverKeyFromGit(folder!, localeUris, key, defaultLocale, {
+                                daysBack: 90,
+                                maxCommits: 40,
+                                perDayCommitLimit: 3,
+                                extractRef,
+                                logPrefix: '[BulkFixMissingRefs]',
+                            });
+                            if (rec) {
+                                recoveredValue = rec.value;
                             }
                         }
 
@@ -3682,32 +3604,15 @@ export class UntranslatedCommands {
 
                             // Try to recover from git history (for keys without variables or if similar key not found)
                             if (!hasVariables) {
-                                for (const localeUri of localeUris) {
-                                    try {
-                                        const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 30);
-                                        if (historyResult && historyResult.value) {
-                                            recoveredValue = historyResult.value;
-                                            break;
-                                        }
-                                    } catch (historyErr) {
-                                        this.log?.appendLine(
-                                            `[BulkFixMissingRefs] History lookup failed for key ${key} in ${localeUri.fsPath}: ${String(historyErr)}`,
-                                        );
-                                    }
-                                }
-
-                                // Try to recover from cached commit refs
-                                if (!recoveredValue && extractRef) {
-                                    for (const localeUri of localeUris) {
-                                        const cachedJson = commitContentCache.get(localeUri.fsPath);
-                                        if (cachedJson) {
-                                            const value = this.getNestedValue(cachedJson, key);
-                                            if (value && typeof value === 'string') {
-                                                recoveredValue = value;
-                                                break;
-                                            }
-                                        }
-                                    }
+                                const rec = await this.recoverKeyFromGit(folder!, localeUris, key, defaultLocale, {
+                                    daysBack: 60,
+                                    maxCommits: 40,
+                                    perDayCommitLimit: 3,
+                                    extractRef,
+                                    logPrefix: '[BulkFixMissingRefs]',
+                                });
+                                if (rec) {
+                                    recoveredValue = rec.value;
                                 }
                             }
                         }
@@ -3825,6 +3730,112 @@ export class UntranslatedCommands {
             current = current[segment];
         }
         return current;
+    }
+
+    /**
+     * Enhanced git recovery for missing keys with caching, limited history scan,
+     * and optional ref-commit lookup. Skips redundant same-day commits to reduce
+     * noise and cost.
+     */
+    private async recoverKeyFromGit(
+        folder: vscode.WorkspaceFolder,
+        localeUris: vscode.Uri[],
+        key: string,
+        locale: string,
+        options?: {
+            daysBack?: number;
+            maxCommits?: number;
+            perDayCommitLimit?: number;
+            extractRef?: { commitHash: string } | null;
+            logPrefix?: string;
+        },
+    ): Promise<{ value: string; source: string } | null> {
+        const daysBack = options?.daysBack ?? 60;
+        const maxCommits = Math.min(options?.maxCommits ?? 40, 40);
+        const perDayLimit = Math.max(1, Math.min(options?.perDayCommitLimit ?? 3, maxCommits));
+        const extractRef = options?.extractRef ?? null;
+        const logPrefix = options?.logPrefix ?? '[GitRecovery]';
+
+        const cacheKey = `${folder.uri.fsPath}::${locale}::${key}`;
+        const cached = this.gitRecoveryCache.get(cacheKey);
+        if (cached) {
+            return cached;
+        }
+
+        let totalChecked = 0;
+        const perDayCounts = new Map<string, number>();
+
+        for (const localeUri of localeUris) {
+            try {
+                const history = await getFileHistory(folder, localeUri.fsPath, daysBack, maxCommits);
+                for (const commit of history.commits) {
+                    if (totalChecked >= maxCommits) {
+                        break;
+                    }
+                    const dateStr = commit.date.toISOString().split('T')[0];
+                    const dayCount = perDayCounts.get(dateStr) ?? 0;
+                    if (dayCount >= perDayLimit) {
+                        continue;
+                    }
+                    perDayCounts.set(dateStr, dayCount + 1);
+                    totalChecked += 1;
+
+                    const content = await getFileContentAtCommit(folder, localeUri.fsPath, commit.hash);
+                    if (!content) {
+                        continue;
+                    }
+                    try {
+                        const json = JSON.parse(content);
+                        const value = this.getNestedValue(json, key);
+                        if (value && typeof value === 'string') {
+                            const result = { value, source: `history:${commit.hash}` };
+                            this.gitRecoveryCache.set(cacheKey, result);
+                            return result;
+                        }
+                    } catch (jsonErr) {
+                        this.log?.appendLine(
+                            `${logPrefix} Failed to parse commit content for ${localeUri.fsPath} @ ${commit.hash}: ${String(jsonErr)}`,
+                        );
+                    }
+                }
+            } catch (err) {
+                this.log?.appendLine(
+                    `${logPrefix} History fetch failed for ${localeUri.fsPath}: ${String(err)}`,
+                );
+            }
+        }
+
+        if (extractRef) {
+            for (const localeUri of localeUris) {
+                if (totalChecked >= maxCommits) {
+                    break;
+                }
+                try {
+                    const content = await getFileContentAtCommit(folder, localeUri.fsPath, extractRef.commitHash);
+                    if (content) {
+                        try {
+                            const json = JSON.parse(content);
+                            const value = this.getNestedValue(json, key);
+                            if (value && typeof value === 'string') {
+                                const result = { value, source: `ref:${extractRef.commitHash}` };
+                                this.gitRecoveryCache.set(cacheKey, result);
+                                return result;
+                            }
+                        } catch (jsonErr) {
+                            this.log?.appendLine(
+                                `${logPrefix} Failed to parse ref commit content for ${localeUri.fsPath} @ ${extractRef.commitHash}: ${String(jsonErr)}`,
+                            );
+                        }
+                    }
+                } catch (gitErr) {
+                    this.log?.appendLine(
+                        `${logPrefix} Ref lookup failed for ${localeUri.fsPath} @ ${extractRef.commitHash}: ${String(gitErr)}`,
+                    );
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
