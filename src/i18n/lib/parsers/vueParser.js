@@ -11,7 +11,7 @@
  * - Nuxt-specific components (NuxtLink, etc.)
  */
 
-const { BaseParser } = require('./baseParser');
+const { BaseParser, decodeHtmlEntities } = require('./baseParser');
 const { shouldTranslate, isTranslatableAttribute, isNonTranslatableAttribute } = require('../validators');
 
 // Parser states
@@ -157,12 +157,12 @@ class VueParser extends BaseParser {
       //   {{ searchValue ? "No matching files found" : "No files found" }}
       //   {{ searchValue ? 'No matching files found' : 'No files found' }}
       try {
-        const mustacheRegex = /\{\{([^}]+)\}\}/g;
-        let mustacheMatch;
+        // Use a more robust approach to extract mustache expressions
+        // that handles nested braces in string literals
+        const mustacheExpressions = this.extractMustacheExpressions(text);
         const parentTag = getCurrentParentTag();
 
-        while ((mustacheMatch = mustacheRegex.exec(text)) !== null) {
-          const expr = (mustacheMatch[1] || '').trim();
+        for (const expr of mustacheExpressions) {
           if (!expr) continue;
 
           // Find all string literals inside the expression. We deliberately just
@@ -199,6 +199,9 @@ class VueParser extends BaseParser {
         .trim();
 
       if (!cleanText) return;
+      
+      // Decode HTML entities before validation
+      cleanText = decodeHtmlEntities(cleanText);
 
       if (shouldTranslate(cleanText, { ignorePatterns: this.ignorePatterns })) {
         const kind = this.inferKindFromTag(getCurrentParentTag());
@@ -516,10 +519,44 @@ class VueParser extends BaseParser {
       /"([^"\\\n]{3,200})"/g,
     ];
 
+    // Also look for ref() and reactive() calls with string values
+    const refPatterns = [
+      /ref\s*\(\s*['"]([^'"]{3,200})['"]\s*\)/g,
+      /reactive\s*\(\s*\{[^}]*['"]([^'"]{3,200})['"][^}]*\}\s*\)/g,
+      /shallowRef\s*\(\s*['"]([^'"]{3,200})['"]\s*\)/g,
+    ];
+
     for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
       const line = lines[lineIndex];
       if (!line || !line.trim()) continue;
 
+      // Skip import/export lines
+      if (/^\s*(import|export)\s/.test(line)) continue;
+
+      // Check ref patterns first (higher priority)
+      for (const pattern of refPatterns) {
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(line)) !== null) {
+          const candidate = (match[1] || '').trim();
+          if (!candidate) continue;
+
+          if (i18nLineIndexes.has(lineIndex)) continue;
+
+          if (!shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
+            continue;
+          }
+
+          results.items.push({
+            type: 'string',
+            text: candidate,
+            kind: 'text',
+          });
+          results.stats.extracted++;
+        }
+      }
+
+      // Then check general string patterns
       for (const pattern of stringPatterns) {
         pattern.lastIndex = 0;
         let match;
@@ -546,6 +583,79 @@ class VueParser extends BaseParser {
         }
       }
     }
+  }
+
+  /**
+   * Extract mustache expressions from text, handling nested braces in strings
+   * This is more robust than a simple regex when expressions contain }
+   */
+  extractMustacheExpressions(text) {
+    const expressions = [];
+    let pos = 0;
+    const len = text.length;
+
+    while (pos < len) {
+      // Find opening {{
+      const start = text.indexOf('{{', pos);
+      if (start === -1) break;
+
+      // Parse the expression, tracking quotes and braces
+      let depth = 2; // We've seen {{
+      let exprStart = start + 2;
+      let i = exprStart;
+      let inSingleQuote = false;
+      let inDoubleQuote = false;
+      let inBacktick = false;
+      let escaped = false;
+
+      while (i < len && depth > 0) {
+        const char = text[i];
+
+        if (escaped) {
+          escaped = false;
+          i++;
+          continue;
+        }
+
+        if (char === '\\') {
+          escaped = true;
+          i++;
+          continue;
+        }
+
+        // Track string state
+        if (!inDoubleQuote && !inBacktick && char === "'") {
+          inSingleQuote = !inSingleQuote;
+        } else if (!inSingleQuote && !inBacktick && char === '"') {
+          inDoubleQuote = !inDoubleQuote;
+        } else if (!inSingleQuote && !inDoubleQuote && char === '`') {
+          inBacktick = !inBacktick;
+        }
+
+        // Only track braces outside of strings
+        if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+          if (char === '{') {
+            depth++;
+          } else if (char === '}') {
+            depth--;
+          }
+        }
+
+        i++;
+      }
+
+      if (depth === 0) {
+        // Extract the expression (excluding the closing }})
+        const expr = text.slice(exprStart, i - 2).trim();
+        if (expr) {
+          expressions.push(expr);
+        }
+      }
+
+      pos = i;
+    }
+
+    return expressions;
   }
 
   /**

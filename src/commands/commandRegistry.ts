@@ -574,6 +574,133 @@ export class CommandRegistry {
 
         void this.refreshAllDiagnostics(untranslatedDiagnostics);
 
+        // Source file diagnostics for missing translation key references
+        const sourceFileDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-missing-refs');
+        disposables.push(sourceFileDiagnostics);
+
+        const isSourceFile = (languageId: string): boolean => {
+            return ['typescript', 'typescriptreact', 'javascript', 'javascriptreact', 'vue'].includes(languageId);
+        };
+
+        // Debounce map for source file analysis
+        const sourceFileDebounceTimers = new Map<string, NodeJS.Timeout>();
+        const SOURCE_FILE_DEBOUNCE_MS = 500;
+
+        const refreshSourceFileDiagnostics = async (document: vscode.TextDocument, immediate = false) => {
+            if (!isSourceFile(document.languageId)) {
+                return;
+            }
+
+            const config = getDiagnosticConfig();
+            if (!config.enabled || !config.missingReferenceEnabled) {
+                sourceFileDiagnostics.delete(document.uri);
+                return;
+            }
+
+            const uriKey = document.uri.toString();
+
+            // Clear existing timer
+            const existingTimer = sourceFileDebounceTimers.get(uriKey);
+            if (existingTimer) {
+                clearTimeout(existingTimer);
+            }
+
+            const doAnalysis = async () => {
+                sourceFileDebounceTimers.delete(uriKey);
+                const diagnostics = await this.diagnosticAnalyzer.analyzeSourceFile(document.uri, config);
+                sourceFileDiagnostics.set(document.uri, diagnostics);
+            };
+
+            if (immediate) {
+                await doAnalysis();
+            } else {
+                // Debounce to avoid analyzing on every keystroke
+                const timer = setTimeout(() => {
+                    void doAnalysis();
+                }, SOURCE_FILE_DEBOUNCE_MS);
+                sourceFileDebounceTimers.set(uriKey, timer);
+            }
+        };
+        
+        // Cleanup debounce timers on dispose
+        disposables.push({
+            dispose: () => {
+                for (const timer of sourceFileDebounceTimers.values()) {
+                    clearTimeout(timer);
+                }
+                sourceFileDebounceTimers.clear();
+            },
+        });
+
+        // Refresh diagnostics when source files are opened (immediate)
+        disposables.push(
+            vscode.workspace.onDidOpenTextDocument(async (document) => {
+                await refreshSourceFileDiagnostics(document, true);
+            }),
+        );
+
+        // Refresh diagnostics when source files are changed (debounced)
+        disposables.push(
+            vscode.workspace.onDidChangeTextDocument(async (event) => {
+                await refreshSourceFileDiagnostics(event.document, false);
+            }),
+        );
+
+        // Refresh diagnostics when source files are saved (immediate)
+        disposables.push(
+            vscode.workspace.onDidSaveTextDocument(async (document) => {
+                await refreshSourceFileDiagnostics(document, true);
+            }),
+        );
+
+        // Clear diagnostics when source files are closed
+        disposables.push(
+            vscode.workspace.onDidCloseTextDocument((document) => {
+                if (isSourceFile(document.languageId)) {
+                    sourceFileDiagnostics.delete(document.uri);
+                }
+            }),
+        );
+
+        // Refresh source file diagnostics after locale files change (keys may now exist)
+        const originalHandleLocaleChange = handleLocaleChange;
+        const enhancedHandleLocaleChange = async (uri: vscode.Uri) => {
+            await originalHandleLocaleChange(uri);
+            // After locale files change, refresh diagnostics for all open source files
+            for (const editor of vscode.window.visibleTextEditors) {
+                if (isSourceFile(editor.document.languageId)) {
+                    await refreshSourceFileDiagnostics(editor.document);
+                }
+            }
+        };
+        // Re-register watchers with enhanced handler
+        for (const folder of folders) {
+            for (const glob of localeGlobs) {
+                const pattern = new vscode.RelativePattern(folder, glob);
+                const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+                watcher.onDidChange(enhancedHandleLocaleChange, undefined, disposables);
+                watcher.onDidCreate(enhancedHandleLocaleChange, undefined, disposables);
+                watcher.onDidDelete(enhancedHandleLocaleChange, undefined, disposables);
+                disposables.push(watcher);
+            }
+        }
+
+        // Register command to manually refresh source file diagnostics
+        disposables.push(
+            vscode.commands.registerCommand('ai-localizer.i18n.refreshSourceFileDiagnostics', async () => {
+                for (const editor of vscode.window.visibleTextEditors) {
+                    await refreshSourceFileDiagnostics(editor.document);
+                }
+            }),
+        );
+
+        // Analyze currently open source files (immediate)
+        for (const editor of vscode.window.visibleTextEditors) {
+            if (isSourceFile(editor.document.languageId)) {
+                void refreshSourceFileDiagnostics(editor.document, true);
+            }
+        }
+
         } catch (error) {
             console.error('Failed to register commands:', error);
             const details =

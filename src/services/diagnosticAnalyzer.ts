@@ -951,6 +951,114 @@ export class DiagnosticAnalyzer {
         keyRanges.set(fullKey, range);
         return range;
     }
+
+    /**
+     * Analyze a source file (ts/tsx/js/jsx/vue) for missing translation key references.
+     * Returns diagnostics for any t('key') calls where the key doesn't exist.
+     */
+    async analyzeSourceFile(
+        uri: vscode.Uri,
+        config: DiagnosticConfig,
+    ): Promise<vscode.Diagnostic[]> {
+        const fileKey = uri.toString();
+        const languageId = this.getLanguageIdForUri(uri);
+        
+        // Only analyze supported source file types
+        const supportedLanguages = ['typescript', 'typescriptreact', 'javascript', 'javascriptreact', 'vue'];
+        if (!supportedLanguages.includes(languageId)) {
+            return [];
+        }
+
+        this.log.appendLine(`[DiagnosticAnalyzer] Analyzing source file for missing refs: ${uri.fsPath}`);
+
+        let text: string;
+        try {
+            const data = await vscode.workspace.fs.readFile(uri);
+            text = sharedDecoder.decode(data);
+        } catch {
+            return [];
+        }
+
+        await this.i18nIndex.ensureInitialized();
+        const allKeys = this.i18nIndex.getAllKeys();
+        const allKeysSet = new Set(allKeys);
+
+        const diagnostics: vscode.Diagnostic[] = [];
+
+        // Match t('key'), t("key"), $t('key'), $t("key") patterns
+        const tCallRegex = /\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g;
+        let match;
+
+        while ((match = tCallRegex.exec(text)) !== null) {
+            const key = match[2];
+            
+            if (!allKeysSet.has(key)) {
+                // Calculate position
+                const startIndex = match.index + match[0].indexOf(match[2]);
+                const endIndex = startIndex + key.length;
+                
+                const startPos = this.indexToPosition(text, startIndex);
+                const endPos = this.indexToPosition(text, endIndex);
+                const range = new vscode.Range(startPos, endPos);
+
+                const diagnostic = new vscode.Diagnostic(
+                    range,
+                    `Missing translation key "${key}" - key not found in locale files`,
+                    config.missingReferenceSeverity ?? config.missingSeverity,
+                );
+                diagnostic.code = 'ai-i18n.missing-reference';
+                diagnostic.source = 'AI Localizer';
+                diagnostics.push(diagnostic);
+            }
+        }
+
+        this.diagnosticsByFile.set(fileKey, diagnostics);
+        this.log.appendLine(
+            `[DiagnosticAnalyzer] Found ${diagnostics.length} missing reference(s) in source file: ${uri.fsPath}`,
+        );
+        return diagnostics;
+    }
+
+    /**
+     * Convert a character index to a Position in the document.
+     */
+    private indexToPosition(text: string, index: number): vscode.Position {
+        let line = 0;
+        let character = 0;
+        
+        for (let i = 0; i < index && i < text.length; i++) {
+            if (text[i] === '\n') {
+                line++;
+                character = 0;
+            } else {
+                character++;
+            }
+        }
+        
+        return new vscode.Position(line, character);
+    }
+
+    /**
+     * Get language ID for a URI based on file extension.
+     */
+    private getLanguageIdForUri(uri: vscode.Uri): string {
+        const ext = uri.fsPath.split('.').pop()?.toLowerCase() || '';
+        switch (ext) {
+            case 'ts':
+                return 'typescript';
+            case 'tsx':
+                return 'typescriptreact';
+            case 'js':
+            case 'mjs':
+                return 'javascript';
+            case 'jsx':
+                return 'javascriptreact';
+            case 'vue':
+                return 'vue';
+            default:
+                return ext;
+        }
+    }
 }
 
 export interface DiagnosticConfig {
@@ -960,6 +1068,8 @@ export interface DiagnosticConfig {
     untranslatedEnabled: boolean;
     untranslatedSeverity: vscode.DiagnosticSeverity;
     invalidSeverity: vscode.DiagnosticSeverity;
+    missingReferenceEnabled: boolean;
+    missingReferenceSeverity: vscode.DiagnosticSeverity;
 }
 
 export function getDiagnosticConfig(): DiagnosticConfig {
@@ -987,6 +1097,9 @@ export function getDiagnosticConfig(): DiagnosticConfig {
         cfg.get<string>('i18n.diagnostics.untranslatedSameAsDefaultSeverity') || 'warning';
     const invalidSeveritySetting =
         cfg.get<string>('i18n.diagnostics.invalidBaseValueSeverity') || 'warning';
+    const missingReferenceEnabled = cfg.get<boolean>('i18n.diagnostics.missingReferenceEnabled') ?? true;
+    const missingReferenceSeveritySetting =
+        cfg.get<string>('i18n.diagnostics.missingReferenceSeverity') || 'error';
 
     return {
         enabled,
@@ -995,5 +1108,7 @@ export function getDiagnosticConfig(): DiagnosticConfig {
         untranslatedEnabled,
         untranslatedSeverity: mapSeverity(untranslatedSeveritySetting),
         invalidSeverity: mapSeverity(invalidSeveritySetting),
+        missingReferenceEnabled,
+        missingReferenceSeverity: mapSeverity(missingReferenceSeveritySetting),
     };
 }
