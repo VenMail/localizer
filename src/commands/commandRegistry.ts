@@ -164,7 +164,6 @@ export class CommandRegistry {
 
         // Project-wide fix command
         const projectFixCmd = new ProjectFixCommand(
-            this.context,
             this.i18nIndex,
             this.translationService,
             this.projectConfigService,
