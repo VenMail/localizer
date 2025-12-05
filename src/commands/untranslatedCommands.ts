@@ -3029,57 +3029,9 @@ export class UntranslatedCommands {
     private async deleteKeyFromLocaleFiles(
         keyPath: string,
         uris: vscode.Uri[],
+        defaultValue?: string,
     ): Promise<number> {
-        if (!uris.length) {
-            return 0;
-        }
-
-        const changedUris: vscode.Uri[] = [];
-
-        for (const uri of uris) {
-            try {
-                const doc = await vscode.workspace.openTextDocument(uri);
-                if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
-                    continue;
-                }
-
-                let root: any = {};
-                try {
-                    const data = await vscode.workspace.fs.readFile(uri);
-                    const raw = sharedDecoder.decode(data);
-                    const parsed = JSON.parse(raw);
-                    if (parsed && typeof parsed === 'object') root = parsed;
-                } catch {
-                    continue;
-                }
-                if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
-
-                if (!this.deleteKeyPathInObject(root, keyPath)) {
-                    continue;
-                }
-
-                const payload = `${JSON.stringify(root, null, 2)}\n`;
-                await vscode.workspace.fs.writeFile(uri, sharedEncoder.encode(payload));
-                changedUris.push(uri);
-            } catch {
-                // Ignore failures for individual locale files
-            }
-        }
-
-        for (const uri of changedUris) {
-            try {
-                await this.i18nIndex.updateFile(uri);
-                await vscode.commands.executeCommand(
-                    'ai-localizer.i18n.refreshFileDiagnostics',
-                    uri,
-                    [keyPath],
-                );
-            } catch {
-                // Ignore failures during diagnostics refresh
-            }
-        }
-
-        return changedUris.length;
+        return this.deleteKeyFromLocaleFilesWithGuard(keyPath, uris, defaultValue);
     }
 
     /**
@@ -3215,5 +3167,516 @@ export class UntranslatedCommands {
             console.error('AI Localizer: Failed to fix placeholder mismatch:', err);
             vscode.window.showErrorMessage('AI Localizer: Failed to fix placeholder mismatch.');
         }
+    }
+
+    /**
+     * Bulk fix missing translation key references in a ts/tsx file
+     * Scans the file for all t('key') calls and fixes missing keys
+     */
+    async bulkFixMissingKeyReferences(documentUri: vscode.Uri): Promise<void> {
+        try {
+            const doc = await vscode.workspace.openTextDocument(documentUri);
+            const languageId = doc.languageId;
+            
+            if (languageId !== 'typescript' && languageId !== 'typescriptreact') {
+                vscode.window.showWarningMessage(
+                    'AI Localizer: Bulk fix is only available for TypeScript (.ts) and TSX (.tsx) files.',
+                );
+                return;
+            }
+
+            let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
+            if (!folder) {
+                folder = await pickWorkspaceFolder();
+            }
+            if (!folder) {
+                vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
+                return;
+            }
+
+            // Extract all translation keys from the file
+            const text = doc.getText();
+            const keyMatches: Array<{ key: string; range: vscode.Range }> = [];
+            
+            // Match t('key') or t("key") patterns
+            const tCallRegex = /t\(['"]([A-Za-z0-9_.]+)['"]\)/g;
+            let match;
+            while ((match = tCallRegex.exec(text)) !== null) {
+                const key = match[1];
+                const startPos = doc.positionAt(match.index + 3); // After t('
+                const endPos = doc.positionAt(match.index + match[0].length - 2); // Before ')
+                const range = new vscode.Range(startPos, endPos);
+                keyMatches.push({ key, range });
+            }
+
+            if (keyMatches.length === 0) {
+                vscode.window.showInformationMessage(
+                    'AI Localizer: No translation key references found in this file.',
+                );
+                return;
+            }
+
+            await this.i18nIndex.ensureInitialized();
+            const allKeys = this.i18nIndex.getAllKeys();
+            // Use Set for O(1) lookup instead of O(n) includes()
+            const allKeysSet = new Set(allKeys);
+            const missingKeys: Array<{ key: string; range: vscode.Range }> = [];
+
+            // Check which keys are missing
+            for (const { key, range } of keyMatches) {
+                if (!allKeysSet.has(key)) {
+                    missingKeys.push({ key, range });
+                }
+            }
+
+            if (missingKeys.length === 0) {
+                vscode.window.showInformationMessage(
+                    'AI Localizer: All translation keys in this file are valid.',
+                );
+                return;
+            }
+
+            // Show progress and fix missing keys
+            const progressMessage = `Found ${missingKeys.length} missing translation key(s). Fixing...`;
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'AI Localizer: Bulk Fix Missing References',
+                    cancellable: false,
+                },
+                async (progress) => {
+                    progress.report({ message: progressMessage });
+
+                    const edit = new vscode.WorkspaceEdit();
+                    const cfg = vscode.workspace.getConfiguration('ai-localizer');
+                    const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+                    const rootName = deriveRootFromFile(folder!, documentUri);
+                    const batchUpdates = new Map<string, { value: string; rootName: string }>();
+
+                    let fixedCount = 0;
+                    let createdCount = 0;
+
+                    // Pre-fetch locale URIs once (not inside the loop)
+                    const localeUris = await this.getLocaleFileUris(folder!, defaultLocale);
+                    
+                    // Pre-fetch commit ref once
+                    const extractRef = this.context 
+                        ? CommitTracker.getExtractCommitRef(this.context, folder!)
+                        : null;
+                    
+                    // Cache commit content to avoid repeated git calls
+                    const commitContentCache = new Map<string, any>();
+                    if (extractRef) {
+                        for (const localeUri of localeUris) {
+                            const content = await getFileContentAtCommit(
+                                folder!,
+                                localeUri.fsPath,
+                                extractRef.commitHash,
+                            );
+                            if (content) {
+                                try {
+                                    commitContentCache.set(localeUri.fsPath, JSON.parse(content));
+                                } catch {
+                                    // Invalid JSON
+                                }
+                            }
+                        }
+                    }
+
+                    // Build prefix index for faster candidate lookup
+                    const keysByPrefix = new Map<string, Array<{ key: string; leaf: string }>>();
+                    for (const candidate of allKeys) {
+                        if (!candidate) continue;
+                        const parts = candidate.split('.').filter(Boolean);
+                        if (!parts.length) continue;
+                        const prefix = parts.slice(0, -1).join('.');
+                        const leaf = parts[parts.length - 1] || '';
+                        if (!keysByPrefix.has(prefix)) {
+                            keysByPrefix.set(prefix, []);
+                        }
+                        keysByPrefix.get(prefix)!.push({ key: candidate, leaf });
+                    }
+
+                    for (const { key, range } of missingKeys) {
+                        // Try to find a similar key
+                        const keyParts = key.split('.').filter(Boolean);
+                        const keyPrefix = keyParts.slice(0, -1).join('.');
+                        const keyLeaf = keyParts[keyParts.length - 1] || '';
+
+                        let bestKey: string | null = null;
+                        let bestScore = Number.POSITIVE_INFINITY;
+
+                        // Only check candidates with matching prefix (O(1) lookup + small set iteration)
+                        const candidates = keysByPrefix.get(keyPrefix) || [];
+                        for (const { key: candidateKey, leaf } of candidates) {
+                            const score = this.computeEditDistance(keyLeaf, leaf);
+                            if (score < bestScore) {
+                                bestScore = score;
+                                bestKey = candidateKey;
+                            }
+                        }
+
+                        if (bestKey) {
+                            const bestParts = bestKey.split('.').filter(Boolean);
+                            const bestLeaf = bestParts[bestParts.length - 1] || '';
+                            const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
+                            if (maxLen > 0 && bestScore <= Math.max(2, Math.floor(maxLen / 2))) {
+                                // Replace with best matching key
+                                edit.replace(documentUri, range, bestKey);
+                                fixedCount++;
+                                continue;
+                            }
+                        }
+
+                        // Try to recover from git history
+                        let recoveredValue: string | null = null;
+
+                        for (const localeUri of localeUris) {
+                            const historyResult = await findKeyInHistory(folder!, localeUri.fsPath, key, 30);
+                            if (historyResult && historyResult.value) {
+                                recoveredValue = historyResult.value;
+                                break;
+                            }
+                        }
+
+                        // Try to recover from cached commit refs
+                        if (!recoveredValue && extractRef) {
+                            for (const localeUri of localeUris) {
+                                const cachedJson = commitContentCache.get(localeUri.fsPath);
+                                if (cachedJson) {
+                                    const value = this.getNestedValue(cachedJson, key);
+                                    if (value && typeof value === 'string') {
+                                        recoveredValue = value;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (recoveredValue) {
+                            // Restore the value
+                            batchUpdates.set(key, { value: recoveredValue, rootName });
+                            createdCount++;
+                        } else {
+                            // Create new key with label from key segment
+                            const lastSegment = keyParts[keyParts.length - 1] || '';
+                            const label = this.buildLabelFromKeySegment(lastSegment) || key;
+                            batchUpdates.set(key, { value: label, rootName });
+                            createdCount++;
+                        }
+                    }
+
+                    // Apply edits
+                    if (edit.size > 0) {
+                        const applied = await vscode.workspace.applyEdit(edit);
+                        if (applied) {
+                            await doc.save();
+                        }
+                    }
+
+                    // Batch create missing keys
+                    if (batchUpdates.size > 0) {
+                        await setTranslationValuesBatch(folder!, defaultLocale, batchUpdates);
+                    }
+
+                    const message = `Fixed ${fixedCount} reference(s) and created ${createdCount} new key(s).`;
+                    vscode.window.showInformationMessage(`AI Localizer: ${message}`);
+                },
+            );
+        } catch (err) {
+            console.error('AI Localizer: Failed to bulk fix missing key references:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to bulk fix missing key references.');
+        }
+    }
+
+    /**
+     * Get locale file URIs for a locale
+     */
+    private async getLocaleFileUris(
+        folder: vscode.WorkspaceFolder,
+        locale: string,
+    ): Promise<vscode.Uri[]> {
+        const uris: vscode.Uri[] = [];
+        const localeDir = vscode.Uri.joinPath(
+            folder.uri,
+            'resources',
+            'js',
+            'i18n',
+            'auto',
+            locale,
+        );
+
+        try {
+            const entries = await vscode.workspace.fs.readDirectory(localeDir);
+            for (const [name, type] of entries) {
+                if (type === vscode.FileType.File && name.endsWith('.json')) {
+                    uris.push(vscode.Uri.joinPath(localeDir, name));
+                }
+            }
+        } catch {
+            // Try single file format
+            const singleFile = vscode.Uri.joinPath(
+                folder.uri,
+                'resources',
+                'js',
+                'i18n',
+                'auto',
+                `${locale}.json`,
+            );
+            try {
+                await vscode.workspace.fs.stat(singleFile);
+                uris.push(singleFile);
+            } catch {
+                // File doesn't exist
+            }
+        }
+
+        return uris;
+    }
+
+    /**
+     * Get nested value from object using dot notation path
+     */
+    private getNestedValue(obj: any, path: string): any {
+        const segments = path.split('.').filter(Boolean);
+        let current = obj;
+        for (const segment of segments) {
+            if (!current || typeof current !== 'object' || Array.isArray(current)) {
+                return undefined;
+            }
+            if (!Object.prototype.hasOwnProperty.call(current, segment)) {
+                return undefined;
+            }
+            current = current[segment];
+        }
+        return current;
+    }
+
+    /**
+     * Guard: Prevent deletion of default locale keys that are used in components
+     * Shows confirmation dialog with restore capability
+     */
+    async guardDeleteDefaultLocaleKey(
+        localeUri: vscode.Uri,
+        keyPath: string,
+        defaultValue: string,
+    ): Promise<boolean> {
+        const folder = vscode.workspace.getWorkspaceFolder(localeUri);
+        if (!folder) {
+            return true; // Allow deletion if no folder
+        }
+
+        const cfg = vscode.workspace.getConfiguration('ai-localizer');
+        const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+
+        // Check if this is a default locale file
+        const localePath = localeUri.fsPath.toLowerCase();
+        const isDefaultLocale = localePath.includes(`/${defaultLocale}/`) || 
+                               localePath.includes(`/${defaultLocale}.json`);
+
+        if (!isDefaultLocale) {
+            return true; // Not default locale, allow deletion
+        }
+
+        // Check if key is used in any component files
+        await this.i18nIndex.ensureInitialized();
+        const record = this.i18nIndex.getRecord(keyPath);
+        const isUsed = record && record.locations.length > 0;
+
+        if (!isUsed) {
+            return true; // Not used, allow deletion
+        }
+
+        // Key is used and in default locale - require confirmation immediately
+        const message = `Key "${keyPath}" is used in ${record.locations.length} component(s). Deleting it will cause missing translations.`;
+        const choice = await vscode.window.showWarningMessage(
+            message,
+            { modal: true },
+            'Delete Anyway',
+            'Cancel',
+        );
+
+        if (choice !== 'Delete Anyway') {
+            return false; // Deletion cancelled
+        }
+
+        // Show restore option after 5 seconds
+        const guardKey = `${localeUri.toString()}:${keyPath}`;
+        const timeout = setTimeout(async () => {
+            this.deletionGuardPending.delete(guardKey);
+            const restoreChoice = await vscode.window.showInformationMessage(
+                `Key "${keyPath}" was deleted. You can restore it from git history.`,
+                'Restore from Git History',
+                'Dismiss',
+            );
+            if (restoreChoice === 'Restore from Git History') {
+                await this.restoreDeletedKey(localeUri, keyPath, defaultValue, folder);
+            }
+        }, 5000);
+
+        this.deletionGuardPending.set(guardKey, {
+            key: keyPath,
+            value: defaultValue,
+            timeout,
+        });
+
+        return true; // Deletion allowed
+    }
+
+    /**
+     * Restore a deleted key, trying git history first if value is not provided
+     */
+    private async restoreDeletedKey(
+        localeUri: vscode.Uri,
+        keyPath: string,
+        value: string,
+        folder: vscode.WorkspaceFolder,
+    ): Promise<void> {
+        try {
+            let restoreValue = value;
+
+            // If value is empty, try to recover from git history
+            if (!restoreValue || !restoreValue.trim()) {
+                const historyResult = await findKeyInHistory(folder, localeUri.fsPath, keyPath, 30);
+                if (historyResult && historyResult.value) {
+                    restoreValue = historyResult.value;
+                } else if (this.context) {
+                    // Try commit refs
+                    const extractRef = CommitTracker.getExtractCommitRef(this.context, folder);
+                    if (extractRef) {
+                        const content = await getFileContentAtCommit(
+                            folder,
+                            localeUri.fsPath,
+                            extractRef.commitHash,
+                        );
+                        if (content) {
+                            try {
+                                const json = JSON.parse(content);
+                                const recovered = this.getNestedValue(json, keyPath);
+                                if (recovered && typeof recovered === 'string') {
+                                    restoreValue = recovered;
+                                }
+                            } catch {
+                                // Invalid JSON
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!restoreValue || !restoreValue.trim()) {
+                vscode.window.showWarningMessage(
+                    `AI Localizer: Could not recover value for key "${keyPath}" from git history.`,
+                );
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(localeUri);
+            let root: any = {};
+            
+            try {
+                const data = await vscode.workspace.fs.readFile(localeUri);
+                const raw = sharedDecoder.decode(data);
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    root = parsed;
+                }
+            } catch {
+                root = {};
+            }
+
+            // Set the key back
+            const segments = keyPath.split('.').filter(Boolean);
+            let current = root;
+            for (let i = 0; i < segments.length - 1; i++) {
+                const segment = segments[i];
+                if (!current[segment] || typeof current[segment] !== 'object' || Array.isArray(current[segment])) {
+                    current[segment] = {};
+                }
+                current = current[segment];
+            }
+            current[segments[segments.length - 1]] = restoreValue;
+
+            const payload = `${JSON.stringify(root, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(localeUri, sharedEncoder.encode(payload));
+            
+            await this.i18nIndex.updateFile(localeUri);
+            vscode.window.showInformationMessage(`AI Localizer: Restored key "${keyPath}".`);
+        } catch (err) {
+            console.error('AI Localizer: Failed to restore deleted key:', err);
+            vscode.window.showErrorMessage('AI Localizer: Failed to restore deleted key.');
+        }
+    }
+
+    /**
+     * Enhanced deleteKeyFromLocaleFiles with guard
+     */
+    private async deleteKeyFromLocaleFilesWithGuard(
+        keyPath: string,
+        uris: vscode.Uri[],
+        defaultValue?: string,
+    ): Promise<number> {
+        if (!uris.length) {
+            return 0;
+        }
+
+        const changedUris: vscode.Uri[] = [];
+
+        for (const uri of uris) {
+            try {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                    continue;
+                }
+
+                let root: any = {};
+                try {
+                    const data = await vscode.workspace.fs.readFile(uri);
+                    const raw = sharedDecoder.decode(data);
+                    const parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object') root = parsed;
+                } catch {
+                    continue;
+                }
+                if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+                // Get current value before deletion
+                const currentValue = this.getNestedValue(root, keyPath);
+                const valueToRestore = defaultValue || (typeof currentValue === 'string' ? currentValue : '');
+
+                // Check guard
+                if (valueToRestore) {
+                    const allowed = await this.guardDeleteDefaultLocaleKey(uri, keyPath, valueToRestore);
+                    if (!allowed) {
+                        continue; // Deletion was cancelled or restored
+                    }
+                }
+
+                if (!this.deleteKeyPathInObject(root, keyPath)) {
+                    continue;
+                }
+
+                const payload = `${JSON.stringify(root, null, 2)}\n`;
+                await vscode.workspace.fs.writeFile(uri, sharedEncoder.encode(payload));
+                changedUris.push(uri);
+            } catch {
+                // Ignore failures for individual locale files
+            }
+        }
+
+        for (const uri of changedUris) {
+            try {
+                await this.i18nIndex.updateFile(uri);
+                await vscode.commands.executeCommand(
+                    'ai-localizer.i18n.refreshFileDiagnostics',
+                    uri,
+                    [keyPath],
+                );
+            } catch {
+                // Ignore failures during diagnostics refresh
+            }
+        }
+
+        return changedUris.length;
     }
 }

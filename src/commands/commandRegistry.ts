@@ -171,7 +171,7 @@ export class CommandRegistry {
         );
 
         // Script commands
-        const scriptCmds = new ScriptCommands();
+        const scriptCmds = new ScriptCommands(this.context);
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.runExtractScript', () =>
                 scriptCmds.runExtract(),
@@ -314,6 +314,7 @@ export class CommandRegistry {
             this.i18nIndex,
             this.translationService,
             this.projectConfigService,
+            this.context,
         );
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.openUntranslatedReport', () =>
@@ -363,6 +364,17 @@ export class CommandRegistry {
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.restoreInvalidKeysInFile',
                 (documentUri?: vscode.Uri) => untranslatedCmds.restoreInvalidInFile(documentUri),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.bulkFixMissingKeyReferences',
+                (documentUri?: vscode.Uri) => {
+                    const uri = documentUri || vscode.window.activeTextEditor?.document.uri;
+                    if (!uri) {
+                        vscode.window.showWarningMessage('AI Localizer: No document available.');
+                        return;
+                    }
+                    return untranslatedCmds.bulkFixMissingKeyReferences(uri);
+                },
             ),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.translateAllUntranslatedInFile',

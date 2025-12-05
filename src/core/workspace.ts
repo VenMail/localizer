@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { CommitTracker } from './commitTracker';
 
 export async function pickWorkspaceFolder(): Promise<vscode.WorkspaceFolder | undefined> {
     const folders = vscode.workspace.workspaceFolders;
@@ -172,6 +173,7 @@ export async function installPackages(
 export interface RunI18nScriptOptions {
     folder?: vscode.WorkspaceFolder;
     extraArgs?: string[];
+    context?: vscode.ExtensionContext;
 }
 
 let scriptsOutputChannel: vscode.OutputChannel | undefined;
@@ -202,6 +204,12 @@ export async function runI18nScript(
     if (!folder) {
         vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
         return;
+    }
+
+    // Track commit ref before running extract/replace scripts
+    const context = options?.context;
+    if (context && (scriptName === 'i18n:extract' || scriptName === 'i18n:rewrite' || scriptName === 'i18n:replace')) {
+        await CommitTracker.saveCommitRef(context, folder, scriptName);
     }
 
     const pm = await detectPackageManager(folder);
