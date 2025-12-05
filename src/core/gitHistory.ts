@@ -1,9 +1,21 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Validate that a string is a safe git ref (commit hash, branch name, or tag).
+ * Only allows alphanumeric characters, hyphens, underscores, slashes, dots, and ^~:
+ */
+function isValidGitRef(ref: string): boolean {
+    if (!ref || typeof ref !== 'string') return false;
+    // Git refs: alphanumeric, hyphen, underscore, slash, dot, ^, ~, @, numbers after ^ or ~
+    // Reject anything with shell metacharacters: $, `, ", ', \, |, ;, &, etc.
+    return /^[A-Za-z0-9_.\/\-^~@]+$/.test(ref) && ref.length < 256;
+}
 
 // Timeout for git operations (10 seconds)
 const GIT_TIMEOUT_MS = 10000;
@@ -31,7 +43,8 @@ export async function getCurrentCommitHash(
     folder: vscode.WorkspaceFolder,
 ): Promise<string | null> {
     try {
-        const { stdout } = await execAsync('git rev-parse HEAD', {
+        // Use execFile for safer argument handling
+        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
             cwd: folder.uri.fsPath,
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: GIT_MAX_BUFFER,
@@ -57,8 +70,18 @@ export async function getFileHistory(
     const since = sinceDate.toISOString().split('T')[0];
 
     try {
-        const { stdout } = await execAsync(
-            `git log --since="${since}" -n ${maxCommits} --format="%H|%ai|%an|%s" -- "${relativePath}"`,
+        // Use execFile for safer argument handling (no shell interpolation)
+        const { stdout } = await execFileAsync(
+            'git',
+            [
+                'log',
+                `--since=${since}`,
+                '-n',
+                String(maxCommits),
+                '--format=%H|%ai|%an|%s',
+                '--',
+                relativePath,
+            ],
             {
                 cwd: folder.uri.fsPath,
                 timeout: GIT_TIMEOUT_MS,
@@ -101,10 +124,17 @@ export async function getFileContentAtCommit(
     filePath: string,
     commitHash: string,
 ): Promise<string | null> {
+    // Validate commit hash to prevent shell injection
+    if (!isValidGitRef(commitHash)) {
+        console.warn(`AI Localizer: Invalid git ref format: ${commitHash}`);
+        return null;
+    }
+
     const relativePath = path.relative(folder.uri.fsPath, filePath).replace(/\\/g, '/');
 
     try {
-        const { stdout } = await execAsync(`git show ${commitHash}:${relativePath}`, {
+        // Use execFile for safer argument handling (no shell interpolation)
+        const { stdout } = await execFileAsync('git', ['show', `${commitHash}:${relativePath}`], {
             cwd: folder.uri.fsPath,
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: GIT_MAX_BUFFER,
@@ -124,10 +154,17 @@ export async function getFileDiff(
     fromCommit: string,
     toCommit: string = 'HEAD',
 ): Promise<string | null> {
+    // Validate commit refs to prevent shell injection
+    if (!isValidGitRef(fromCommit) || !isValidGitRef(toCommit)) {
+        console.warn(`AI Localizer: Invalid git ref format: ${fromCommit} or ${toCommit}`);
+        return null;
+    }
+
     const relativePath = path.relative(folder.uri.fsPath, filePath).replace(/\\/g, '/');
 
     try {
-        const { stdout } = await execAsync(`git diff ${fromCommit} ${toCommit} -- "${relativePath}"`, {
+        // Use execFile for safer argument handling (no shell interpolation)
+        const { stdout } = await execFileAsync('git', ['diff', fromCommit, toCommit, '--', relativePath], {
             cwd: folder.uri.fsPath,
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: GIT_MAX_BUFFER,
