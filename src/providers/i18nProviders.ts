@@ -521,7 +521,8 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 d.code === 'ai-i18n.untranslated' ||
                 d.code === 'ai-i18n.style' ||
                 d.code === 'ai-i18n.invalid' ||
-                d.code === 'ai-i18n.placeholders',
+                d.code === 'ai-i18n.placeholders' ||
+                d.code === 'ai-i18n.missing-reference',
         );
 
         let addedBulkActions = false;
@@ -620,6 +621,41 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                     bulkAction.command = {
                         title: bulkTitle,
                         command: 'ai-localizer.i18n.restoreInvalidKeysInFile',
+                        arguments: [document.uri],
+                    };
+                    actions.push(bulkAction);
+                }
+            } else if (diagnostic.code === 'ai-i18n.missing-reference') {
+                // Parse the missing reference diagnostic to extract the key
+                const missingRefParsed = this.parseMissingReferenceDiagnostic(String(diagnostic.message || ''));
+                if (!missingRefParsed) continue;
+                const { key } = missingRefParsed;
+
+                // Single fix action
+                const title = `AI Localizer: Fix missing reference "${key}"`;
+                const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                action.diagnostics = [diagnostic];
+                action.isPreferred = true;
+                action.command = {
+                    title,
+                    command: 'ai-localizer.i18n.fixMissingKeyReference',
+                    arguments: [
+                        document.uri,
+                        { line: diagnostic.range.start.line, character: diagnostic.range.start.character },
+                        key,
+                    ],
+                };
+                actions.push(action);
+
+                // Bulk fix action for all missing references in this file
+                if (!addedBulkActions && (document.languageId === 'typescript' || document.languageId === 'typescriptreact' || document.languageId === 'javascript' || document.languageId === 'javascriptreact' || document.languageId === 'vue')) {
+                    addedBulkActions = true;
+                    const bulkTitle = 'AI Localizer: Bulk fix all missing key references in this file';
+                    const bulkAction = new vscode.CodeAction(bulkTitle, vscode.CodeActionKind.QuickFix);
+                    bulkAction.diagnostics = [diagnostic];
+                    bulkAction.command = {
+                        title: bulkTitle,
+                        command: 'ai-localizer.i18n.bulkFixMissingKeyReferences',
                         arguments: [document.uri],
                     };
                     actions.push(bulkAction);
@@ -902,6 +938,28 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         const locale = m[2].trim();
         if (!key || !locale) return null;
         return { key, locale };
+    }
+
+    private parseMissingReferenceDiagnostic(message: string): { key: string } | null {
+        if (!message) return null;
+        
+        // Format: Missing translation key "Namespace.kind.slug" not found in locale files
+        const match = message.match(/^Missing translation key "(.+?)"/);
+        if (match) {
+            const key = match[1].trim();
+            if (!key) return null;
+            return { key };
+        }
+
+        // Alternative format: Translation key "..." is not defined
+        const altMatch = message.match(/^Translation key "(.+?)"\s+is not defined/);
+        if (altMatch) {
+            const key = altMatch[1].trim();
+            if (!key) return null;
+            return { key };
+        }
+
+        return null;
     }
 
     private async loadReport(scriptsDir: vscode.Uri, fileName: string): Promise<any | null> {

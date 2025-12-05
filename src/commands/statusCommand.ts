@@ -120,6 +120,11 @@ export class StatusCommand {
         if (isCode) {
             items.unshift({ label: '$(edit) Run Rewrite (JS/TS/Vue)', action: 'runRewrite' });
             items.unshift({ label: '$(search) Run Extract (JS/TS/Vue)', action: 'runExtract' });
+            items.unshift({
+                label: '$(wrench) Bulk fix missing translation references',
+                description: 'Auto-fix all missing t() key references in this source file',
+                action: 'bulkFixMissingReferences',
+            });
         }
         if (isBlade) {
             items.unshift({ label: '$(symbol-keyword) Run Blade Rewrite', action: 'runRewriteBlade' });
@@ -201,6 +206,14 @@ export class StatusCommand {
             case 'reviewSelection':
                 if (editor) {
                     await vscode.commands.executeCommand('ai-localizer.i18n.reviewSelection');
+                }
+                break;
+            case 'bulkFixMissingReferences':
+                if (editor) {
+                    await vscode.commands.executeCommand(
+                        'ai-localizer.i18n.bulkFixMissingKeyReferences',
+                        editor.document.uri,
+                    );
                 }
                 break;
             case 'fixAllIssuesLocaleFile':

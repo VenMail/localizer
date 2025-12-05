@@ -2941,16 +2941,20 @@ export class UntranslatedCommands {
                 return;
             }
 
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+            const rootName = deriveRootFromFile(folder, documentUri);
+            const keyParts = String(key).split('.').filter(Boolean);
+            const keyLeaf = keyParts[keyParts.length - 1] || '';
+            const keyPrefix = keyParts.slice(0, -1).join('.');
+
             // Use lightweight sync only for non project level fix
             await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
 
             await this.i18nIndex.ensureInitialized();
             const allKeys = this.i18nIndex.getAllKeys();
 
-            const keyParts = String(key).split('.').filter(Boolean);
-            const keyPrefix = keyParts.slice(0, -1).join('.');
-            const keyLeaf = keyParts[keyParts.length - 1] || '';
-
+            // STEP 1: Try to find the best matching existing key (typo fix)
             let bestKey: string | null = null;
             let bestScore = Number.POSITIVE_INFINITY;
 
@@ -2968,35 +2972,122 @@ export class UntranslatedCommands {
                 }
             }
 
+            // Check if the best key is a good enough match (low edit distance)
             if (bestKey) {
                 const bestParts = bestKey.split('.').filter(Boolean);
                 const bestLeaf = bestParts[bestParts.length - 1] || '';
                 const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
-                if (maxLen > 0 && bestScore > Math.max(2, Math.floor(maxLen / 2))) {
-                    bestKey = null;
+                // Stricter threshold: score must be <= 2 or <= 25% of max length
+                if (maxLen > 0 && bestScore <= Math.max(2, Math.floor(maxLen / 4))) {
+                    // Auto-fix: Replace with similar key
+                    const vsPosition = new vscode.Position(position.line, position.character);
+                    const keyInfo = extractKeyAtPosition(doc, vsPosition);
+                    if (keyInfo && keyInfo.key === key) {
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(documentUri, keyInfo.range, bestKey);
+                        const applied = await vscode.workspace.applyEdit(edit);
+                        if (applied) {
+                            await doc.save();
+                            vscode.window.showInformationMessage(
+                                `AI Localizer: Auto-fixed "${key}" → "${bestKey}"`,
+                            );
+                            return;
+                        }
+                    }
                 }
             }
 
-            const items: vscode.QuickPickItem[] = [];
-            if (bestKey && bestKey !== key) {
-                items.push({
-                    label: `Replace with existing key: ${bestKey}`,
-                    description: 'Use closest matching translation key in the same namespace',
-                });
+            // STEP 2: Try to recover value from git history
+            const localeUris = await this.getLocaleFileUris(folder, defaultLocale);
+            let recoveredValue: string | null = null;
+            let recoveredSource: string | null = null;
+
+            // Try recent git history (within last 30 days)
+            for (const localeUri of localeUris) {
+                const historyResult = await findKeyInHistory(folder, localeUri.fsPath, key, 30);
+                if (historyResult && historyResult.value) {
+                    recoveredValue = historyResult.value;
+                    recoveredSource = 'git history';
+                    break;
+                }
             }
+
+            // Try commit ref tracking (extract/replace commits)
+            if (!recoveredValue && this.context) {
+                const extractRef = CommitTracker.getExtractCommitRef(this.context, folder);
+                if (extractRef) {
+                    for (const localeUri of localeUris) {
+                        const content = await getFileContentAtCommit(
+                            folder,
+                            localeUri.fsPath,
+                            extractRef.commitHash,
+                        );
+                        if (content) {
+                            try {
+                                const json = JSON.parse(content);
+                                const value = this.getNestedValue(json, key);
+                                if (value && typeof value === 'string') {
+                                    recoveredValue = value;
+                                    recoveredSource = 'pre-extract commit';
+                                    break;
+                                }
+                            } catch {
+                                // Invalid JSON
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If recovered from git, auto-restore
+            if (recoveredValue) {
+                await setTranslationValue(folder, defaultLocale, key, recoveredValue, { rootName });
+                vscode.window.showInformationMessage(
+                    `AI Localizer: Restored "${key}" from ${recoveredSource}.`,
+                );
+                return;
+            }
+
+            // STEP 3: Show options (only as fallback)
+            const items: vscode.QuickPickItem[] = [];
+            
+            // Offer similar key replacement if we found one (but not an exact auto-fix)
+            if (bestKey && bestKey !== key) {
+                const bestParts = bestKey.split('.').filter(Boolean);
+                const bestLeaf = bestParts[bestParts.length - 1] || '';
+                const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
+                // More lenient threshold for showing the option
+                if (maxLen > 0 && bestScore <= Math.max(3, Math.floor(maxLen / 2))) {
+                    items.push({
+                        label: `$(replace) Replace with: ${bestKey}`,
+                        description: `Similar key found (edit distance: ${bestScore})`,
+                        detail: 'Use closest matching translation key in the same namespace',
+                    });
+                }
+            }
+
+            // Generate a suggested label from the key segment
+            const suggestedLabel = this.buildLabelFromKeySegment(keyLeaf) || key;
+            
             items.push({
-                label: `Create new translation key: ${key}`,
+                label: `$(add) Create new key with value: "${suggestedLabel}"`,
                 description: 'Create a new locale entry using this key',
+                detail: `Key: ${key}`,
+            });
+
+            items.push({
+                label: '$(edit) Create new key with custom value...',
+                description: 'Enter a custom translation value',
             });
 
             const choice = await vscode.window.showQuickPick(items, {
-                placeHolder: 'AI Localizer: Fix missing translation reference',
+                placeHolder: `AI Localizer: Fix missing "${key}" (no git history found)`,
             });
             if (!choice) {
                 return;
             }
 
-            if (bestKey && choice.label.includes(bestKey)) {
+            if (choice.label.startsWith('$(replace)') && bestKey) {
                 const vsPosition = new vscode.Position(position.line, position.character);
                 const keyInfo = extractKeyAtPosition(doc, vsPosition);
                 if (!keyInfo || keyInfo.key !== key) {
@@ -3016,19 +3107,32 @@ export class UntranslatedCommands {
                     return;
                 }
                 await doc.save();
+                vscode.window.showInformationMessage(
+                    `AI Localizer: Replaced "${key}" with "${bestKey}".`,
+                );
                 return;
             }
 
-            const cfg = vscode.workspace.getConfiguration('ai-localizer');
-            const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
-            const lastSegment = keyParts[keyParts.length - 1] || '';
-            const label = this.buildLabelFromKeySegment(lastSegment) || key;
+            if (choice.label.includes('custom value')) {
+                const customValue = await vscode.window.showInputBox({
+                    prompt: `Enter translation value for "${key}"`,
+                    value: suggestedLabel,
+                    placeHolder: 'Translation value...',
+                });
+                if (!customValue) {
+                    return;
+                }
+                await setTranslationValue(folder, defaultLocale, key, customValue, { rootName });
+                vscode.window.showInformationMessage(
+                    `AI Localizer: Created "${key}" = "${customValue}" in locale ${defaultLocale}.`,
+                );
+                return;
+            }
 
-            const rootName = deriveRootFromFile(folder, documentUri);
-            await setTranslationValue(folder, defaultLocale, key, label, { rootName });
-
+            // Default: create with suggested label
+            await setTranslationValue(folder, defaultLocale, key, suggestedLabel, { rootName });
             vscode.window.showInformationMessage(
-                `AI Localizer: Created translation key ${key} in locale ${defaultLocale}.`,
+                `AI Localizer: Created "${key}" = "${suggestedLabel}" in locale ${defaultLocale}.`,
             );
         } catch (err) {
             console.error('AI Localizer: Failed to fix missing key reference:', err);
@@ -3188,9 +3292,15 @@ export class UntranslatedCommands {
             const doc = await vscode.workspace.openTextDocument(documentUri);
             const languageId = doc.languageId;
             
-            if (languageId !== 'typescript' && languageId !== 'typescriptreact') {
+            const supportedLanguages = [
+                'typescript', 'typescriptreact',
+                'javascript', 'javascriptreact',
+                'vue',
+            ];
+            
+            if (!supportedLanguages.includes(languageId)) {
                 vscode.window.showWarningMessage(
-                    'AI Localizer: Bulk fix is only available for TypeScript (.ts) and TSX (.tsx) files.',
+                    'AI Localizer: Bulk fix is available for JS/TS/JSX/TSX/Vue files.',
                 );
                 return;
             }
