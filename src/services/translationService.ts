@@ -3,6 +3,8 @@ import OpenAI from 'openai';
 
 const DEFAULT_MAX_BATCH_ITEMS = Number(process.env.AI_I18N_MAX_BATCH_ITEMS || 50);
 const DEFAULT_MAX_BATCH_CHARS = Number(process.env.AI_I18N_MAX_BATCH_CHARS || 2000);
+const AI_FIX_MAX_ITEMS = Number(process.env.AI_I18N_FIX_MAX_ITEMS || 40);
+const AI_FIX_MAX_CHARS = Number(process.env.AI_I18N_FIX_MAX_CHARS || 12000);
 
 /**
  * Service for handling AI-powered translations
@@ -879,59 +881,106 @@ export class TranslationService {
                 ? instructions
                 : 'You are given a JSON report of i18n translation issues. Propose improved translations for each issue.';
 
-        const completion = await client.chat.completions.create({
-            model,
-            temperature: 0.2,
-            messages: [
-                {
-                    role: 'system',
-                    content:
-                        'You are a localization assistant for application UI. You must follow the user instructions exactly and respond with strict JSON only.',
-                },
-                {
-                    role: 'user',
-                    content: [
-                        aiInstructions,
-                        '',
-                        'Here is the report JSON with issues:',
-                        JSON.stringify({ issues }, null, 2),
-                        '',
-                        'Propose improved translations for every issue and respond ONLY with valid JSON of the form:',
-                        '{',
-                        '  "updates": [',
-                        '    { "locale": "fr", "keyPath": "Namespace.button.save", "newValue": "translated string" }',
-                        '  ]',
-                        '}',
-                    ].join('\n'),
-                },
-            ],
-        });
+        const batches: any[][] = [];
+        let current: any[] = [];
+        let currentChars = 0;
 
-        let content = completion.choices[0]?.message?.content || '';
-        
-        // Strip markdown code fences if present
-        content = this.stripMarkdownFences(content);
+        for (const issue of issues || []) {
+            const serialized = JSON.stringify(issue);
+            const size = serialized ? serialized.length : 0;
+            const wouldExceedItems = current.length + 1 > AI_FIX_MAX_ITEMS;
+            const wouldExceedChars = currentChars + size > AI_FIX_MAX_CHARS;
 
-        let parsed: any;
-        try {
-            parsed = JSON.parse(content);
-        } catch (err) {
-            console.error('AI Localizer: Failed to parse AI response as JSON:', err);
-            this.log?.appendLine(`[getUntranslatedFixes] Failed to parse AI response: ${content.slice(0, 500)}`);
-            return [];
+            if ((wouldExceedItems || wouldExceedChars) && current.length > 0) {
+                batches.push(current);
+                current = [];
+                currentChars = 0;
+            }
+
+            if (size > AI_FIX_MAX_CHARS) {
+                throw new Error(
+                    `Single issue payload exceeds max size (${size} > ${AI_FIX_MAX_CHARS}); reduce untranslated report or trim oversized entries.`,
+                );
+            }
+
+            current.push(issue);
+            currentChars += size;
         }
 
-        if (!parsed || !Array.isArray(parsed.updates)) {
-            return [];
+        if (current.length) {
+            batches.push(current);
         }
 
-        return parsed.updates.filter(
-            (u: any) =>
-                u &&
-                typeof u.locale === 'string' &&
-                typeof u.keyPath === 'string' &&
-                typeof u.newValue === 'string',
-        );
+        const updates: Array<{ locale: string; keyPath: string; newValue: string }> = [];
+
+        for (let i = 0; i < batches.length; i += 1) {
+            const batch = batches[i];
+            const payload = JSON.stringify({ issues: batch });
+            this.log?.appendLine(
+                `[AI Fixes] Processing batch ${i + 1}/${batches.length} (${batch.length} issue(s), ${payload.length} chars)`,
+            );
+
+            const completion = await client.chat.completions.create({
+                model,
+                temperature: 0.2,
+                messages: [
+                    {
+                        role: 'system',
+                        content:
+                            'You are a localization assistant for application UI. You must follow the user instructions exactly and respond with strict JSON only.',
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            aiInstructions,
+                            '',
+                            'Here is the report JSON with issues:',
+                            payload,
+                            '',
+                            'Propose improved translations for every issue and respond ONLY with valid JSON of the form:',
+                            '{',
+                            '  "updates": [',
+                            '    { "locale": "fr", "keyPath": "Namespace.button.save", "newValue": "translated string" }',
+                            '  ]',
+                            '}',
+                        ].join('\n'),
+                    },
+                ],
+            });
+
+            let content = completion.choices[0]?.message?.content || '';
+            
+            // Strip markdown code fences if present
+            content = this.stripMarkdownFences(content);
+
+            let parsed: any;
+            try {
+                parsed = JSON.parse(content);
+            } catch (err) {
+                console.error('AI Localizer: Failed to parse AI response as JSON:', err);
+                this.log?.appendLine(`[getUntranslatedFixes] Failed to parse AI response: ${content.slice(0, 500)}`);
+                return [];
+            }
+
+            if (Array.isArray(parsed.updates)) {
+                for (const u of parsed.updates) {
+                    if (
+                        u &&
+                        typeof u.locale === 'string' &&
+                        typeof u.keyPath === 'string' &&
+                        typeof u.newValue === 'string'
+                    ) {
+                        updates.push({
+                            locale: u.locale,
+                            keyPath: u.keyPath,
+                            newValue: u.newValue,
+                        });
+                    }
+                }
+            }
+        }
+
+        return updates;
     }
 
     /**
