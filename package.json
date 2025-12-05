@@ -2,7 +2,7 @@
   "name": "ai-localizer",
   "displayName": "Localizer – AI i18n for React, Vue, Laravel & more",
   "description": "AI-assisted localization for React/Next/React Native, Vue/Nuxt, Svelte/SvelteKit, and Laravel (Blade + Inertia). Uses AST-aware parsers and smart validators to extract strings, manage locale JSON, run extract/rewrite/sync scripts, and scaffold drop-in LanguageSwitcher components with a guided first-time setup.",
-  "version": "0.0.9",
+  "version": "0.1.1",
   "publisher": "venmail",
   "repository": {
     "type": "git",
@@ -282,8 +282,23 @@
         },
         "ai-localizer.openaiMaxBatchChars": {
           "type": "number",
-          "default": 8000,
+          "default": 2000,
           "description": "Approximate maximum total characters of text to include in a single OpenAI translation batch. Helps keep prompts within the model's context window."
+        },
+        "ai-localizer.openaiMaxBatchConcurrency": {
+          "type": "number",
+          "default": 4,
+          "description": "Maximum number of OpenAI translation batches to execute in parallel during bulk translation. Lower this if you hit rate limits; increase cautiously if your account can handle more parallel requests."
+        },
+        "ai-localizer.openaiBatchOutputMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "json",
+            "lines"
+          ],
+          "default": "auto",
+          "description": "Preferred output format for bulk OpenAI translation batches. Choose 'json' to request structured JSON, 'lines' to request one TSV-style line per translation, or 'auto' to let the extension adapt its preferred mode."
         },
         
         "ai-localizer.i18n.autoMonitor": {

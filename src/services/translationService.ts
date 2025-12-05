@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import OpenAI from 'openai';
 
 const DEFAULT_MAX_BATCH_ITEMS = Number(process.env.AI_I18N_MAX_BATCH_ITEMS || 50);
-const DEFAULT_MAX_BATCH_CHARS = Number(process.env.AI_I18N_MAX_BATCH_CHARS || 8000);
+const DEFAULT_MAX_BATCH_CHARS = Number(process.env.AI_I18N_MAX_BATCH_CHARS || 2000);
 
 /**
  * Service for handling AI-powered translations
@@ -36,32 +36,19 @@ export class TranslationService {
         maxChars: number;
     } {
         const cfg = config || vscode.workspace.getConfiguration('ai-localizer');
-        const model = this.getOpenAiModel(cfg).toLowerCase();
 
         const userMaxItems = cfg.get<number>('openaiMaxBatchItems');
         const userMaxChars = cfg.get<number>('openaiMaxBatchChars');
 
-        let maxItems: number;
-        let maxChars: number;
+        let maxItems = DEFAULT_MAX_BATCH_ITEMS;
+        let maxChars = DEFAULT_MAX_BATCH_CHARS;
 
         if (Number.isFinite(userMaxItems) && (userMaxItems as number) > 0) {
             maxItems = userMaxItems as number;
-        } else if (model.includes('nano')) {
-            maxItems = DEFAULT_MAX_BATCH_ITEMS;
-        } else if (model.includes('mini')) {
-            maxItems = Math.max(DEFAULT_MAX_BATCH_ITEMS, 60);
-        } else {
-            maxItems = Math.max(DEFAULT_MAX_BATCH_ITEMS, 80);
         }
 
         if (Number.isFinite(userMaxChars) && (userMaxChars as number) > 0) {
             maxChars = userMaxChars as number;
-        } else if (model.includes('nano')) {
-            maxChars = DEFAULT_MAX_BATCH_CHARS;
-        } else if (model.includes('mini')) {
-            maxChars = Math.max(DEFAULT_MAX_BATCH_CHARS, 12000);
-        } else {
-            maxChars = Math.max(DEFAULT_MAX_BATCH_CHARS, 16000);
         }
 
         if (!Number.isFinite(maxChars) || maxChars <= 0) {
@@ -72,12 +59,27 @@ export class TranslationService {
     }
 
     private getBatchOutputMode(): 'json' | 'lines' {
+        const cfg = vscode.workspace.getConfiguration('ai-localizer');
+        const settingRaw = (cfg.get<string>('openaiBatchOutputMode') || '').trim().toLowerCase();
+
+        if (settingRaw === 'json') {
+            return 'json';
+        }
+        if (settingRaw === 'lines') {
+            return 'lines';
+        }
+
         const stored = this.context.globalState.get<string>('ai-i18n.batchOutputMode');
         return stored === 'lines' ? 'lines' : 'json';
     }
 
     private async setBatchOutputMode(mode: 'json' | 'lines'): Promise<void> {
         try {
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const settingRaw = (cfg.get<string>('openaiBatchOutputMode') || '').trim().toLowerCase();
+            if (settingRaw === 'json' || settingRaw === 'lines') {
+                return;
+            }
             await this.context.globalState.update('ai-i18n.batchOutputMode', mode);
         } catch (err) {
             console.error('AI Localizer: Failed to persist batch output mode preference:', err);
@@ -109,6 +111,30 @@ export class TranslationService {
             .toLowerCase()
             .replace(/\s+/g, ' ');
         return `${defaultLocale}::${targetLocale}::${normalized}`;
+    }
+
+    /**
+     * Strip markdown code fences from AI response content.
+     * GPT sometimes wraps JSON in ```json ... ``` even when asked for raw JSON.
+     */
+    private stripMarkdownFences(content: string): string {
+        let trimmed = (content || '').trim();
+        if (!trimmed.startsWith('```')) {
+            return trimmed;
+        }
+        const lines = trimmed.split('\n');
+        if (lines.length < 2) {
+            return trimmed;
+        }
+        // Remove first line (```json or ```)
+        if (lines[0].trim().startsWith('```')) {
+            lines.shift();
+        }
+        // Remove last line if it's just ```
+        if (lines.length > 0 && lines[lines.length - 1].trim() === '```') {
+            lines.pop();
+        }
+        return lines.join('\n').trim();
     }
 
     /**
@@ -273,7 +299,37 @@ export class TranslationService {
             filteredItems.push(item);
         }
 
-        const workItems = filteredItems;
+        // Within this bulk run, avoid sending identical phrases multiple times.
+        // We deduplicate by normalized (defaultLocale, targetLocale, text) and
+        // later fan out the canonical translation to all duplicate key IDs.
+        const duplicateIdToCanonicalId = new Map<string, string>();
+        const workItems: { id: string; text: string; defaultLocale: string }[] = [];
+        const dedupGroups = new Map<
+            string,
+            {
+                canonical: { id: string; text: string; defaultLocale: string };
+                duplicates: { id: string; text: string; defaultLocale: string }[];
+            }
+        >();
+
+        for (const item of filteredItems) {
+            const text = item.text || '';
+            const trimmed = text.trim();
+            if (!trimmed) {
+                workItems.push(item);
+                continue;
+            }
+
+            const normKey = this.makeShortTextCacheKey(text, item.defaultLocale, targetLocale);
+            const existing = dedupGroups.get(normKey);
+            if (!existing) {
+                dedupGroups.set(normKey, { canonical: item, duplicates: [] });
+                workItems.push(item);
+            } else {
+                existing.duplicates.push(item);
+                duplicateIdToCanonicalId.set(item.id, existing.canonical.id);
+            }
+        }
 
         const batches: { id: string; text: string; defaultLocale: string }[][] = [];
         let currentBatch: { id: string; text: string; defaultLocale: string }[] = [];
@@ -400,7 +456,11 @@ export class TranslationService {
                         ],
                     });
 
-                    const content = completion.choices[0]?.message?.content || '';
+                    let content = completion.choices[0]?.message?.content || '';
+                    
+                    // Strip markdown code fences if present
+                    content = this.stripMarkdownFences(content);
+                    
                     let parsed: any;
                     try {
                         parsed = JSON.parse(content);
@@ -663,9 +723,49 @@ export class TranslationService {
             }
         };
 
-        for (let i = 0; i < batches.length; i += 1) {
-            const batch = batches[i];
-            await processBatch(batch, i, batches.length);
+        const totalBatches = batches.length;
+        if (totalBatches > 0) {
+            const concurrencySetting = config.get<number>('openaiMaxBatchConcurrency');
+            let maxConcurrency = 4;
+            if (Number.isFinite(concurrencySetting) && (concurrencySetting as number) > 0) {
+                maxConcurrency = Math.max(1, Math.floor(concurrencySetting as number));
+            }
+            const effectiveConcurrency = Math.min(maxConcurrency, totalBatches);
+
+            let nextIndex = 0;
+
+            const runWorker = async (): Promise<void> => {
+                while (true) {
+                    if (nextIndex >= totalBatches) {
+                        return;
+                    }
+                    const currentIndex = nextIndex;
+                    nextIndex += 1;
+                    const batch = batches[currentIndex];
+                    await processBatch(batch, currentIndex, totalBatches);
+                }
+            };
+
+            const workers: Promise<void>[] = [];
+            for (let i = 0; i < effectiveConcurrency; i += 1) {
+                workers.push(runWorker());
+            }
+
+            await Promise.all(workers);
+        }
+
+        // Propagate translations from canonical IDs to duplicate IDs that share
+        // the same normalized (defaultLocale, targetLocale, text).
+        if (duplicateIdToCanonicalId.size > 0) {
+            for (const [dupId, canonicalId] of duplicateIdToCanonicalId.entries()) {
+                if (result.has(dupId)) {
+                    continue;
+                }
+                const v = result.get(canonicalId);
+                if (v && v.trim()) {
+                    result.set(dupId, v.trim());
+                }
+            }
         }
 
         const remaining = items.filter((item) => !result.has(item.id));
@@ -752,8 +852,19 @@ export class TranslationService {
             ],
         });
 
-        const content = completion.choices[0]?.message?.content || '';
-        const parsed = JSON.parse(content);
+        let content = completion.choices[0]?.message?.content || '';
+        
+        // Strip markdown code fences if present
+        content = this.stripMarkdownFences(content);
+
+        let parsed: any;
+        try {
+            parsed = JSON.parse(content);
+        } catch (err) {
+            console.error('AI Localizer: Failed to parse AI response as JSON:', err);
+            this.log?.appendLine(`[getUntranslatedFixes] Failed to parse AI response: ${content.slice(0, 500)}`);
+            return [];
+        }
 
         if (!parsed || !Array.isArray(parsed.updates)) {
             return [];

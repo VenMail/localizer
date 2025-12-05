@@ -1376,24 +1376,391 @@ async function processFile(filePath, keyMap) {
   return { changed: true, skippedDueToConflict: false };
 }
 
+function rewriteScriptWithKeyMap(code, namespace, keyMap) {
+  const ast = parse(code, {
+    sourceType: 'module',
+    plugins: ['typescript', 'jsx'],
+  });
+
+  let hasLocalTConflict = false;
+  let changed = false;
+
+  traverse(ast, {
+    CallExpression(path) {
+      if (hasLocalTConflict) return;
+      const callee = path.node.callee;
+
+      if (callee.type === 'Identifier' && callee.name === 't') {
+        const binding = path.scope.getBinding('t');
+        if (!binding) return;
+
+        if (
+          !binding.path.isImportSpecifier() ||
+          !binding.path.parent ||
+          binding.path.parent.type !== 'ImportDeclaration' ||
+          binding.path.parent.source.value !== '@/i18n'
+        ) {
+          hasLocalTConflict = true;
+          path.stop();
+        }
+      }
+    },
+  });
+
+  if (hasLocalTConflict) {
+    return { changed: false, code };
+  }
+
+  traverse(ast, {
+    ObjectProperty(pathNode) {
+      const keyNode = pathNode.node.key;
+      const valueNode = pathNode.node.value;
+      if (!valueNode) return;
+
+      let propName = null;
+      if (keyNode.type === 'Identifier') {
+        propName = keyNode.name;
+      } else if (keyNode.type === 'StringLiteral') {
+        propName = keyNode.value;
+      }
+      if (!propName) return;
+
+      let kind = null;
+      if (propName === 'title') kind = 'heading';
+      else if (propName === 'description') kind = 'text';
+      else if (propName === 'cta') kind = 'button';
+
+      if (!kind && propName === 'label' && valueNode.type === 'StringLiteral') {
+        const parent = pathNode.parent;
+        const parentPath = pathNode.parentPath;
+        const grand = parentPath && parentPath.parentPath ? parentPath.parentPath.node : null;
+        const valueText = String(valueNode.value || '');
+        const hasSpace = /\s/.test(valueText.trim());
+        const isInArray = grand && grand.type === 'ArrayExpression';
+        if (hasSpace && isInArray) {
+          kind = 'label';
+        }
+      }
+
+      if (!kind) {
+        const parent = pathNode.parent;
+        if (parent && parent.type === 'ObjectExpression') {
+          const parentPath = pathNode.parentPath;
+          if (parentPath && parentPath.parentPath) {
+            const container = parentPath.parentPath.node;
+            if (container && container.type === 'VariableDeclarator' && container.id && container.id.type === 'Identifier') {
+              const varName = container.id.name;
+              if (varName && /label/i.test(varName)) {
+                kind = 'label';
+              }
+            }
+          }
+        }
+      }
+
+      if (!kind) return;
+
+      const tBinding = pathNode.scope.getBinding('t');
+      if (
+        tBinding && (
+          !tBinding.path.isImportSpecifier() ||
+          !tBinding.path.parent ||
+          tBinding.path.parent.type !== 'ImportDeclaration' ||
+          tBinding.path.parent.source.value !== '@/i18n'
+        )
+      ) {
+        return;
+      }
+
+      if (valueNode.type === 'StringLiteral') {
+        const cleaned = normalizeText(valueNode.value);
+        if (!shouldTranslateText(cleaned)) return;
+
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
+        const fullKey = keyMap.get(keyId);
+        if (!fullKey) return;
+
+        const callExpr = t.callExpression(t.identifier('t'), [t.stringLiteral(fullKey)]);
+        pathNode.node.value = callExpr;
+        changed = true;
+      } else if (valueNode.type === 'TemplateLiteral') {
+        const { pattern, placeholders } = buildPatternAndPlaceholdersFromTemplate(valueNode);
+        const cleaned = normalizeText(pattern);
+        if (!shouldTranslateText(cleaned)) return;
+
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
+        const fullKey = keyMap.get(keyId);
+        if (!fullKey) return;
+
+        const argsForCall = [t.stringLiteral(fullKey)];
+        if (placeholders.length > 0) {
+          const props = placeholders.map(({ name, expression }) =>
+            t.objectProperty(t.identifier(name), expression),
+          );
+          const paramsObject = t.objectExpression(props);
+          argsForCall.push(paramsObject);
+        }
+
+        const callExpr = t.callExpression(t.identifier('t'), argsForCall);
+        pathNode.node.value = callExpr;
+        changed = true;
+      }
+    },
+    VariableDeclarator(pathNode) {
+      const id = pathNode.node.id;
+      const init = pathNode.node.init;
+      if (!id || id.type !== 'Identifier' || !init) return;
+      const tBinding = pathNode.scope.getBinding('t');
+      if (
+        tBinding && (
+          !tBinding.path.isImportSpecifier() ||
+          !tBinding.path.parent ||
+          tBinding.path.parent.type !== 'ImportDeclaration' ||
+          tBinding.path.parent.source.value !== '@/i18n'
+        )
+      ) {
+        return;
+      }
+      let pattern = null;
+      let placeholders = [];
+      if (init.type === 'StringLiteral') {
+        pattern = init.value;
+      } else if (init.type === 'TemplateLiteral') {
+        const built = buildPatternAndPlaceholdersFromTemplate(init);
+        pattern = built.pattern;
+        placeholders = built.placeholders;
+      } else {
+        return;
+      }
+      const cleaned = normalizeText(pattern);
+      if (!shouldTranslateText(cleaned)) return;
+      const varName = id.name || '';
+      let kind = 'text';
+      if (/title/i.test(varName)) kind = 'heading';
+      else if (/label/i.test(varName)) kind = 'label';
+      else if (/placeholder/i.test(varName)) kind = 'placeholder';
+      const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+      const keyId = `${nsForKey}|${kind}|${cleaned}`;
+      const fullKey = keyMap.get(keyId);
+      if (!fullKey) return;
+      const args = [t.stringLiteral(fullKey)];
+      if (placeholders.length) {
+        const props = placeholders.map(({ name, expression }) =>
+          t.objectProperty(t.identifier(name), expression),
+        );
+        args.push(t.objectExpression(props));
+      }
+      pathNode.node.init = t.callExpression(t.identifier('t'), args);
+      changed = true;
+    },
+    AssignmentExpression(pathNode) {
+      const left = pathNode.node.left;
+      const right = pathNode.node.right;
+      if (
+        left &&
+        left.type === 'MemberExpression' &&
+        !left.computed &&
+        left.object.type === 'Identifier' &&
+        left.object.name === 'document' &&
+        left.property.type === 'Identifier' &&
+        left.property.name === 'title'
+      ) {
+        const info = getToastMessageInfo(right);
+        if (!info) return;
+        const cleaned = normalizeText(info.pattern);
+        if (!shouldTranslateText(cleaned)) return;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|title|${cleaned}`;
+        const fullKey = keyMap.get(keyId);
+        if (!fullKey) return;
+        const argsForCall = [t.stringLiteral(fullKey)];
+        if (info.placeholders.length > 0) {
+          const props = info.placeholders.map(({ name, expression }) =>
+            t.objectProperty(t.identifier(name), expression),
+          );
+          const paramsObject = t.objectExpression(props);
+          argsForCall.push(paramsObject);
+        }
+        pathNode.node.right = t.callExpression(t.identifier('t'), argsForCall);
+        changed = true;
+        return;
+      }
+
+      if (left && left.type === 'Identifier') {
+        const tBinding = pathNode.scope.getBinding('t');
+        if (
+          tBinding && (
+            !tBinding.path.isImportSpecifier() ||
+            !tBinding.path.parent ||
+            tBinding.path.parent.type !== 'ImportDeclaration' ||
+            tBinding.path.parent.source.value !== '@/i18n'
+          )
+        ) {
+          return;
+        }
+        let pattern = null;
+        let placeholders = [];
+        if (right.type === 'StringLiteral') {
+          pattern = right.value;
+        } else if (right.type === 'TemplateLiteral') {
+          const built = buildPatternAndPlaceholdersFromTemplate(right);
+          pattern = built.pattern;
+          placeholders = built.placeholders;
+        } else {
+          return;
+        }
+        const cleaned = normalizeText(pattern);
+        if (!shouldTranslateText(cleaned)) return;
+        const varName = left.name || '';
+        let kind = 'text';
+        if (/title/i.test(varName)) kind = 'heading';
+        else if (/label/i.test(varName)) kind = 'label';
+        else if (/placeholder/i.test(varName)) kind = 'placeholder';
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|${kind}|${cleaned}`;
+        const fullKey = keyMap.get(keyId);
+        if (!fullKey) return;
+        const args = [t.stringLiteral(fullKey)];
+        if (placeholders.length) {
+          const props = placeholders.map(({ name, expression }) =>
+            t.objectProperty(t.identifier(name), expression),
+          );
+          args.push(t.objectExpression(props));
+        }
+        pathNode.node.right = t.callExpression(t.identifier('t'), args);
+        changed = true;
+      }
+    },
+    CallExpression(pathNode) {
+      const callee = pathNode.node.callee;
+      if (callee && callee.type === 'MemberExpression' && callee.object.type === 'Identifier' && callee.object.name === 'toast') {
+        const args = pathNode.node.arguments || [];
+        if (args.length === 0) return;
+        const first = args[0];
+
+        if (first.type === 'ConditionalExpression') {
+          const wrapBranch = (branchNode) => {
+            const info = getToastMessageInfo(branchNode);
+            if (!info) return null;
+            const cleaned = normalizeText(info.pattern);
+            if (!shouldTranslateText(cleaned)) return null;
+            const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+            const keyId = `${nsForKey}|toast|${cleaned}`;
+            const fullKey = keyMap.get(keyId);
+            if (!fullKey) return null;
+            const argsForCall = [t.stringLiteral(fullKey)];
+            if (info.placeholders.length > 0) {
+              const props = info.placeholders.map(({ name, expression }) =>
+                t.objectProperty(t.identifier(name), expression),
+              );
+              const paramsObject = t.objectExpression(props);
+              argsForCall.push(paramsObject);
+            }
+            return t.callExpression(t.identifier('t'), argsForCall);
+          };
+
+          const newConsequent = wrapBranch(first.consequent);
+          const newAlternate = wrapBranch(first.alternate);
+          if (!newConsequent || !newAlternate) {
+            return;
+          }
+
+          const newConditional = t.conditionalExpression(first.test, newConsequent, newAlternate);
+          pathNode.node.arguments[0] = newConditional;
+          changed = true;
+          return;
+        }
+
+        const info = getToastMessageInfo(first);
+        if (!info) return;
+        const cleaned = normalizeText(info.pattern);
+        if (!shouldTranslateText(cleaned)) return;
+        const nsForKey = isCommonShortText(cleaned) ? 'Commons' : namespace;
+        const keyId = `${nsForKey}|toast|${cleaned}`;
+        const fullKey = keyMap.get(keyId);
+        if (!fullKey) return;
+        const argsForCall = [t.stringLiteral(fullKey)];
+        if (info.placeholders.length > 0) {
+          const props = info.placeholders.map(({ name, expression }) =>
+            t.objectProperty(t.identifier(name), expression),
+          );
+          const paramsObject = t.objectExpression(props);
+          argsForCall.push(paramsObject);
+        }
+        const callExpr = t.callExpression(t.identifier('t'), argsForCall);
+        pathNode.node.arguments[0] = callExpr;
+        changed = true;
+      }
+    },
+  });
+
+  if (!changed) {
+    return { changed: false, code };
+  }
+
+  const { hasTImportConflict } = ensureI18nImport(ast);
+  if (hasTImportConflict) {
+    return { changed: false, code };
+  }
+
+  const output = generate(ast, { retainLines: true, decoratorsBeforeExport: true }, code);
+  return { changed: true, code: output.code };
+}
+
 async function processVueFile(filePath, keyMap) {
   let code = await readFile(filePath, 'utf8');
   const namespace = getNamespaceFromFile(filePath, srcRoot);
+  let changed = false;
+
+  const scriptRegex = /<script(\s[^>]*)?>([\s\S]*?)<\/script>/gi;
+  const scriptReplacements = [];
+  let match;
+
+  while ((match = scriptRegex.exec(code)) !== null) {
+    const fullMatch = match[0];
+    const openTagEnd = fullMatch.indexOf('>');
+    if (openTagEnd === -1) {
+      continue;
+    }
+    const contentStart = match.index + openTagEnd + 1;
+    const contentEnd = match.index + fullMatch.length - '</script>'.length;
+    const scriptContent = code.slice(contentStart, contentEnd);
+    if (!scriptContent.trim()) {
+      continue;
+    }
+    const result = rewriteScriptWithKeyMap(scriptContent, namespace, keyMap);
+    if (!result.changed) {
+      continue;
+    }
+    scriptReplacements.push({ start: contentStart, end: contentEnd, newCode: result.code });
+  }
+
+  if (scriptReplacements.length > 0) {
+    scriptReplacements.sort((a, b) => b.start - a.start);
+    for (const r of scriptReplacements) {
+      code = code.slice(0, r.start) + r.newCode + code.slice(r.end);
+    }
+    changed = true;
+  }
 
   const range = extractVueTemplateRange(code);
-  if (!range) {
+  if (range) {
+    const { innerStart, innerEnd } = range;
+    const inner = code.slice(innerStart, innerEnd);
+    const rewritten = rewriteVueTemplate(inner, namespace, keyMap);
+
+    if (rewritten !== inner) {
+      code = code.slice(0, innerStart) + rewritten + code.slice(innerEnd);
+      changed = true;
+    }
+  }
+
+  if (!changed) {
     return { changed: false };
   }
 
-  const { innerStart, innerEnd } = range;
-  const inner = code.slice(innerStart, innerEnd);
-  const rewritten = rewriteVueTemplate(inner, namespace, keyMap);
-
-  if (rewritten === inner) {
-    return { changed: false };
-  }
-
-  code = code.slice(0, innerStart) + rewritten + code.slice(innerEnd);
   await writeFile(filePath, code, 'utf8');
   return { changed: true };
 }

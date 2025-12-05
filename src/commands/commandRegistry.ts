@@ -187,6 +187,11 @@ export class CommandRegistry {
                     await vscode.commands.executeCommand('ai-localizer.i18n.applyUntranslatedAiFixes');
                 }
             }),
+            // Lightweight sync: only runs i18n:sync without triggering fix-untranslated cascade
+            // Used by single-key quick fixes to avoid regenerating reports mid-translation
+            vscode.commands.registerCommand('ai-localizer.i18n.runSyncScriptOnly', () =>
+                scriptCmds.runSync(),
+            ),
             vscode.commands.registerCommand('ai-localizer.i18n.runFixUntranslatedScript', async () => {
                 await scriptCmds.runFixUntranslated();
 

@@ -447,10 +447,22 @@ export class UntranslatedCommands {
             return;
         }
 
+        // Read AI instructions from the separate .txt file (fix-untranslated.js now writes them there)
+        let aiInstructions: string | undefined;
+        try {
+            const instructionsUri = vscode.Uri.file(
+                path.join(folder.uri.fsPath, 'scripts', '.i18n-untranslated-ai-instructions.txt'),
+            );
+            const instructionsData = await vscode.workspace.fs.readFile(instructionsUri);
+            aiInstructions = decoder.decode(instructionsData).trim() || undefined;
+        } catch {
+            // Instructions file is optional; AI will use default prompt if not found
+        }
+
         try {
             const updates = await this.translationService.getUntranslatedFixes(
                 issues,
-                report.aiInstructions,
+                aiInstructions,
             );
 
             if (!updates.length) {
@@ -521,6 +533,9 @@ export class UntranslatedCommands {
                 vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
+
+            // Use lightweight sync only for quick fix
+            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
 
             await this.i18nIndex.ensureInitialized();
             const record = this.i18nIndex.getRecord(key);
@@ -884,6 +899,9 @@ export class UntranslatedCommands {
                 vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
+
+            // only sync needed for single file
+            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
 
             await this.i18nIndex.ensureInitialized();
 
@@ -1286,6 +1304,8 @@ export class UntranslatedCommands {
                 vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
+
+            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
 
             await this.i18nIndex.ensureInitialized();
 
@@ -1882,6 +1902,8 @@ export class UntranslatedCommands {
                 );
                 return;
             }
+
+            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScript');
 
             const choice = await vscode.window.showQuickPick(
                 [
@@ -2869,6 +2891,9 @@ export class UntranslatedCommands {
                 vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
                 return;
             }
+
+            // Use lightweight sync only for non project level fix
+            await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
 
             await this.i18nIndex.ensureInitialized();
             const allKeys = this.i18nIndex.getAllKeys();
