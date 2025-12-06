@@ -9,6 +9,48 @@ const sharedEncoder = new TextEncoder();
 // Cache for locale directory lookups (cleared on workspace change)
 const localeDirCache = new Map<string, vscode.Uri>();
 
+// Simple file-level mutex for preventing concurrent writes to the same file
+const fileMutex = new Map<string, Promise<void>>();
+const mutexTimeout = 30000; // 30 second max wait
+
+/**
+ * Acquire a file-level lock for writing operations.
+ * Ensures only one write operation can occur at a time for a given file.
+ */
+async function withFileMutex<T>(fileUri: vscode.Uri, operation: () => Promise<T>): Promise<T> {
+    const key = fileUri.toString();
+    
+    // Wait for any existing operation on this file
+    let existing = fileMutex.get(key);
+    if (existing) {
+        const timeoutPromise = new Promise<void>((_, reject) => {
+            setTimeout(() => reject(new Error(`File lock timeout: ${fileUri.fsPath}`)), mutexTimeout);
+        });
+        try {
+            await Promise.race([existing, timeoutPromise]);
+        } catch {
+            // Previous operation timed out or failed, proceed anyway
+        }
+    }
+    
+    // Create our lock
+    let resolver: () => void;
+    const ourLock = new Promise<void>((resolve) => {
+        resolver = resolve;
+    });
+    fileMutex.set(key, ourLock);
+    
+    try {
+        return await operation();
+    } finally {
+        resolver!();
+        // Only delete if it's still our lock (prevent race with next operation)
+        if (fileMutex.get(key) === ourLock) {
+            fileMutex.delete(key);
+        }
+    }
+}
+
 /**
  * Clear the locale directory cache. Call when workspace folders change.
  */
@@ -204,25 +246,27 @@ export async function setTranslationValueInFile(
     fullKey: string,
     value: string,
 ): Promise<void> {
-    let root: any = {};
-    try {
-        const data = await vscode.workspace.fs.readFile(fileUri);
-        const raw = sharedDecoder.decode(data);
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-            root = parsed;
+    await withFileMutex(fileUri, async () => {
+        let root: any = {};
+        try {
+            const data = await vscode.workspace.fs.readFile(fileUri);
+            const raw = sharedDecoder.decode(data);
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                root = parsed;
+            }
+        } catch {
         }
-    } catch {
-    }
-    if (!root || typeof root !== 'object' || Array.isArray(root)) {
-        root = {};
-    }
-    const segments = fullKey.split('.').filter(Boolean);
-    const container = ensureDeepContainer(root, segments.slice(0, -1));
-    const last = segments[segments.length - 1];
-    container[last] = value;
-    const payload = `${JSON.stringify(root, null, 2)}\n`;
-    await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+        if (!root || typeof root !== 'object' || Array.isArray(root)) {
+            root = {};
+        }
+        const segments = fullKey.split('.').filter(Boolean);
+        const container = ensureDeepContainer(root, segments.slice(0, -1));
+        const last = segments[segments.length - 1];
+        container[last] = value;
+        const payload = `${JSON.stringify(root, null, 2)}\n`;
+        await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+    });
 }
 
 export async function setTranslationValue(
@@ -245,30 +289,34 @@ export async function setTranslationValue(
         fileName = `${group.toLowerCase()}.json`;
     }
     const fileUri = vscode.Uri.joinPath(localeDir, fileName);
-    let root: any = {};
-    try {
-        const data = await vscode.workspace.fs.readFile(fileUri);
-        const raw = sharedDecoder.decode(data);
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-            root = parsed;
+    
+    await withFileMutex(fileUri, async () => {
+        let root: any = {};
+        try {
+            const data = await vscode.workspace.fs.readFile(fileUri);
+            const raw = sharedDecoder.decode(data);
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                root = parsed;
+            }
+        } catch {
         }
-    } catch {
-    }
-    if (!root || typeof root !== 'object' || Array.isArray(root)) {
-        root = {};
-    }
-    const container = ensureDeepContainer(root, segments.slice(0, -1));
-    const last = segments[segments.length - 1];
-    container[last] = value;
-    const payload = `${JSON.stringify(root, null, 2)}\n`;
-    await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+        if (!root || typeof root !== 'object' || Array.isArray(root)) {
+            root = {};
+        }
+        const container = ensureDeepContainer(root, segments.slice(0, -1));
+        const last = segments[segments.length - 1];
+        container[last] = value;
+        const payload = `${JSON.stringify(root, null, 2)}\n`;
+        await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+    });
 }
 
 /**
  * Batch write multiple translations to locale files.
  * Groups updates by target file to minimize I/O operations.
  * This is significantly faster than calling setTranslationValue for each key.
+ * Uses file-level locking to prevent race conditions.
  * 
  * @param folder - Workspace folder
  * @param locale - Target locale
@@ -310,39 +358,42 @@ export async function setTranslationValuesBatch(
         fileMap.set(fullKey, value);
     }
 
-    // Process each file once
+    // Process each file once with file-level locking
     for (const [fileName, keyValues] of fileUpdates.entries()) {
         const fileUri = vscode.Uri.joinPath(localeDir, fileName);
         
         try {
-            // Read existing content
-            let root: any = {};
-            try {
-                const data = await vscode.workspace.fs.readFile(fileUri);
-                const raw = sharedDecoder.decode(data);
-                const parsed = JSON.parse(raw);
-                if (parsed && typeof parsed === 'object') {
-                    root = parsed;
+            // Use file mutex to prevent concurrent writes to the same file
+            await withFileMutex(fileUri, async () => {
+                // Read existing content (fresh read while holding lock)
+                let root: any = {};
+                try {
+                    const data = await vscode.workspace.fs.readFile(fileUri);
+                    const raw = sharedDecoder.decode(data);
+                    const parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object') {
+                        root = parsed;
+                    }
+                } catch {
+                    // File doesn't exist yet, start with empty object
                 }
-            } catch {
-                // File doesn't exist yet, start with empty object
-            }
-            if (!root || typeof root !== 'object' || Array.isArray(root)) {
-                root = {};
-            }
+                if (!root || typeof root !== 'object' || Array.isArray(root)) {
+                    root = {};
+                }
 
-            // Apply all updates for this file
-            for (const [fullKey, value] of keyValues.entries()) {
-                const segments = fullKey.split('.').filter(Boolean);
-                const container = ensureDeepContainer(root, segments.slice(0, -1));
-                const last = segments[segments.length - 1];
-                container[last] = value;
-                result.written += 1;
-            }
+                // Apply all updates for this file
+                for (const [fullKey, value] of keyValues.entries()) {
+                    const segments = fullKey.split('.').filter(Boolean);
+                    const container = ensureDeepContainer(root, segments.slice(0, -1));
+                    const last = segments[segments.length - 1];
+                    container[last] = value;
+                    result.written += 1;
+                }
 
-            // Write once
-            const payload = `${JSON.stringify(root, null, 2)}\n`;
-            await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+                // Write once
+                const payload = `${JSON.stringify(root, null, 2)}\n`;
+                await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+            });
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             result.errors.push(`Failed to write ${fileName}: ${msg}`);

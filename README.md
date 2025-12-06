@@ -209,6 +209,10 @@ Example (user or workspace settings):
 
 ## Release Notes
 
+### 0.1.1
+
+- Major refactors, verified robust support for React and Vue based frameworks. Added one command to fix all issues.
+
 ### 0.0.1
 
 - Initial release of Localizer – AI i18n for React, Vue & Laravel

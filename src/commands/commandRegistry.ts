@@ -15,6 +15,9 @@ import { UntranslatedCommands } from './untranslatedCommands';
 import { ComponentCommands } from './componentCommands';
 import { ScaffoldMessagesCommand } from './scaffoldMessagesCommand';
 import { ProjectFixCommand } from './projectFixCommand';
+import { operationLock } from './untranslated/utils/operationLock';
+import { ReviewGeneratedService } from '../services/reviewGeneratedService';
+import * as path from 'path';
 
 /**
  * Registry for all extension commands
@@ -52,6 +55,9 @@ export class CommandRegistry {
             disposables.push(untranslatedDiagnostics);
             const sourceFileDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-missing-refs');
             disposables.push(sourceFileDiagnostics);
+            const reviewDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-review');
+            disposables.push(reviewDiagnostics);
+            const reviewService = new ReviewGeneratedService(this.i18nIndex, this.log);
             let refreshAllSourceDiagnosticsPromise: Promise<void> | null = null;
 
         // Rescan command
@@ -352,9 +358,35 @@ export class CommandRegistry {
                     await this.refreshFileDiagnostics(untranslatedDiagnostics, uri, extraKeys);
                 },
             ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.invalidateReportKeys',
+                (keys: string[]) => {
+                    if (keys && keys.length > 0) {
+                        this.diagnosticAnalyzer.invalidateUntranslatedReportKeys(keys);
+                    }
+                },
+            ),
             vscode.commands.registerCommand('ai-localizer.i18n.applyUntranslatedAiFixes', () =>
                 untranslatedCmds.applyAiFixes(),
             ),
+            vscode.commands.registerCommand('ai-localizer.reviewGenerated.refresh', async () => {
+                const folder = vscode.workspace.workspaceFolders?.[0];
+                if (!folder) return;
+                await reviewService.refreshDiagnostics(folder, reviewDiagnostics);
+            }),
+            vscode.commands.registerCommand('ai-localizer.reviewGenerated.apply', async () => {
+                const folder = vscode.workspace.workspaceFolders?.[0];
+                const editor = vscode.window.activeTextEditor;
+                if (!folder || !editor) return;
+                await reviewService.applyReviewFile(folder, editor.document);
+                await reviewService.refreshDiagnostics(folder, reviewDiagnostics);
+            }),
+            vscode.commands.registerCommand('ai-localizer.reviewGenerated.showHistory', async () => {
+                const folder = vscode.workspace.workspaceFolders?.[0];
+                const editor = vscode.window.activeTextEditor;
+                if (!folder || !editor) return;
+                await reviewService.showGitHistoryForCursor(folder, editor.document, editor.selection.active);
+            }),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.applyUntranslatedQuickFix',
                 (documentUri: vscode.Uri, key: string, locales: string[]) =>
@@ -560,6 +592,11 @@ export class CommandRegistry {
         };
 
         const handleLocaleChange = async (uri: vscode.Uri) => {
+            const currentOp = operationLock.getCurrentOperation();
+            if (currentOp?.type === 'key-management') {
+                // Skip locale change handling while key-management is running (bulk fixes)
+                return;
+            }
             this.log.appendLine(`[Watch] Locale file change detected: ${uri.fsPath}`);
 
             const beforeInfo = this.i18nIndex.getKeysForFile(uri);
@@ -629,6 +666,11 @@ export class CommandRegistry {
         const SOURCE_FILE_DEBOUNCE_MS = 500;
 
         const refreshSourceFileDiagnostics = async (document: vscode.TextDocument, immediate = false) => {
+            const currentOp = operationLock.getCurrentOperation();
+            if (currentOp?.type === 'key-management') {
+                // Skip source diagnostics refresh while bulk key management is running
+                return;
+            }
             if (!isSourceFile(document.languageId)) {
                 return;
             }
@@ -724,6 +766,18 @@ export class CommandRegistry {
                 watcher.onDidDelete(enhancedHandleLocaleChange, undefined, disposables);
                 disposables.push(watcher);
             }
+
+            // Watch review-generated file
+            const reviewWatcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(folder, 'scripts/.i18n-review-generated.json'),
+            );
+            const refreshReview = async () => {
+                await reviewService.refreshDiagnostics(folder, reviewDiagnostics);
+            };
+            reviewWatcher.onDidChange(refreshReview, undefined, disposables);
+            reviewWatcher.onDidCreate(refreshReview, undefined, disposables);
+            reviewWatcher.onDidDelete(() => reviewDiagnostics.clear(), undefined, disposables);
+            disposables.push(reviewWatcher);
         }
 
         void this.refreshAllDiagnostics(untranslatedDiagnostics);
@@ -756,6 +810,15 @@ export class CommandRegistry {
         // Refresh diagnostics when source files are saved (immediate)
         disposables.push(
             vscode.workspace.onDidSaveTextDocument(async (document) => {
+                // If review file saved, apply changes and refresh diagnostics
+                if (document.uri.fsPath.endsWith(`${path.sep}scripts${path.sep}.i18n-review-generated.json`)) {
+                    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+                    if (folder) {
+                        await reviewService.applyReviewFile(folder, document);
+                        await reviewService.refreshDiagnostics(folder, reviewDiagnostics);
+                    }
+                    return;
+                }
                 await refreshSourceFileDiagnostics(document, true);
             }),
         );
@@ -804,7 +867,13 @@ export class CommandRegistry {
         collection: vscode.DiagnosticCollection,
         uri: vscode.Uri,
         extraKeys?: string[],
+        options?: { force?: boolean },
     ): Promise<void> {
+        const currentOp = operationLock.getCurrentOperation();
+        if (currentOp?.type === 'key-management' && !options?.force) {
+            // Skip per-file diagnostics while bulk key management runs
+            return;
+        }
         const config = getDiagnosticConfig();
         if (!config.enabled) {
             collection.delete(uri);
@@ -823,7 +892,15 @@ export class CommandRegistry {
         }
 
         const diagnostics = await this.diagnosticAnalyzer.analyzeFile(uri, config, extraKeys);
-        collection.set(uri, diagnostics);
+        // Deduplicate diagnostics (sometimes multiple analyzers report the same issue)
+        const seen = new Set<string>();
+        const deduped = diagnostics.filter((d) => {
+            const key = `${d.range.start.line}:${d.range.start.character}:${d.message}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+        collection.set(uri, deduped);
     }
 
     /**
@@ -831,7 +908,13 @@ export class CommandRegistry {
      */
     private async refreshAllDiagnostics(
         collection: vscode.DiagnosticCollection,
+        options?: { force?: boolean },
     ): Promise<void> {
+        const currentOp = operationLock.getCurrentOperation();
+        if (currentOp?.type === 'key-management' && !options?.force) {
+            // Skip full diagnostics refresh while bulk key management runs
+            return;
+        }
         if (this.refreshAllDiagnosticsPromise) {
             await this.refreshAllDiagnosticsPromise;
             return;

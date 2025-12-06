@@ -17,12 +17,12 @@ function isValidGitRef(ref: string): boolean {
     return /^[A-Za-z0-9_.\/\-^~@]+$/.test(ref) && ref.length < 256;
 }
 
-// Timeout for git operations (10 seconds)
-const GIT_TIMEOUT_MS = 10000;
-// Max buffer size for git output (5MB)
-const GIT_MAX_BUFFER = 5 * 1024 * 1024;
-// Max commits to check in history search
-const MAX_HISTORY_COMMITS = 20;
+// Timeout for git operations (30 seconds for larger repos)
+const GIT_TIMEOUT_MS = 30000;
+// Max buffer size for git output (10MB for larger files)
+const GIT_MAX_BUFFER = 10 * 1024 * 1024;
+// Max commits to check in history search (increased for better recovery)
+const MAX_HISTORY_COMMITS = 100;
 
 export interface GitCommitInfo {
     hash: string;
@@ -176,15 +176,39 @@ export async function getFileDiff(
 }
 
 /**
- * Find the most recent commit where a key existed in a locale file
+ * Generate key path variations to try when searching.
+ * Handles cases where key structure doesn't match file structure.
+ */
+function getKeyPathVariations(keyPath: string): string[] {
+    const variations: string[] = [keyPath];
+    const parts = keyPath.split('.').filter(Boolean);
+    
+    if (parts.length > 1) {
+        variations.push(parts.slice(1).join('.'));
+        if (parts.length > 2) {
+            variations.push(parts.slice(2).join('.'));
+        }
+        variations.push(parts[parts.length - 1]);
+        if (parts.length > 2) {
+            variations.push(parts.slice(-2).join('.'));
+        }
+    }
+    
+    return variations;
+}
+
+/**
+ * Find the most recent commit where a key existed in a locale file.
+ * Tries multiple key path variations for better recovery rate.
  */
 export async function findKeyInHistory(
     folder: vscode.WorkspaceFolder,
     localeFilePath: string,
     keyPath: string,
-    daysBack: number = 30,
-): Promise<{ commit: GitCommitInfo; value: string } | null> {
+    daysBack: number = 90,
+): Promise<{ commit: GitCommitInfo; value: string; keyVariant: string } | null> {
     const history = await getFileHistory(folder, localeFilePath, daysBack);
+    const keyVariations = getKeyPathVariations(keyPath);
 
     for (const commit of history.commits) {
         const content = await getFileContentAtCommit(folder, localeFilePath, commit.hash);
@@ -192,9 +216,12 @@ export async function findKeyInHistory(
 
         try {
             const json = JSON.parse(content);
-            const value = getNestedValue(json, keyPath);
-            if (value && typeof value === 'string') {
-                return { commit, value };
+            // Try all key variations
+            for (const keyVariant of keyVariations) {
+                const value = getNestedValue(json, keyVariant);
+                if (value && typeof value === 'string') {
+                    return { commit, value, keyVariant };
+                }
             }
         } catch {
             // Invalid JSON, continue
