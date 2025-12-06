@@ -379,6 +379,7 @@ export class GitRecoveryHandler {
         logPrefix: string,
     ): Promise<RecoveryResult | null> {
         const relPath = path.relative(folder.uri.fsPath, sourceFilePath);
+        const hintWords = extractHintWords(key);
 
         let currentContent: string;
         try {
@@ -398,13 +399,81 @@ export class GitRecoveryHandler {
 
         this.log?.appendLine(`${logPrefix} Searching ${history.commits.length} commits in ${relPath}`);
 
+        // Strategy 0: prioritize commits mentioning i18n/translate and check their diffs first
+        const keywordCommits: Array<{ current: string; previous: string }> = [];
+        for (let i = 0; i < history.commits.length; i++) {
+            const commit = history.commits[i];
+            if (/i18n|translat/i.test(commit.message)) {
+                const prev = history.commits[i + 1]?.hash;
+                if (prev) {
+                    keywordCommits.push({ current: commit.hash, previous: prev });
+                }
+            }
+        }
+
+        const extractFromDiffLines = async (fromCommit: string, toCommit: string): Promise<RecoveryResult | null> => {
+            const diff = await getFileDiff(folder, sourceFilePath, fromCommit, toCommit);
+            if (!diff) return null;
+            const diffLines = diff.split('\n');
+            const removedLines: string[] = [];
+            const addedLines: string[] = [];
+            for (const line of diffLines) {
+                if (line.startsWith('-') && !line.startsWith('---')) {
+                    removedLines.push(line.slice(1));
+                } else if (line.startsWith('+') && !line.startsWith('+++')) {
+                    addedLines.push(line.slice(1));
+                }
+            }
+
+            const candidates: Array<{ text: string; score: number }> = [];
+            const addedHasTCall = addedLines.some((l) => /\bt\(\s*['"]/.test(l) || /\$t\(\s*['"]/.test(l));
+            const placeholderPattern = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/g;
+
+            for (const line of removedLines) {
+                const extracted = extractHardcodedStringFromLine(line, key);
+                if (extracted) {
+                    let score = calculateTextRelevanceScore(extracted, hintWords) + 5;
+                    const placeholders = extracted.match(placeholderPattern) || [];
+                    if (placeholders.length > 0) score += 2;
+                    if (addedHasTCall) score += 3;
+                    if (/\s/.test(extracted)) score += 1;
+                    candidates.push({ text: extracted, score });
+                }
+                const texts = extractAllUserTextFromContent(line, hintWords);
+                for (const t of texts) {
+                    let score = t.score;
+                    const placeholders = (t.text.match(placeholderPattern) || []).length;
+                    if (placeholders > 0) score += 2;
+                    if (addedHasTCall) score += 3;
+                    candidates.push({ text: t.text, score });
+                }
+            }
+
+            if (!candidates.length) return null;
+            candidates.sort((a, b) => b.score - a.score);
+            const best = candidates[0];
+            if (best.score >= 3) {
+                return {
+                    value: best.text,
+                    source: `diff:${fromCommit.slice(0, 7)}..${toCommit.slice(0, 7)}`,
+                };
+            }
+            return null;
+        };
+
+        for (const pair of keywordCommits) {
+            const result = await extractFromDiffLines(pair.previous, pair.current);
+            if (result) {
+                this.log?.appendLine(`${logPrefix} Recovered from keyword commit ${pair.current.slice(0, 7)}`);
+                return result;
+            }
+        }
+
         // STRATEGY 1: Find commit that introduced t('key') and analyze diff
         const diffResult = await this.findOriginalTextFromDiff(folder, sourceFilePath, key, history, logPrefix);
         if (diffResult) return diffResult;
 
         // STRATEGY 2: Find a commit without t('key')
-        const hintWords = extractHintWords(key);
-
         for (const commit of history.commits) {
             const oldContent = await getFileContentAtCommit(folder, sourceFilePath, commit.hash);
             if (!oldContent) continue;

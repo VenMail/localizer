@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { TextDecoder } from 'util';
 import { I18nIndex, TranslationRecord } from '../core/i18nIndex';
 import { ProjectConfigService } from './projectConfigService';
+import { operationLock } from '../commands/untranslated/utils/operationLock';
 
 // Shared decoder instance to avoid repeated allocations
 const sharedDecoder = new TextDecoder('utf-8');
@@ -41,6 +42,36 @@ export class DiagnosticAnalyzer {
         private log: vscode.OutputChannel,
     ) {}
 
+    // Per-run logging flag (set from config)
+    private logVerboseEnabled = false;
+
+    /**
+     * Suppress verbose logging while bulk operations (key management, translations, cleanup) are running.
+     */
+    private isQuietMode(): boolean {
+        const current = operationLock.getCurrentOperation();
+        if (!current) return false;
+        return [
+            'key-management',
+            'translation-project',
+            'translation-file',
+            'cleanup-unused',
+            'cleanup-invalid',
+            'style-fix',
+        ].includes(current.type);
+    }
+
+    private safeLog(message: string): void {
+        if (!this.logVerboseEnabled) return;
+        if (this.isQuietMode()) return;
+        this.log.appendLine(message);
+    }
+
+    private verboseLog(message: string, enabled: boolean): void {
+        if (!enabled) return;
+        this.safeLog(message);
+    }
+
     /**
      * Analyze a single locale file and return diagnostics for it.
      * This is the core incremental analysis method.
@@ -51,10 +82,12 @@ export class DiagnosticAnalyzer {
         extraKeys?: string[],
         forcedLocales?: string[],
     ): Promise<vscode.Diagnostic[]> {
+        this.logVerboseEnabled = config.verboseLogging === true;
         const fileKey = uri.toString();
         // Invalidate cached text/range data so we always analyze the latest version
         this.fileTextCache.delete(fileKey);
-        this.log.appendLine(`[DiagnosticAnalyzer] Analyzing file: ${uri.fsPath}`);
+        this.safeLog(`[DiagnosticAnalyzer] Analyzing file: ${uri.fsPath}`);
+        const verbose = config.verboseLogging === true;
 
         // Get keys contributed by this file
         const fileInfo = this.i18nIndex.getKeysForFile(uri);
@@ -69,12 +102,13 @@ export class DiagnosticAnalyzer {
         const changedKeysSet = new Set<string>(extraKeys || []);
         
         if (!fileLocale) {
-            this.log.appendLine(`[DiagnosticAnalyzer] Cannot determine locale for file: ${uri.fsPath}`);
+            this.safeLog(`[DiagnosticAnalyzer] Cannot determine locale for file: ${uri.fsPath}`);
             return [];
         }
         
-        this.log.appendLine(
+        this.verboseLog(
             `[DiagnosticAnalyzer] File has ${fileKeys.length} key(s) for locale '${fileLocale}' (analyzing ${keysToAnalyze.length})`,
+            verbose,
         );
         const diagnostics: vscode.Diagnostic[] = [];
 
@@ -129,8 +163,9 @@ export class DiagnosticAnalyzer {
                 hasDefaultValue && this.isProbablyNonTranslatable(defaultValue);
             const baseIsIgnored = hasDefaultValue && this.isIgnoredText(defaultValue);
 
-            this.log.appendLine(
+            this.verboseLog(
                 `[DiagnosticAnalyzer] Checking key '${key}' (default='${defaultLocaleForKey}') in file '${uri.fsPath}' (fileLocale='${fileLocale}')`,
+                verbose,
             );
 
             // Emit a dedicated diagnostic when the default-locale value itself looks invalid/non-translatable.
@@ -178,14 +213,16 @@ export class DiagnosticAnalyzer {
                     continue;
                 }
 
-                this.log.appendLine(
+                this.verboseLog(
                     `[DiagnosticAnalyzer] Considering locale '${locale}' for key '${key}': ` +
                     `val=${val ? 'present' : 'missing'}, locEntry=${!!locEntry}, shouldReport=${shouldReport}`,
+                    verbose,
                 );
 
                 if (!val || !val.trim()) {
-                    this.log.appendLine(
+                    this.verboseLog(
                         `[DiagnosticAnalyzer] Missing translation detected for key '${key}' in locale '${locale}' while analyzing file '${uri.fsPath}' (fileLocale='${fileLocale}', defaultLocale='${defaultLocaleForKey}')`,
+                        verbose,
                     );
                 }
 
@@ -215,7 +252,7 @@ export class DiagnosticAnalyzer {
         }
 
         this.diagnosticsByFile.set(fileKey, diagnostics);
-        this.log.appendLine(
+        this.safeLog(
             `[DiagnosticAnalyzer] Found ${diagnostics.length} diagnostic(s) for file: ${uri.fsPath}`,
         );
         return diagnostics;
@@ -228,7 +265,8 @@ export class DiagnosticAnalyzer {
         uris: vscode.Uri[],
         config: DiagnosticConfig,
     ): Promise<Map<string, vscode.Diagnostic[]>> {
-        this.log.appendLine(`[DiagnosticAnalyzer] Analyzing ${uris.length} file(s)...`);
+        this.logVerboseEnabled = config.verboseLogging === true;
+        this.safeLog(`[DiagnosticAnalyzer] Analyzing ${uris.length} file(s)...`);
 
         const results = await Promise.all(
             uris.map(async (uri) => {
@@ -249,7 +287,8 @@ export class DiagnosticAnalyzer {
      * Analyze all locale files in the index.
      */
     async analyzeAll(config: DiagnosticConfig): Promise<Map<string, vscode.Diagnostic[]>> {
-        this.log.appendLine('[DiagnosticAnalyzer] Performing full analysis...');
+        this.logVerboseEnabled = config.verboseLogging === true;
+        this.safeLog('[DiagnosticAnalyzer] Performing full analysis...');
 
         // Collect all unique locale file URIs from the index
         const allKeys = this.i18nIndex.getAllKeys();
@@ -960,6 +999,7 @@ export class DiagnosticAnalyzer {
         uri: vscode.Uri,
         config: DiagnosticConfig,
     ): Promise<vscode.Diagnostic[]> {
+        this.logVerboseEnabled = config.verboseLogging === true;
         const fileKey = uri.toString();
         const languageId = this.getLanguageIdForUri(uri);
         
@@ -969,7 +1009,7 @@ export class DiagnosticAnalyzer {
             return [];
         }
 
-        this.log.appendLine(`[DiagnosticAnalyzer] Analyzing source file for missing refs: ${uri.fsPath}`);
+        this.safeLog(`[DiagnosticAnalyzer] Analyzing source file for missing refs: ${uri.fsPath}`);
 
         let text: string;
         try {
@@ -1120,6 +1160,7 @@ export interface DiagnosticConfig {
     invalidSeverity: vscode.DiagnosticSeverity;
     missingReferenceEnabled: boolean;
     missingReferenceSeverity: vscode.DiagnosticSeverity;
+    verboseLogging?: boolean;
 }
 
 export function getDiagnosticConfig(): DiagnosticConfig {
@@ -1150,6 +1191,7 @@ export function getDiagnosticConfig(): DiagnosticConfig {
     const missingReferenceEnabled = cfg.get<boolean>('i18n.diagnostics.missingReferenceEnabled') ?? true;
     const missingReferenceSeveritySetting =
         cfg.get<string>('i18n.diagnostics.missingReferenceSeverity') || 'error';
+    const verboseLogging = cfg.get<boolean>('i18n.diagnostics.verboseLogging') ?? false;
 
     return {
         enabled,
@@ -1160,5 +1202,6 @@ export function getDiagnosticConfig(): DiagnosticConfig {
         invalidSeverity: mapSeverity(invalidSeveritySetting),
         missingReferenceEnabled,
         missingReferenceSeverity: mapSeverity(missingReferenceSeveritySetting),
+        verboseLogging,
     };
 }

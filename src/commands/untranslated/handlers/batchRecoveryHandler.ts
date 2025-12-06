@@ -441,13 +441,26 @@ export class BatchRecoveryHandler {
 
         // Get file history
         try {
+            let commits: string[] = [];
+            const baseArgs = ['log', `--since=${daysBack} days ago`, '-n', '30', '--format=%H', '--', relPath.replace(/\\/g, '/')];
             const { stdout } = await execFileAsync(
                 'git',
-                ['log', `--since=${daysBack} days ago`, '-n', '30', '--format=%H', '--', relPath.replace(/\\/g, '/')],
+                baseArgs,
                 { cwd: folder.uri.fsPath, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER },
             );
 
-            const commits = stdout.trim().split('\n').filter(Boolean);
+            commits = stdout.trim().split('\n').filter(Boolean);
+
+            // Fallback: if no commits in window, grab most recent history without date limit
+            if (commits.length === 0) {
+                const { stdout: fallback } = await execFileAsync(
+                    'git',
+                    ['log', '-n', '30', '--format=%H', '--', relPath.replace(/\\/g, '/')],
+                    { cwd: folder.uri.fsPath, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER },
+                );
+                commits = fallback.trim().split('\n').filter(Boolean);
+            }
+
             if (commits.length < 2) return null;
 
             // Find the commit that introduced the t() call
@@ -465,6 +478,20 @@ export class BatchRecoveryHandler {
                         commitWithoutTCall = commits[i + 1];
                         break;
                     }
+                }
+            }
+
+            // Priority: check commits mentioning i18n/translate with their previous commit
+            const keywordIndex = commits.findIndex((hash) => {
+                const msg = this.sourceContentCache.get(`msg:${hash}`);
+                return msg && /i18n|translat/i.test(msg);
+            });
+            if (keywordIndex > -1 && keywordIndex + 1 < commits.length) {
+                const fromCommit = commits[keywordIndex + 1];
+                const toCommit = commits[keywordIndex];
+                const result = await this.extractFromDiff(folder, sourceFilePath, fromCommit, toCommit, key);
+                if (result) {
+                    return { value: result, source: `diff:${fromCommit.slice(0, 7)}..${toCommit.slice(0, 7)}` };
                 }
             }
 

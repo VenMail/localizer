@@ -70,38 +70,15 @@ export async function getFileHistory(
     const since = sinceDate.toISOString().split('T')[0];
 
     try {
-        // Use execFile for safer argument handling (no shell interpolation)
-        const { stdout } = await execFileAsync(
-            'git',
-            [
-                'log',
-                `--since=${since}`,
-                '-n',
-                String(maxCommits),
-                '--format=%H|%ai|%an|%s',
-                '--',
-                relativePath,
-            ],
-            {
-                cwd: folder.uri.fsPath,
-                timeout: GIT_TIMEOUT_MS,
-                maxBuffer: GIT_MAX_BUFFER,
-            },
-        );
+        const commits = await readHistory(relativePath, folder.uri.fsPath, `--since=${since}`, maxCommits);
 
-        const commits: GitCommitInfo[] = [];
-        const lines = stdout.trim().split('\n').filter(Boolean);
-
-        for (const line of lines) {
-            const [hash, dateStr, author, ...messageParts] = line.split('|');
-            if (hash && dateStr) {
-                commits.push({
-                    hash: hash.trim(),
-                    date: new Date(dateStr.trim()),
-                    message: messageParts.join('|').trim(),
-                    author: author.trim(),
-                });
-            }
+        // Fallback: if no commits in the window, get the latest commits without date filter
+        if (commits.length === 0) {
+            const fallback = await readHistory(relativePath, folder.uri.fsPath, null, maxCommits);
+            return {
+                commits: fallback,
+                filePath: relativePath,
+            };
         }
 
         return {
@@ -114,6 +91,49 @@ export async function getFileHistory(
             filePath: relativePath,
         };
     }
+}
+
+async function readHistory(
+    relativePath: string,
+    cwd: string,
+    sinceFlag: string | null,
+    maxCommits: number,
+): Promise<GitCommitInfo[]> {
+    const args = [
+        'log',
+        ...(sinceFlag ? [sinceFlag] : []),
+        '-n',
+        String(maxCommits),
+        '--format=%H|%ai|%an|%s',
+        '--',
+        relativePath,
+    ];
+
+    const { stdout } = await execFileAsync(
+        'git',
+        args,
+        {
+            cwd,
+            timeout: GIT_TIMEOUT_MS,
+            maxBuffer: GIT_MAX_BUFFER,
+        },
+    );
+
+    const commits: GitCommitInfo[] = [];
+    const lines = stdout.trim().split('\n').filter(Boolean);
+
+    for (const line of lines) {
+        const [hash, dateStr, author, ...messageParts] = line.split('|');
+        if (hash && dateStr) {
+            commits.push({
+                hash: hash.trim(),
+                date: new Date(dateStr.trim()),
+                message: messageParts.join('|').trim(),
+                author: author.trim(),
+            });
+        }
+    }
+    return commits;
 }
 
 /**
@@ -209,14 +229,21 @@ export async function findKeyInHistory(
 ): Promise<{ commit: GitCommitInfo; value: string; keyVariant: string } | null> {
     const history = await getFileHistory(folder, localeFilePath, daysBack);
     const keyVariations = getKeyPathVariations(keyPath);
+    const seenCommits = new Set<string>();
 
-    for (const commit of history.commits) {
+    // Priority 1: commits mentioning i18n/translate (and their immediate predecessors)
+    const keywordIndices = history.commits
+        .map((c, idx) => ({ c, idx }))
+        .filter(({ c }) => /i18n|translat/i.test(c.message));
+
+    const tryCommitContent = async (commit: GitCommitInfo): Promise<{ commit: GitCommitInfo; value: string; keyVariant: string } | null> => {
+        if (seenCommits.has(commit.hash)) return null;
+        seenCommits.add(commit.hash);
+
         const content = await getFileContentAtCommit(folder, localeFilePath, commit.hash);
-        if (!content) continue;
-
+        if (!content) return null;
         try {
             const json = JSON.parse(content);
-            // Try all key variations
             for (const keyVariant of keyVariations) {
                 const value = getNestedValue(json, keyVariant);
                 if (value && typeof value === 'string') {
@@ -224,8 +251,24 @@ export async function findKeyInHistory(
                 }
             }
         } catch {
-            // Invalid JSON, continue
+            // ignore invalid JSON
         }
+        return null;
+    };
+
+    for (const { c, idx } of keywordIndices) {
+        const hit = await tryCommitContent(c);
+        if (hit) return hit;
+        const prev = history.commits[idx + 1];
+        if (prev) {
+            const prevHit = await tryCommitContent(prev);
+            if (prevHit) return prevHit;
+        }
+    }
+
+    for (const commit of history.commits) {
+        const hit = await tryCommitContent(commit);
+        if (hit) return hit;
     }
 
     return null;

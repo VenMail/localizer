@@ -638,26 +638,32 @@ export class KeyManagementHandler {
                 existingReport.files.push(fileEntry);
             }
 
-            // Add new issues (avoid duplicates)
-            const existingKeys = new Set(fileEntry.issues?.map((i: any) => i.key) || []);
+            // Add new issues (avoid duplicates) and keep compact fields
+            fileEntry.issues = Array.isArray(fileEntry.issues) ? fileEntry.issues : [];
+            const existingKeys = new Set(fileEntry.issues.map((i: any) => i.key));
             for (const { key, generatedValue } of keysNeedingReview) {
-                if (!existingKeys.has(key)) {
-                    fileEntry.issues.push({
-                        key,
-                        generatedValue,
-                        needsReview: true,
-                        timestamp,
-                    });
-                }
+                if (existingKeys.has(key)) continue;
+                fileEntry.issues.push({
+                    key,
+                    value: generatedValue,
+                });
             }
 
-            // Write report
-            existingReport.lastUpdated = timestamp;
-            const payload = JSON.stringify(existingReport, null, 2) + '\n';
+            // Rewrite in compact form: only file and key/value pairs
+            const compact = {
+                files: existingReport.files.map((f: any) => ({
+                    file: f.file,
+                    issues: Array.isArray(f.issues)
+                        ? f.issues.map((i: any) => ({ key: i.key, value: i.value ?? i.generatedValue ?? '' }))
+                        : [],
+                })),
+            };
+
+            const payload = JSON.stringify(compact, null, 2) + '\n';
             await vscode.workspace.fs.writeFile(reportUri, sharedEncoder.encode(payload));
 
             this.log?.appendLine(
-                `[BulkFixMissingRefs] Generated review report: ${keysNeedingReview.length} keys added to ${reportUri.fsPath}`,
+                `[BulkFixMissingRefs] Generated review report (compact): ${keysNeedingReview.length} keys added to ${reportUri.fsPath}`,
             );
         } catch (err) {
             this.log?.appendLine(`[BulkFixMissingRefs] Failed to generate review report: ${String(err)}`);

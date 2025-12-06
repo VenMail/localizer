@@ -184,6 +184,56 @@ export function calculateTextRelevanceScore(text: string, hintWords: string[]): 
     return score;
 }
 
+function derivePlaceholderName(expr: string): string {
+    const tokens = expr
+        .trim()
+        .replace(/\s+/g, ' ')
+        .split(/[^A-Za-z0-9_]+/)
+        .filter(Boolean);
+
+    if (tokens.length === 0) return 'value';
+    const candidate = tokens[tokens.length - 1].replace(/^\d+/, '');
+    return (candidate || 'value').toLowerCase();
+}
+
+/**
+ * Normalize a template literal by converting ${...} expressions to {placeholder}
+ */
+export function normalizeTemplateLiteral(content: string): string | null {
+    if (!content) return null;
+
+    const pieces: string[] = [];
+    let lastIndex = 0;
+    const exprPattern = /\$\{([^}]+)\}/g;
+    let match;
+
+    while ((match = exprPattern.exec(content)) !== null) {
+        const staticText = content.slice(lastIndex, match.index);
+        if (staticText) {
+            pieces.push(staticText);
+        }
+
+        const placeholderName = derivePlaceholderName(match[1]);
+        pieces.push(`{${placeholderName}}`);
+        lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < content.length) {
+        pieces.push(content.slice(lastIndex));
+    }
+
+    const normalized = pieces.join('').replace(/\s+/g, ' ').trim();
+    if (!/[a-zA-Z]/.test(normalized)) return null;
+
+    // Drop placeholders to ensure there's real user-facing text
+    const withoutPlaceholders = normalized.replace(/\{[a-zA-Z_][a-zA-Z0-9_]*\}/g, ' ').trim();
+    if (!withoutPlaceholders || !/[a-zA-Z]/.test(withoutPlaceholders)) {
+        return null;
+    }
+
+    return normalized;
+}
+
 /**
  * Extract all user-facing text from source content with relevance scoring
  */
@@ -231,9 +281,17 @@ export function extractAllUserTextFromContent(
     }
 
     // 4. Template literals with text (not pure expressions)
-    const templateLiteralPattern = /`([^`$]+)`/g;
+    const templateLiteralPattern = /`([^`]+)`/g;
     while ((match = templateLiteralPattern.exec(content)) !== null) {
-        addCandidate(match[1], 1);
+        const normalized = normalizeTemplateLiteral(match[1]);
+        if (normalized) {
+            addCandidate(normalized, 4);
+        } else {
+            const raw = match[1].trim();
+            if (raw) {
+                addCandidate(raw, 1);
+            }
+        }
     }
 
     // 5. String literals (excluding className and style assignments)
@@ -318,10 +376,15 @@ export function extractHardcodedStringFromLine(line: string, key: string): strin
     }
 
     // Extract template literal static parts
-    const templatePattern = /`([^`$]+)`/g;
+    const templatePattern = /`([^`]+)`/g;
     while ((match = templatePattern.exec(line)) !== null) {
-        const str = match[1].trim();
-        processCandidate(str, hintWords, candidates);
+        const normalized = normalizeTemplateLiteral(match[1]);
+        if (normalized) {
+            processCandidate(normalized, hintWords, candidates, 4);
+        } else {
+            const str = match[1].trim();
+            processCandidate(str, hintWords, candidates);
+        }
     }
 
     if (candidates.length === 0) return null;

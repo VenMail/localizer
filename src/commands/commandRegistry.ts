@@ -25,6 +25,8 @@ import * as path from 'path';
 export class CommandRegistry {
     private diagnosticAnalyzer: DiagnosticAnalyzer;
     private refreshAllDiagnosticsPromise: Promise<void> | null = null;
+    private localeDiagnosticsDebounce = new Map<string, NodeJS.Timeout>();
+    private static readonly LOCALE_DIAG_DEBOUNCE_MS = 1200;
 
     constructor(
         private context: vscode.ExtensionContext,
@@ -40,6 +42,13 @@ export class CommandRegistry {
             projectConfigService,
             log,
         );
+    }
+
+    private clearLocaleDebounceTimers(): void {
+        for (const timer of this.localeDiagnosticsDebounce.values()) {
+            clearTimeout(timer);
+        }
+        this.localeDiagnosticsDebounce.clear();
     }
 
     /**
@@ -58,7 +67,17 @@ export class CommandRegistry {
             const reviewDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-review');
             disposables.push(reviewDiagnostics);
             const reviewService = new ReviewGeneratedService(this.i18nIndex, this.log);
+            const reviewDocumentSelector: vscode.DocumentSelector = [
+                { scheme: 'file', pattern: '**/scripts/.i18n-review-generated.json' },
+            ];
             let refreshAllSourceDiagnosticsPromise: Promise<void> | null = null;
+
+            // Ensure debounce timers are cleared on dispose
+            disposables.push({
+                dispose: () => {
+                    this.clearLocaleDebounceTimers();
+                },
+            });
 
         // Rescan command
         disposables.push(
@@ -578,6 +597,8 @@ export class CommandRegistry {
             ];
 
         const collectSourceFileUris = async (): Promise<vscode.Uri[]> => {
+            const diagConfig = getDiagnosticConfig();
+            const verbose = diagConfig.verboseLogging === true;
             const include =
                 sourceIncludeGlobs.length === 1
                     ? sourceIncludeGlobs[0]
@@ -585,19 +606,31 @@ export class CommandRegistry {
             const exclude =
                 sourceExcludeGlobs.length > 0 ? `{${sourceExcludeGlobs.join(',')}}` : undefined;
             const uris = await vscode.workspace.findFiles(include, exclude);
-            this.log.appendLine(
-                `[Diagnostics] Collected ${uris.length} source file(s) for missing reference scan.`,
-            );
+            if (verbose) {
+                this.log.appendLine(
+                    `[Diagnostics] Collected ${uris.length} source file(s) for missing reference scan.`,
+                );
+            }
             return uris;
         };
 
         const handleLocaleChange = async (uri: vscode.Uri) => {
             const currentOp = operationLock.getCurrentOperation();
-            if (currentOp?.type === 'key-management') {
-                // Skip locale change handling while key-management is running (bulk fixes)
+            const isBulkOp =
+                currentOp &&
+                ['key-management', 'translation-project', 'translation-file', 'cleanup-unused', 'cleanup-invalid', 'style-fix'].includes(
+                    currentOp.type,
+                );
+
+            if (isBulkOp) {
+                // Skip locale change handling while bulk ops are running
                 return;
             }
-            this.log.appendLine(`[Watch] Locale file change detected: ${uri.fsPath}`);
+            const diagConfig = getDiagnosticConfig();
+            const verbose = diagConfig.verboseLogging === true;
+            if (verbose) {
+                this.log.appendLine(`[Watch] Locale file change detected: ${uri.fsPath}`);
+            }
 
             const beforeInfo = this.i18nIndex.getKeysForFile(uri);
             const beforeKeys = beforeInfo?.keys || [];
@@ -611,10 +644,12 @@ export class CommandRegistry {
             for (const k of beforeKeys) changedKeySet.add(k);
             for (const k of afterKeys) changedKeySet.add(k);
 
-            this.log.appendLine(
-                `[Watch] Keys changed in ${uri.fsPath}: ` +
-                `Before: ${beforeKeys.length}, After: ${afterKeys.length}, Changed set: ${changedKeySet.size}`
-            );
+            if (verbose) {
+                this.log.appendLine(
+                    `[Watch] Keys changed in ${uri.fsPath}: ` +
+                    `Before: ${beforeKeys.length}, After: ${afterKeys.length}, Changed set: ${changedKeySet.size}`
+                );
+            }
 
             // Always include the changed file itself so its diagnostics are cleared/updated.
             const impactedUriStrings = new Set<string>([uri.toString()]);
@@ -623,7 +658,9 @@ export class CommandRegistry {
             for (const key of changedKeySet) {
                 const record = this.i18nIndex.getRecord(key);
                 if (!record) {
-                    this.log.appendLine(`[Watch] Key ${key} not found in index (deleted from all locales)`);
+                    if (verbose) {
+                        this.log.appendLine(`[Watch] Key ${key} not found in index (deleted from all locales)`);
+                    }
                     continue;
                 }
                 
@@ -639,20 +676,26 @@ export class CommandRegistry {
                     impactedUriStrings.add(loc.uri.toString());
                 }
                 
-                this.log.appendLine(
-                    `[Watch] Key '${key}' impacts ${record.locations.length} locale file(s)`
-                );
+                if (verbose) {
+                    this.log.appendLine(
+                        `[Watch] Key '${key}' impacts ${record.locations.length} locale file(s)`
+                    );
+                }
             }
 
             const impactedUris = Array.from(impactedUriStrings).map((s) => vscode.Uri.parse(s));
-            this.log.appendLine(
-                `[Watch] Recomputing diagnostics for ${impactedUris.length} locale file(s) ` +
-                    `due to change in ${uri.fsPath}.`,
-            );
+            if (verbose) {
+                this.log.appendLine(
+                    `[Watch] Recomputing diagnostics for ${impactedUris.length} locale file(s) ` +
+                        `due to change in ${uri.fsPath}.`,
+                );
+            }
 
             const extraKeys = Array.from(changedKeySet);
             for (const targetUri of impactedUris) {
-                this.log.appendLine(`[Watch] Analyzing impacted file: ${targetUri.fsPath}`);
+                if (verbose) {
+                    this.log.appendLine(`[Watch] Analyzing impacted file: ${targetUri.fsPath}`);
+                }
                 await this.refreshFileDiagnostics(untranslatedDiagnostics, targetUri, extraKeys);
             }
         };
@@ -729,12 +772,15 @@ export class CommandRegistry {
                     sourceFileDiagnostics.clear();
                     return;
                 }
+                const verbose = config.verboseLogging === true;
 
                 await this.i18nIndex.ensureInitialized();
                 const uris = await collectSourceFileUris();
-                this.log.appendLine(
+                if (verbose) {
+                    this.log.appendLine(
                     `[Diagnostics] Scanning ${uris.length} source file(s) for missing translation key references...`,
-                );
+                    );
+                }
 
                 const results = await Promise.all(
                     uris.map(async (uri) => {
@@ -755,6 +801,16 @@ export class CommandRegistry {
                 refreshAllSourceDiagnosticsPromise = null;
             }
         };
+
+        // Review file IntelliSense (Ctrl+Click navigation)
+        disposables.push(
+            vscode.languages.registerDefinitionProvider(reviewDocumentSelector, {
+                provideDefinition: (document, position) => reviewService.provideDefinition(document, position),
+            }),
+            vscode.languages.registerDocumentLinkProvider(reviewDocumentSelector, {
+                provideDocumentLinks: (document, token) => reviewService.provideDocumentLinks(document, token),
+            }),
+        );
 
         // Register watchers ONCE with the enhanced handler (avoids duplicate registrations)
         for (const folder of folders) {
@@ -870,10 +926,28 @@ export class CommandRegistry {
         options?: { force?: boolean },
     ): Promise<void> {
         const currentOp = operationLock.getCurrentOperation();
-        if (currentOp?.type === 'key-management' && !options?.force) {
-            // Skip per-file diagnostics while bulk key management runs
+        const shouldDebounce =
+            currentOp &&
+            !options?.force &&
+            ['key-management', 'translation-project', 'translation-file', 'cleanup-unused', 'cleanup-invalid', 'style-fix'].includes(
+                currentOp.type,
+            );
+
+        const uriKey = uri.toString();
+
+        if (shouldDebounce) {
+            const existing = this.localeDiagnosticsDebounce.get(uriKey);
+            if (existing) {
+                clearTimeout(existing);
+            }
+            const timer = setTimeout(() => {
+                this.localeDiagnosticsDebounce.delete(uriKey);
+                void this.refreshFileDiagnostics(collection, uri, extraKeys, { force: true });
+            }, CommandRegistry.LOCALE_DIAG_DEBOUNCE_MS);
+            this.localeDiagnosticsDebounce.set(uriKey, timer);
             return;
         }
+
         const config = getDiagnosticConfig();
         if (!config.enabled) {
             collection.delete(uri);
