@@ -438,27 +438,45 @@ export class BatchRecoveryHandler {
         }
 
         const tCallPattern = new RegExp(`\\b\\$?t\\(\\s*['"]${escapeRegExp(key)}['"]`);
+        const placeholderHints = this.extractPlaceholderHintsFromContent(currentContent, key);
 
         // Get file history
         try {
-            let commits: string[] = [];
-            const baseArgs = ['log', `--since=${daysBack} days ago`, '-n', '30', '--format=%H', '--', relPath.replace(/\\/g, '/')];
+            type CommitEntry = { hash: string; message: string };
+            let commits: CommitEntry[] = [];
+            const baseArgs = ['log', `--since=${daysBack} days ago`, '-n', '30', '--format=%H|%s', '--', relPath.replace(/\\/g, '/')];
             const { stdout } = await execFileAsync(
                 'git',
                 baseArgs,
                 { cwd: folder.uri.fsPath, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER },
             );
 
-            commits = stdout.trim().split('\n').filter(Boolean);
+            commits = stdout
+                .trim()
+                .split('\n')
+                .filter(Boolean)
+                .map((line) => {
+                    const [hash, ...msgParts] = line.split('|');
+                    return { hash: hash.trim(), message: msgParts.join('|').trim() };
+                })
+                .filter((c) => c.hash);
 
             // Fallback: if no commits in window, grab most recent history without date limit
             if (commits.length === 0) {
                 const { stdout: fallback } = await execFileAsync(
                     'git',
-                    ['log', '-n', '30', '--format=%H', '--', relPath.replace(/\\/g, '/')],
+                    ['log', '-n', '30', '--format=%H|%s', '--', relPath.replace(/\\/g, '/')],
                     { cwd: folder.uri.fsPath, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER },
                 );
-                commits = fallback.trim().split('\n').filter(Boolean);
+                commits = fallback
+                    .trim()
+                    .split('\n')
+                    .filter(Boolean)
+                    .map((line) => {
+                        const [hash, ...msgParts] = line.split('|');
+                        return { hash: hash.trim(), message: msgParts.join('|').trim() };
+                    })
+                    .filter((c) => c.hash);
             }
 
             if (commits.length < 2) return null;
@@ -468,14 +486,14 @@ export class BatchRecoveryHandler {
             let commitWithoutTCall: string | null = null;
 
             for (let i = 0; i < commits.length - 1; i++) {
-                const content = await this.getSourceContentAtCommit(folder, sourceFilePath, commits[i]);
+                const content = await this.getSourceContentAtCommit(folder, sourceFilePath, commits[i].hash);
                 if (!content) continue;
 
                 if (tCallPattern.test(content)) {
-                    commitWithTCall = commits[i];
-                    const nextContent = await this.getSourceContentAtCommit(folder, sourceFilePath, commits[i + 1]);
+                    commitWithTCall = commits[i].hash;
+                    const nextContent = await this.getSourceContentAtCommit(folder, sourceFilePath, commits[i + 1].hash);
                     if (nextContent && !tCallPattern.test(nextContent)) {
-                        commitWithoutTCall = commits[i + 1];
+                        commitWithoutTCall = commits[i + 1].hash;
                         break;
                     }
                 }
@@ -483,13 +501,12 @@ export class BatchRecoveryHandler {
 
             // Priority: check commits mentioning i18n/translate with their previous commit
             const keywordIndex = commits.findIndex((hash) => {
-                const msg = this.sourceContentCache.get(`msg:${hash}`);
-                return msg && /i18n|translat/i.test(msg);
+                return /i18n|translat|lang|locale|intl/i.test(hash.message);
             });
             if (keywordIndex > -1 && keywordIndex + 1 < commits.length) {
-                const fromCommit = commits[keywordIndex + 1];
-                const toCommit = commits[keywordIndex];
-                const result = await this.extractFromDiff(folder, sourceFilePath, fromCommit, toCommit, key);
+                const fromCommit = commits[keywordIndex + 1].hash;
+                const toCommit = commits[keywordIndex].hash;
+                const result = await this.extractFromDiff(folder, sourceFilePath, fromCommit, toCommit, key, placeholderHints);
                 if (result) {
                     return { value: result, source: `diff:${fromCommit.slice(0, 7)}..${toCommit.slice(0, 7)}` };
                 }
@@ -498,7 +515,7 @@ export class BatchRecoveryHandler {
             if (!commitWithTCall || !commitWithoutTCall) return null;
 
             // Get diff between commits
-            const result = await this.extractFromDiff(folder, sourceFilePath, commitWithoutTCall, commitWithTCall, key);
+            const result = await this.extractFromDiff(folder, sourceFilePath, commitWithoutTCall, commitWithTCall, key, placeholderHints);
             if (result) {
                 return { value: result, source: `diff:${commitWithoutTCall.slice(0, 7)}..${commitWithTCall.slice(0, 7)}` };
             }
@@ -562,6 +579,7 @@ export class BatchRecoveryHandler {
         fromCommit: string,
         toCommit: string,
         key: string,
+        placeholderHints: string[] = [],
     ): Promise<string | null> {
         const diffKey = `${filePath}:${fromCommit}:${toCommit}`;
         let diff = this.diffCache.get(diffKey);
@@ -593,10 +611,26 @@ export class BatchRecoveryHandler {
 
         for (const line of diffLines) {
             if (line.startsWith('@@')) {
-                if (currentHunkAdded.some(l => tCallPattern.test(l))) {
+                const addedHasT = currentHunkAdded.some(l => tCallPattern.test(l));
+                if (addedHasT) {
                     for (const removed of currentHunkRemoved) {
                         const texts = extractAllUserTextFromContent(removed, hintWords);
-                        hunkRemovedTexts.push(...texts);
+                        hunkRemovedTexts.push(
+                            ...texts
+                                .map(t => {
+                                    const lower = t.text.toLowerCase();
+                                    const hintMatches = hintWords.filter(h => lower.includes(h)).length;
+                                    const phMatches = placeholderHints.filter(p => lower.includes(p)).length;
+                                    if (hintMatches === 0 && phMatches === 0) {
+                                        return null;
+                                    }
+                                    let score = t.score;
+                                    if (phMatches > 0) score += 3 * phMatches;
+                                    score += addedHasT ? 3 : 0;
+                                    return { text: t.text, score };
+                                })
+                                .filter(Boolean) as Array<{ text: string; score: number }>
+                        );
                     }
                 }
                 currentHunkRemoved = [];
@@ -615,7 +649,20 @@ export class BatchRecoveryHandler {
         if (currentHunkAdded.some(l => tCallPattern.test(l))) {
             for (const removed of currentHunkRemoved) {
                 const texts = extractAllUserTextFromContent(removed, hintWords);
-                hunkRemovedTexts.push(...texts);
+                hunkRemovedTexts.push(
+                    ...texts
+                        .map(t => {
+                            const lower = t.text.toLowerCase();
+                            const hintMatches = hintWords.filter(h => lower.includes(h)).length;
+                            const phMatches = placeholderHints.filter(p => lower.includes(p)).length;
+                            if (hintMatches === 0 && phMatches === 0) return null;
+                            let score = t.score;
+                            if (phMatches > 0) score += 3 * phMatches;
+                            score += 3;
+                            return { text: t.text, score };
+                        })
+                        .filter(Boolean) as Array<{ text: string; score: number }>
+                );
             }
         }
 
@@ -624,8 +671,15 @@ export class BatchRecoveryHandler {
             if (line.startsWith('-') && !line.startsWith('---')) {
                 const extracted = extractHardcodedStringFromLine(line.slice(1), key);
                 if (extracted) {
-                    const score = calculateTextRelevanceScore(extracted, hintWords);
-                    hunkRemovedTexts.push({ text: extracted, score: score + 5 });
+                    const lower = extracted.toLowerCase();
+                    const hintMatches = hintWords.filter(h => lower.includes(h)).length;
+                    const phMatches = placeholderHints.filter(p => lower.includes(p)).length;
+                    if (extracted.includes('.') && !/\s/.test(extracted)) continue;
+                    if (hintMatches === 0 && phMatches === 0) {
+                        continue;
+                    }
+                    const score = calculateTextRelevanceScore(extracted, hintWords) + 5 + (phMatches > 0 ? 3 * phMatches : 0);
+                    hunkRemovedTexts.push({ text: extracted, score });
                 }
             }
         }
@@ -638,6 +692,22 @@ export class BatchRecoveryHandler {
         }
 
         return null;
+    }
+
+    private extractPlaceholderHintsFromContent(content: string, key: string): string[] {
+        const placeholders = new Set<string>();
+        const pattern = new RegExp(`\\bt\\(\\s*['"]${escapeRegExp(key)}['"]\\s*,\\s*\\{([^}]+)\\}`, 'g');
+        let match;
+        while ((match = pattern.exec(content)) !== null) {
+            const obj = match[1];
+            const props = obj.split(/[:,]/).map((p) => p.trim());
+            for (const p of props) {
+                if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p)) {
+                    placeholders.add(p.toLowerCase());
+                }
+            }
+        }
+        return Array.from(placeholders);
     }
 
     /**

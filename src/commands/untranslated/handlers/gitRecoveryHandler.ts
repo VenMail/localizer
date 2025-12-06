@@ -28,6 +28,7 @@ export interface RecoveryResult {
 
 export class GitRecoveryHandler {
     private gitRecoveryCache = new Map<string, RecoveryResult>();
+    private sourceContentCache = new Map<string, string>();
 
     constructor(
         private context?: vscode.ExtensionContext,
@@ -153,7 +154,7 @@ export class GitRecoveryHandler {
         locale: string,
         options?: GitRecoveryOptions,
     ): Promise<RecoveryResult | null> {
-        const daysBack = options?.daysBack ?? 90;
+        const daysBack = options?.daysBack ?? 365;
         const maxCommits = options?.maxCommits ?? 100;
         const extractRef = options?.extractRef ?? null;
         const logPrefix = options?.logPrefix ?? '[GitRecovery]';
@@ -277,7 +278,7 @@ export class GitRecoveryHandler {
 
         // 4. BACKUP: Search source files for original hardcoded text
         this.log?.appendLine(`${logPrefix} Trying backup strategy: searching source file git history`);
-        const sourceResult = await this.recoverFromSourceFileHistory(folder, key, daysBack, logPrefix);
+        const sourceResult = await this.searchAllSourceFilesForKey(folder, key, locale, daysBack, logPrefix);
         if (sourceResult) {
             this.gitRecoveryCache.set(cacheKey, sourceResult);
             return sourceResult;
@@ -288,11 +289,44 @@ export class GitRecoveryHandler {
     }
 
     /**
-     * Recover original text from source file git history
+     * Recover original text from a specific source file's git history
+     * @param folder Workspace folder
+     * @param sourceFilePath Path to the source file containing the key
+     * @param key Translation key to recover
+     * @param locale Locale to recover (for placeholder hints)
+     * @param daysBack Number of days to search back
+     * @param logPrefix Log prefix for output
      */
-    private async recoverFromSourceFileHistory(
+    async recoverFromSourceFileHistory(
+        folder: vscode.WorkspaceFolder,
+        sourceFilePath: string,
+        key: string,
+        locale: string,
+        daysBack: number,
+        logPrefix: string,
+    ): Promise<RecoveryResult | null> {
+        try {
+            const result = await this.extractOriginalTextFromSourceHistory(
+                folder,
+                sourceFilePath,
+                key,
+                daysBack,
+                logPrefix,
+            );
+            return result;
+        } catch (err) {
+            this.log?.appendLine(`${logPrefix} Error searching ${sourceFilePath}: ${String(err)}`);
+            return null;
+        }
+    }
+
+    /**
+     * Search all source files for a key and recover from git history
+     */
+    private async searchAllSourceFilesForKey(
         folder: vscode.WorkspaceFolder,
         key: string,
+        locale: string,
         daysBack: number,
         logPrefix: string,
     ): Promise<RecoveryResult | null> {
@@ -380,11 +414,13 @@ export class GitRecoveryHandler {
     ): Promise<RecoveryResult | null> {
         const relPath = path.relative(folder.uri.fsPath, sourceFilePath);
         const hintWords = extractHintWords(key);
+        const placeholderHints = this.extractPlaceholderHints(sourceFilePath, key);
 
         let currentContent: string;
         try {
             const data = await vscode.workspace.fs.readFile(vscode.Uri.file(sourceFilePath));
             currentContent = new TextDecoder().decode(data);
+            this.sourceContentCache.set(sourceFilePath, currentContent);
         } catch {
             return null;
         }
@@ -394,16 +430,20 @@ export class GitRecoveryHandler {
             new RegExp(`\\$t\\(\\s*['"]${escapeRegExp(key)}['"]`, 'g'),
         ];
 
-        const history = await getFileHistory(folder, sourceFilePath, daysBack, 50);
+        // Cap search window to 90 days for performance
+        const effectiveDaysBack = Math.min(daysBack, 365);
+        const history = await getFileHistory(folder, sourceFilePath, effectiveDaysBack, 50);
         if (history.commits.length === 0) return null;
 
         this.log?.appendLine(`${logPrefix} Searching ${history.commits.length} commits in ${relPath}`);
 
         // Strategy 0: prioritize commits mentioning i18n/translate and check their diffs first
         const keywordCommits: Array<{ current: string; previous: string }> = [];
+        let firstKeywordIdx = -1;
         for (let i = 0; i < history.commits.length; i++) {
             const commit = history.commits[i];
-            if (/i18n|translat/i.test(commit.message)) {
+            if (/i18n|translat|lang|locale|intl/i.test(commit.message)) {
+                if (firstKeywordIdx === -1) firstKeywordIdx = i;
                 const prev = history.commits[i + 1]?.hash;
                 if (prev) {
                     keywordCommits.push({ current: commit.hash, previous: prev });
@@ -428,20 +468,21 @@ export class GitRecoveryHandler {
             const candidates: Array<{ text: string; score: number }> = [];
             const addedHasTCall = addedLines.some((l) => /\bt\(\s*['"]/.test(l) || /\$t\(\s*['"]/.test(l));
             const placeholderPattern = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/g;
+            const looksLikeKey = (txt: string) => txt.includes('.') && !/\s/.test(txt);
 
             for (const line of removedLines) {
-                const extracted = extractHardcodedStringFromLine(line, key);
-                if (extracted) {
-                    let score = calculateTextRelevanceScore(extracted, hintWords) + 5;
-                    const placeholders = extracted.match(placeholderPattern) || [];
-                    if (placeholders.length > 0) score += 2;
-                    if (addedHasTCall) score += 3;
-                    if (/\s/.test(extracted)) score += 1;
-                    candidates.push({ text: extracted, score });
-                }
+                // Extract user-facing text (template literals, strings, etc.)
                 const texts = extractAllUserTextFromContent(line, hintWords);
                 for (const t of texts) {
+                    const lower = t.text.toLowerCase();
+                    const hintMatches = hintWords.filter(h => lower.includes(h)).length;
+                    const phMatches = placeholderHints.filter(p => lower.includes(p)).length;
+                    if (looksLikeKey(t.text)) continue;
+                    if (hintMatches === 0 && phMatches === 0) continue;
                     let score = t.score;
+                    for (const ph of placeholderHints) {
+                        if (t.text.toLowerCase().includes(ph)) score += 3;
+                    }
                     const placeholders = (t.text.match(placeholderPattern) || []).length;
                     if (placeholders > 0) score += 2;
                     if (addedHasTCall) score += 3;
@@ -451,8 +492,8 @@ export class GitRecoveryHandler {
 
             if (!candidates.length) return null;
             candidates.sort((a, b) => b.score - a.score);
-            const best = candidates[0];
-            if (best.score >= 3) {
+            const best = candidates.find(c => this.isAcceptableCandidate(c.text, hintWords, placeholderHints));
+            if (best && best.score >= 5) {
                 return {
                     value: best.text,
                     source: `diff:${fromCommit.slice(0, 7)}..${toCommit.slice(0, 7)}`,
@@ -470,11 +511,15 @@ export class GitRecoveryHandler {
         }
 
         // STRATEGY 1: Find commit that introduced t('key') and analyze diff
-        const diffResult = await this.findOriginalTextFromDiff(folder, sourceFilePath, key, history, logPrefix);
+        const diffResult = await this.findOriginalTextFromDiff(folder, sourceFilePath, key, history, logPrefix, placeholderHints);
         if (diffResult) return diffResult;
 
         // STRATEGY 2: Find a commit without t('key')
-        for (const commit of history.commits) {
+        const orderedCommits =
+            firstKeywordIdx > -1 ? history.commits.slice(firstKeywordIdx) : history.commits;
+
+        let bestCandidate: { value: string; source: string; score: number } | null = null;
+        for (const commit of orderedCommits) {
             const oldContent = await getFileContentAtCommit(folder, sourceFilePath, commit.hash);
             if (!oldContent) continue;
 
@@ -494,19 +539,26 @@ export class GitRecoveryHandler {
 
                 if (candidates.length > 0) {
                     candidates.sort((a, b) => b.score - a.score);
-                    const best = candidates[0];
+                    const best = candidates.find(c => this.isAcceptableCandidate(c.text, hintWords, placeholderHints));
 
-                    if (best.score >= 5) {
-                        this.log?.appendLine(
-                            `${logPrefix} Found matching text (score=${best.score}) in ${relPath} @ ${commit.hash.slice(0, 7)}: "${best.text.slice(0, 50)}..."`
-                        );
-                        return {
-                            value: best.text,
-                            source: `source:${commit.hash}:${relPath}`,
-                        };
+                    if (best && best.score >= 6) {
+                        if (!bestCandidate || best.score > bestCandidate.score) {
+                            bestCandidate = {
+                                value: best.text,
+                                source: `source:${commit.hash}:${relPath}`,
+                                score: best.score,
+                            };
+                        }
                     }
                 }
             }
+        }
+
+        if (bestCandidate) {
+            this.log?.appendLine(
+                `${logPrefix} Found matching text (score=${bestCandidate.score}) in ${relPath} @ ${bestCandidate.source.split(':')[1]?.slice(0, 7)}`
+            );
+            return { value: bestCandidate.value, source: bestCandidate.source };
         }
 
         return null;
@@ -521,6 +573,7 @@ export class GitRecoveryHandler {
         key: string,
         history: { commits: Array<{ hash: string; date: Date; message: string; author: string }> },
         logPrefix: string,
+        placeholderHints: string[],
     ): Promise<RecoveryResult | null> {
         const tCallPattern = new RegExp(`\\b\\$?t\\(\\s*['"]${escapeRegExp(key)}['"]`);
 
@@ -564,7 +617,9 @@ export class GitRecoveryHandler {
                 if (currentHunkAdded.some(l => tCallPattern.test(l))) {
                     for (const removed of currentHunkRemoved) {
                         const texts = extractAllUserTextFromContent(removed, hintWords);
-                        hunkRemovedTexts.push(...texts);
+                        hunkRemovedTexts.push(
+                            ...texts.filter(t => this.hasSignal(t.text, hintWords, placeholderHints) && !this.isKeyLike(t.text))
+                        );
                     }
                 }
                 currentHunkRemoved = [];
@@ -583,7 +638,9 @@ export class GitRecoveryHandler {
         if (currentHunkAdded.some(l => tCallPattern.test(l))) {
             for (const removed of currentHunkRemoved) {
                 const texts = extractAllUserTextFromContent(removed, hintWords);
-                hunkRemovedTexts.push(...texts);
+                hunkRemovedTexts.push(
+                    ...texts.filter(t => this.hasSignal(t.text, hintWords, placeholderHints) && !this.isKeyLike(t.text))
+                );
             }
         }
 
@@ -592,17 +649,19 @@ export class GitRecoveryHandler {
             if (line.startsWith('-') && !line.startsWith('---')) {
                 const extracted = extractHardcodedStringFromLine(line.slice(1), key);
                 if (extracted) {
-                    const score = calculateTextRelevanceScore(extracted, hintWords);
-                    hunkRemovedTexts.push({ text: extracted, score: score + 5 });
+                    if (this.hasSignal(extracted, hintWords, placeholderHints) && !this.isKeyLike(extracted)) {
+                        const score = calculateTextRelevanceScore(extracted, hintWords);
+                        hunkRemovedTexts.push({ text: extracted, score: score + 5 });
+                    }
                 }
             }
         }
 
         if (hunkRemovedTexts.length > 0) {
             hunkRemovedTexts.sort((a, b) => b.score - a.score);
-            const best = hunkRemovedTexts[0];
+            const best = hunkRemovedTexts.find(t => this.isAcceptableCandidate(t.text, hintWords, placeholderHints));
 
-            if (best.score >= 3) {
+            if (best && best.score >= 3) {
                 this.log?.appendLine(
                     `${logPrefix} Found original text from diff (score=${best.score}): "${best.text.slice(0, 50)}..."`
                 );
@@ -614,6 +673,76 @@ export class GitRecoveryHandler {
         }
 
         return null;
+    }
+
+    /**
+     * Extract placeholder names from current source usage of the key for better matching.
+     */
+    private extractPlaceholderHints(sourceFilePath: string, key: string): string[] {
+        const loadAndCache = async (): Promise<string> => {
+            try {
+                const data = await vscode.workspace.fs.readFile(vscode.Uri.file(sourceFilePath));
+                const decoded = new TextDecoder().decode(data);
+                this.sourceContentCache.set(sourceFilePath, decoded);
+                return decoded;
+            } catch {
+                return '';
+            }
+        };
+
+        const content = this.sourceContentCache.get(sourceFilePath);
+        if (!content) {
+            // Best-effort synchronous return when not cached: return empty to avoid async ripple
+            // and schedule cache fill for future calls.
+            void loadAndCache();
+            return [];
+        }
+
+        const placeholders = new Set<string>();
+        const pattern = new RegExp(`\\bt\\(\\s*['"]${escapeRegExp(key)}['"]\\s*,\\s*\\{([^}]+)\\}`, 'g');
+        let match;
+        while ((match = pattern.exec(content)) !== null) {
+            const obj = match[1];
+            const props = obj.split(/[:,]/).map((p) => p.trim());
+            for (const p of props) {
+                if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p)) {
+                    placeholders.add(p.toLowerCase());
+                }
+            }
+        }
+        return Array.from(placeholders);
+    }
+
+    private isKeyLike(text: string): boolean {
+        return text.includes('.') && !/\s/.test(text);
+    }
+
+    private hasSignal(text: string, hintWords: string[], placeholderHints: string[]): boolean {
+        const lower = text.toLowerCase();
+        const hasHint = hintWords.some(h => lower.includes(h));
+        const hasPlaceholder = placeholderHints.some(p => lower.includes(p));
+        return hasHint || hasPlaceholder;
+    }
+
+    private isAcceptableCandidate(text: string, hintWords: string[], placeholderHints: string[]): boolean {
+        const trimmed = text.trim();
+        if (!trimmed) return false;
+        if (trimmed.length > 160) return false;
+        if (trimmed.includes('\n')) return false;
+        if (this.isKeyLike(trimmed)) return false;
+        if (!(/\s/.test(trimmed) || /\{[a-zA-Z_]/.test(trimmed))) return false;
+        if (!this.hasSignal(trimmed, hintWords, placeholderHints)) return false;
+        return this.meetsHintThreshold(trimmed, hintWords, placeholderHints);
+    }
+
+    private meetsHintThreshold(text: string, hintWords: string[], placeholderHints: string[]): boolean {
+        const lower = text.toLowerCase();
+        const hintMatches = hintWords.filter(h => lower.includes(h)).length;
+        const placeholderMatches = placeholderHints.filter(p => lower.includes(p)).length;
+        const target = hintWords.length >= 3 ? Math.ceil(hintWords.length * 0.6) : 1;
+        if (hintMatches >= target) return true;
+        if (hintMatches >= target - 1 && placeholderMatches > 0 && hintWords.length >= 2) return true;
+        return false;
     }
 
     /**

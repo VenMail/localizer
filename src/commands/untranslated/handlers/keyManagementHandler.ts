@@ -138,11 +138,32 @@ export class KeyManagementHandler {
         }
 
         // STEP 2: Try to recover value from git history
+        this.log?.appendLine(`[MissingRefFix] Attempting git recovery for "${key}" from source file: ${documentUri.fsPath}`);
+        
+        // Try source file history first (most likely to have the original text)
+        const sourceFileRecovery = await this.gitRecoveryHandler.recoverFromSourceFileHistory(
+            folder,
+            documentUri.fsPath,
+            key,
+            defaultLocale,
+            365,
+            '[MissingRefFix]'
+        );
+        
+        if (sourceFileRecovery) {
+            await setTranslationValue(folder, defaultLocale, key, sourceFileRecovery.value, { rootName });
+            vscode.window.showInformationMessage(
+                `AI Localizer: Restored "${key}" = "${sourceFileRecovery.value.slice(0, 50)}${sourceFileRecovery.value.length > 50 ? '...' : ''}" from ${sourceFileRecovery.source}.`,
+            );
+            return;
+        }
+        
+        // Fallback to locale file history
         const localeUris = await this.gitRecoveryHandler.getLocaleFileUris(folder, defaultLocale, this.i18nIndex);
         const recovery = await this.gitRecoveryHandler.recoverKeyFromGit(folder, localeUris, key, defaultLocale, {
-            daysBack: 60,
-            maxCommits: 40,
-            perDayCommitLimit: 3,
+            daysBack: 365,
+            maxCommits: 100,
+            perDayCommitLimit: 5,
             logPrefix: '[MissingRefFix]',
         });
 
