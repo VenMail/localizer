@@ -518,9 +518,29 @@ export class CleanupHandler {
                     freshRoot = {};
                 }
 
+                // Verify that keys are safe to delete by checking for current usages
                 const deletedKeys = new Set<string>();
+                const keysStillInUse: string[] = [];
+                
                 for (const item of invalid) {
                     if (!item || typeof item.keyPath !== 'string') continue;
+                    
+                    // Check if the key still has any references in the codebase
+                    await this.i18nIndex.ensureInitialized();
+                    const record = this.i18nIndex.getRecord(item.keyPath);
+                    
+                    // If the key has a record and it's used in code, don't delete it
+                    if (record && record.locations && record.locations.length > 0) {
+                        // The key is still referenced in locale files, check if it's actually used in code
+                        // We need to scan the codebase to check for actual usages
+                        const hasCurrentUsages = await this.checkKeyUsageInCode(folder!, item.keyPath);
+                        
+                        if (hasCurrentUsages) {
+                            keysStillInUse.push(item.keyPath);
+                            continue; // Skip deletion for this key
+                        }
+                    }
+                    
                     if (deleteKeyPathInObject(freshRoot, item.keyPath)) {
                         deletedKeys.add(item.keyPath);
                     }
@@ -539,7 +559,7 @@ export class CleanupHandler {
                     );
                 }
 
-                return { codeRestoreCount, deletedKeys };
+                return { codeRestoreCount, deletedKeys, keysStillInUse };
             }
         );
 
@@ -547,11 +567,65 @@ export class CleanupHandler {
             return;
         }
 
-        const { codeRestoreCount, deletedKeys } = result;
-        const message = codeRestoreCount > 0
+        const { codeRestoreCount, deletedKeys, keysStillInUse } = result;
+        
+        let message = codeRestoreCount > 0
             ? `AI Localizer: Restored ${codeRestoreCount} code reference(s) and removed ${deletedKeys.size} invalid key(s) from this file.`
             : `AI Localizer: Removed ${deletedKeys.size} invalid/non-translatable key(s) from this file.`;
+        
+        if (keysStillInUse && keysStillInUse.length > 0) {
+            message += ` Note: ${keysStillInUse.length} key(s) skipped because they are still in use.`;
+        }
+        
         vscode.window.showInformationMessage(message);
+    }
+
+    /**
+     * Check if a key is currently used in source code
+     */
+    private async checkKeyUsageInCode(
+        folder: vscode.WorkspaceFolder,
+        keyPath: string,
+    ): Promise<boolean> {
+        const cfg = vscode.workspace.getConfiguration('ai-localizer');
+        const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
+        const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
+            '**/node_modules/**',
+            '**/.git/**',
+            '**/dist/**',
+            '**/build/**',
+        ];
+
+        // Search patterns for the key
+        const searchPatterns = [
+            `t('${keyPath}'`,
+            `t("${keyPath}"`,
+            `$t('${keyPath}'`,
+            `$t("${keyPath}"`,
+        ];
+
+        const include = sourceGlobs.length === 1 ? sourceGlobs[0] : `{${sourceGlobs.join(',')}}`;
+        const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
+
+        const pattern = new vscode.RelativePattern(folder, include);
+        const uris = await vscode.workspace.findFiles(pattern, exclude, 100);
+
+        for (const uri of uris) {
+            try {
+                const data = await vscode.workspace.fs.readFile(uri);
+                const content = new TextDecoder().decode(data);
+
+                for (const searchPattern of searchPatterns) {
+                    if (content.includes(searchPattern)) {
+                        return true; // Key is still in use
+                    }
+                }
+            } catch {
+                // Skip files that can't be read
+            }
+        }
+
+        return false; // Key not found in any source files
     }
 
     /**

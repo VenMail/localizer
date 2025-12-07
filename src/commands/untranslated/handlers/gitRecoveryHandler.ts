@@ -208,9 +208,10 @@ export class GitRecoveryHandler {
         // 2. Search git history for each file
         const commitJsonCache = new Map<string, any>();
         let totalCommitsChecked = 0;
+        let foundSuspiciousValue = false; // Track if we found suspicious values
 
         for (const filePath of normalizedPaths) {
-            if (totalCommitsChecked >= maxCommits) break;
+            if (totalCommitsChecked >= maxCommits || foundSuspiciousValue) break;
 
             try {
                 const history = await getFileHistory(folder, filePath, daysBack, maxCommits);
@@ -240,40 +241,69 @@ export class GitRecoveryHandler {
                     for (const keyVariant of keyVariations) {
                         const value = getNestedValue(json, keyVariant);
                         if (value && typeof value === 'string') {
-                            const result = { value, source: `history:${commit.hash}` };
-                            this.gitRecoveryCache.set(cacheKey, result);
+                            // Quality check: if the value looks like a badly extracted placeholder
+                            // (e.g., "Value1 allowed value2 sent" instead of "{value1} allowed {value2} sent"),
+                            // skip locale history entirely and go straight to source history
+                            const isSuspicious = this.hasSuspiciousPlaceholderPattern(value);
+                            
+                            if (isSuspicious) {
+                                this.log?.appendLine(
+                                    `${logPrefix} ⚠️  Found suspicious value in history (${commit.hash.slice(0, 7)}): "${value.slice(0, 50)}..." - will skip locale history and try source history instead`
+                                );
+                                console.log(`[GitRecovery] SUSPICIOUS VALUE DETECTED: "${value}"`);
+                                foundSuspiciousValue = true;
+                                break;
+                            }
+                            
                             this.log?.appendLine(
-                                `${logPrefix} Found in history (${commit.hash.slice(0, 7)}): ${keyVariant} = "${value.slice(0, 50)}..."`
+                                `${logPrefix} ✓ Found clean value in history (${commit.hash.slice(0, 7)}): ${keyVariant} = "${value.slice(0, 50)}..."`
                             );
+                            const result = { value, source: `locale-history:${path.basename(filePath)}@${commit.hash.slice(0, 7)}` };
+                            this.gitRecoveryCache.set(cacheKey, result);
                             return result;
                         }
                     }
+                    
+                    if (foundSuspiciousValue) break;
                 }
             } catch (err) {
                 this.log?.appendLine(`${logPrefix} History fetch failed for ${filePath}: ${String(err)}`);
             }
         }
 
-        // 3. Search in HEAD for all possible files
-        this.log?.appendLine(`${logPrefix} Searching current HEAD for key in any locale file`);
-        for (const filePath of normalizedPaths) {
-            try {
-                const content = await getFileContentAtCommit(folder, filePath, 'HEAD');
-                if (content) {
-                    const json = JSON.parse(content);
-                    for (const keyVariant of keyVariations) {
-                        const value = getNestedValue(json, keyVariant);
-                        if (value && typeof value === 'string') {
-                            const result = { value, source: 'head' };
-                            this.gitRecoveryCache.set(cacheKey, result);
-                            this.log?.appendLine(`${logPrefix} Found in HEAD: ${keyVariant} = "${value.slice(0, 50)}..."`);
-                            return result;
+        // 3. Search in HEAD for all possible files (skip if we found suspicious locale values)
+        if (!foundSuspiciousValue) {
+            this.log?.appendLine(`${logPrefix} Searching current HEAD for key in any locale file`);
+            for (const filePath of normalizedPaths) {
+                try {
+                    const content = await getFileContentAtCommit(folder, filePath, 'HEAD');
+                    if (content) {
+                        const json = JSON.parse(content);
+                        for (const keyVariant of keyVariations) {
+                            const value = getNestedValue(json, keyVariant);
+                            if (value && typeof value === 'string') {
+                                // Quality check: skip suspicious placeholder patterns
+                                if (this.hasSuspiciousPlaceholderPattern(value)) {
+                                    this.log?.appendLine(
+                                        `${logPrefix} Found suspicious value in HEAD: "${value.slice(0, 50)}..." - will try source history instead`
+                                    );
+                                    foundSuspiciousValue = true;
+                                    break;
+                                }
+                                
+                                const result = { value, source: 'head' };
+                                this.gitRecoveryCache.set(cacheKey, result);
+                                this.log?.appendLine(`${logPrefix} Found in HEAD: ${keyVariant} = "${value.slice(0, 50)}..."`);
+                                return result;
+                            }
                         }
                     }
+                } catch {
+                    // Continue
                 }
-            } catch {
-                // Continue
             }
+        } else {
+            this.log?.appendLine(`${logPrefix} Skipping HEAD search due to suspicious locale values`);
         }
 
         // 4. BACKUP: Search source files for original hardcoded text
@@ -470,10 +500,32 @@ export class GitRecoveryHandler {
             const placeholderPattern = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/g;
             const looksLikeKey = (txt: string) => txt.includes('.') && !/\s/.test(txt);
 
+            // First, extract from individual lines
             for (const line of removedLines) {
-                // Extract user-facing text (template literals, strings, etc.)
                 const texts = extractAllUserTextFromContent(line, hintWords);
                 for (const t of texts) {
+                    const lower = t.text.toLowerCase();
+                    const hintMatches = hintWords.filter(h => lower.includes(h)).length;
+                    const phMatches = placeholderHints.filter(p => lower.includes(p)).length;
+                    if (looksLikeKey(t.text)) continue;
+                    if (hintMatches === 0 && phMatches === 0) continue;
+                    let score = t.score;
+                    for (const ph of placeholderHints) {
+                        if (t.text.toLowerCase().includes(ph)) score += 3;
+                    }
+                    const placeholders = (t.text.match(placeholderPattern) || []).length;
+                    if (placeholders > 0) score += 2;
+                    if (addedHasTCall) score += 3;
+                    candidates.push({ text: t.text, score });
+                }
+            }
+
+            // CRITICAL: Also extract from joined lines (handles multi-line template literals)
+            if (removedLines.length > 1) {
+                const joinedRemoved = removedLines.join('\n');
+                const joinedTexts = extractAllUserTextFromContent(joinedRemoved, hintWords);
+                
+                for (const t of joinedTexts) {
                     const lower = t.text.toLowerCase();
                     const hintMatches = hintWords.filter(h => lower.includes(h)).length;
                     const phMatches = placeholderHints.filter(p => lower.includes(p)).length;
@@ -717,6 +769,45 @@ export class GitRecoveryHandler {
         return text.includes('.') && !/\s/.test(text);
     }
 
+    /**
+     * Check if a value looks like a badly extracted placeholder pattern.
+     * Examples of suspicious patterns:
+     * - "Value1 allowed value2 sent" (should be "{value1} allowed {value2} sent")
+     * - "Total value1 items" (should be "Total {value1} items")
+     * - "Found total domains" (missing placeholders entirely)
+     */
+    private hasSuspiciousPlaceholderPattern(value: string): boolean {
+        // Pattern 1: Contains "value1", "value2", etc. WITHOUT braces
+        // This indicates placeholder names were extracted but not properly wrapped
+        // First, remove all valid {placeholder} patterns from the text
+        const withoutValidPlaceholders = value.replace(/\{[a-zA-Z_][a-zA-Z0-9_]*\}/g, '');
+        
+        // Now check if "value1", "value2", etc. appear in the remaining text (not in braces)
+        if (/\b[Vv]alue\d+\b/.test(withoutValidPlaceholders)) {
+            return true;
+        }
+
+        // Pattern 2: Contains common placeholder variable names in PascalCase or camelCase without braces
+        // e.g., "Total Count items" instead of "Total {count} items"
+        const commonPlaceholders = /\b(Count|Total|Name|Value|Item|User|Email|Date|Time|Status|Type|Id)\b/;
+        const hasCommonPlaceholder = commonPlaceholders.test(value);
+        
+        // If it has a common placeholder word AND the key suggests it should have interpolation
+        // (e.g., key contains "value1", "count", "total"), it's suspicious
+        if (hasCommonPlaceholder) {
+            // Additional check: if the value has multiple capital words in sequence, it's likely mangled
+            // e.g., "Value1 Allowed Value2 Sent"
+            if (/[A-Z][a-z]+\s+[A-Z][a-z]+/.test(value)) {
+                return true;
+            }
+        }
+
+        // Pattern 3: Key name suggests placeholders but value has none
+        // This is less reliable, so we'll skip for now to avoid false positives
+
+        return false;
+    }
+
     private hasSignal(text: string, hintWords: string[], placeholderHints: string[]): boolean {
         const lower = text.toLowerCase();
         const hasHint = hintWords.some(h => lower.includes(h));
@@ -739,9 +830,19 @@ export class GitRecoveryHandler {
         const lower = text.toLowerCase();
         const hintMatches = hintWords.filter(h => lower.includes(h)).length;
         const placeholderMatches = placeholderHints.filter(p => lower.includes(p)).length;
+        
+        // CRITICAL: Also count ANY placeholders in the text (even if they don't match hint names)
+        // This handles cases where placeholder names differ between git history and current code
+        const anyPlaceholders = (text.match(/\{[a-zA-Z_][a-zA-Z0-9_]*\}/g) || []).length;
+        
         const target = hintWords.length >= 3 ? Math.ceil(hintWords.length * 0.6) : 1;
         if (hintMatches >= target) return true;
-        if (hintMatches >= target - 1 && placeholderMatches > 0 && hintWords.length >= 2) return true;
+        
+        // Be lenient: if we have ANY placeholders and match most hint words, accept it
+        if (hintMatches >= target - 1 && (placeholderMatches > 0 || anyPlaceholders > 0) && hintWords.length >= 2) {
+            return true;
+        }
+        
         return false;
     }
 

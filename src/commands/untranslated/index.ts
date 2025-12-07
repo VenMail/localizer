@@ -43,6 +43,7 @@ export class UntranslatedCommands {
         this.keyManagementHandler = new KeyManagementHandler(
             i18nIndex,
             this.gitRecoveryHandler,
+            translationService,
             context,
             log,
         );

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { I18nIndex, extractKeyAtPosition } from '../../../core/i18nIndex';
 import { setTranslationValue, setTranslationValuesBatch, deriveRootFromFile } from '../../../core/i18nFs';
 import { getGranularSyncService } from '../../../services/granularSyncService';
+import { TranslationService } from '../../../services/translationService';
 import { pickWorkspaceFolder } from '../../../core/workspace';
 import { findKeyInHistory, getFileContentAtCommit } from '../../../core/gitHistory';
 import { CommitTracker } from '../../../core/commitTracker';
@@ -31,6 +32,7 @@ export class KeyManagementHandler {
     constructor(
         private i18nIndex: I18nIndex,
         private gitRecoveryHandler: GitRecoveryHandler,
+        private translationService: TranslationService,
         private context?: vscode.ExtensionContext,
         private log?: vscode.OutputChannel,
     ) {}
@@ -479,7 +481,7 @@ export class KeyManagementHandler {
                                 const bestParts = bestKey.split('.').filter(Boolean);
                                 const bestLeaf = bestParts[bestParts.length - 1] || '';
                                 const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
-                                if (maxLen > 0 && bestScore <= Math.max(2, Math.floor(maxLen / 2))) {
+                                if (maxLen > 0 && bestScore <= Math.max(2, Math.floor(maxLen / 4))) {
                                     edit.replace(documentUri, range, bestKey);
                                     fixedCount++;
                                     continue;
@@ -490,47 +492,97 @@ export class KeyManagementHandler {
                             keysNeedingRecovery.push({ key, range, hasVariables });
                         }
 
-                        // PHASE 2: Batch recover keys from git (parallel processing)
                         const keysNeedingReview: Array<{ key: string; generatedValue: string }> = [];
                         let recoveredCount = 0;
 
                         if (keysNeedingRecovery.length > 0) {
-                            progress.report({ 
-                                message: `Recovering ${keysNeedingRecovery.length} key(s) from git history...` 
+                            progress.report({
+                                message: `Recovering ${keysNeedingRecovery.length} key(s) from git history...`,
                             });
 
                             const batchRecovery = getBatchRecoveryHandler(this.context, this.log);
                             const extractRef = batchRecovery.getExtractCommitRef(folder!);
-                            
-                            const keysToRecover = keysNeedingRecovery.map(k => k.key);
+
+                            const keysToRecover = keysNeedingRecovery.map((k) => k.key);
                             const recoveryResults = await batchRecovery.recoverKeysBatch(
                                 folder!,
                                 keysToRecover,
                                 defaultLocale,
                                 {
-                                    daysBack: 120,
-                                    maxCommitsPerFile: 20,
+                                    daysBack: 365,
+                                    maxCommitsPerFile: 100,
                                     extractRef,
                                 },
                             );
 
-                            // Process recovery results
+                            const unresolvedKeys: string[] = [];
+
                             for (const { key } of keysNeedingRecovery) {
                                 const result = recoveryResults.get(key);
-                                
+
                                 if (result && result.value) {
                                     batchUpdates.set(key, { value: result.value, rootName });
                                     createdCount++;
                                     recoveredCount++;
-                                } else {
-                                    // Fallback: generate label from key
-                                    const keyParts = key.split('.').filter(Boolean);
-                                    const lastSegment = keyParts[keyParts.length - 1] || '';
-                                    const label = buildLabelFromKeySegment(lastSegment) || key;
-                                    batchUpdates.set(key, { value: label, rootName });
-                                    keysNeedingReview.push({ key, generatedValue: label });
-                                    createdCount++;
+                                    continue;
                                 }
+
+                                let sourceRecovery: { value: string } | null = null;
+                                try {
+                                    sourceRecovery = await this.gitRecoveryHandler.recoverFromSourceFileHistory(
+                                        folder!,
+                                        documentUri.fsPath,
+                                        key,
+                                        defaultLocale,
+                                        365,
+                                        '[BulkMissingRef]',
+                                    );
+                                } catch {
+                                    sourceRecovery = null;
+                                }
+
+                                if (sourceRecovery && sourceRecovery.value) {
+                                    batchUpdates.set(key, { value: sourceRecovery.value, rootName });
+                                    createdCount++;
+                                    recoveredCount++;
+                                    continue;
+                                }
+
+                                unresolvedKeys.push(key);
+                            }
+
+                            let aiDefaults = new Map<string, string>();
+                            if (unresolvedKeys.length > 0) {
+                                try {
+                                    aiDefaults = await this.inferDefaultValuesForMissingKeysWithAI(
+                                        text,
+                                        unresolvedKeys,
+                                    );
+                                } catch {
+                                    aiDefaults = new Map<string, string>();
+                                }
+                            }
+
+                            for (const key of unresolvedKeys) {
+                                const aiValue = aiDefaults.get(key);
+                                if (aiValue && aiValue.trim()) {
+                                    batchUpdates.set(key, { value: aiValue.trim(), rootName });
+                                    createdCount++;
+                                    continue;
+                                }
+
+                                const keyParts = key.split('.').filter(Boolean);
+                                const lastSegment = keyParts[keyParts.length - 1] || '';
+                                let label = buildLabelFromKeySegment(lastSegment) || key;
+
+                                if (/last[_\s]+(\d+)\b/i.test(lastSegment) && !/\bdays?\b/i.test(label)) {
+                                    const replaced = label.replace(/last\s+(\d+)\b/i, 'last $1 days');
+                                    label = replaced !== label ? replaced : `${label} days`;
+                                }
+
+                                batchUpdates.set(key, { value: label, rootName });
+                                createdCount++;
+                                keysNeedingReview.push({ key, generatedValue: label });
                             }
                         }
 
@@ -566,7 +618,6 @@ export class KeyManagementHandler {
                             }
                         }
 
-                        // PHASE 5: Generate review report if there are keys that couldn't be recovered
                         if (keysNeedingReview.length > 0) {
                             await this.generateReviewReport(folder!, documentUri, keysNeedingReview);
                         }
@@ -614,6 +665,79 @@ export class KeyManagementHandler {
                 );
             }
         }
+    }
+
+    private async inferDefaultValuesForMissingKeysWithAI(
+        fileText: string,
+        keys: string[],
+    ): Promise<Map<string, string>> {
+        const result = new Map<string, string>();
+        if (!this.translationService || !keys.length) {
+            return result;
+        }
+
+        let apiKey = '';
+        try {
+            apiKey = await this.translationService.getApiKey();
+        } catch {
+            apiKey = '';
+        }
+
+        if (!apiKey) {
+            return result;
+        }
+
+        const uniqueKeys = Array.from(new Set(keys.filter((k) => typeof k === 'string' && k.trim())));
+        if (!uniqueKeys.length) {
+            return result;
+        }
+
+        const snippetLimit = 12000;
+        let context = fileText || '';
+        if (context.length > snippetLimit) {
+            context = context.slice(0, snippetLimit);
+        }
+
+        const keyList = uniqueKeys.join('\n');
+        const questionLines = [
+            'We have an i18n system using t("keyPath") calls in a React/TypeScript codebase.',
+            'For each key below, guess a concise, natural-sounding English UI text suitable for the default locale (en).',
+            'Respond with one key per line in this exact format:',
+            '<key>\t<value>',
+            'Do not include any other commentary or explanation.',
+            '',
+            'Keys:',
+            keyList,
+        ];
+        const question = questionLines.join('\n');
+
+        let answer: string;
+        try {
+            answer = await this.translationService.askQuestion(question, context);
+        } catch {
+            return result;
+        }
+
+        if (!answer) {
+            return result;
+        }
+
+        const wanted = new Set(uniqueKeys);
+        const lines = answer.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        for (const line of lines) {
+            const idx = line.indexOf('\t');
+            if (idx <= 0) {
+                continue;
+            }
+            const key = line.slice(0, idx).trim();
+            const value = line.slice(idx + 1).trim();
+            if (!key || !value || !wanted.has(key)) {
+                continue;
+            }
+            result.set(key, value);
+        }
+
+        return result;
     }
 
     /**

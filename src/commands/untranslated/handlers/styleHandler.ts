@@ -183,16 +183,21 @@ export class StyleHandler {
                 return;
             }
 
+            // Fix issues in the correct order to avoid recursion:
+            // 1. Restore invalid keys first (removes them from code and locale files)
+            // 2. Translate untranslated keys (for remaining valid keys)
+            // 3. Cleanup unused keys (after translations are added)
+            // 4. Apply style suggestions (final cleanup)
+            await vscode.commands.executeCommand(
+                'ai-localizer.i18n.restoreInvalidKeysInFile',
+                targetUri,
+            );
             await vscode.commands.executeCommand(
                 'ai-localizer.i18n.translateAllUntranslatedInFile',
                 targetUri,
             );
             await vscode.commands.executeCommand(
                 'ai-localizer.i18n.cleanupUnusedKeysInFile',
-                targetUri,
-            );
-            await vscode.commands.executeCommand(
-                'ai-localizer.i18n.restoreInvalidKeysInFile',
                 targetUri,
             );
             await vscode.commands.executeCommand(
