@@ -581,7 +581,10 @@ export class CommandRegistry {
             ];
 
         const sourceIncludeGlobs =
-            globalCfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
+            globalCfg.get<string[]>('i18n.sourceGlobs') || [
+                '**/*.{ts,tsx,js,jsx,vue,php}',
+                '**/*.blade.php',
+            ];
         const sourceExcludeGlobs =
             globalCfg.get<string[]>('i18n.sourceExcludeGlobs') || [
                 '**/node_modules/**',
@@ -701,7 +704,15 @@ export class CommandRegistry {
         };
 
         const isSourceFile = (languageId: string): boolean => {
-            return ['typescript', 'typescriptreact', 'javascript', 'javascriptreact', 'vue'].includes(languageId);
+            return [
+                'typescript',
+                'typescriptreact',
+                'javascript',
+                'javascriptreact',
+                'vue',
+                'php',
+                'blade',
+            ].includes(languageId);
         };
 
         // Debounce map for source file analysis

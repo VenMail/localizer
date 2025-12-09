@@ -207,6 +207,7 @@ export function normalizeTemplateLiteral(content: string): string | null {
     const exprPattern = /\$\{([^}]+)\}/g;
     let match;
     let placeholderIndex = 1; // CRITICAL: Use generic value1, value2, etc. for consistency
+    const usedNames = new Set<string>();
 
     while ((match = exprPattern.exec(content)) !== null) {
         const staticText = content.slice(lastIndex, match.index);
@@ -214,9 +215,25 @@ export function normalizeTemplateLiteral(content: string): string | null {
             pieces.push(staticText);
         }
 
-        // Use generic value1, value2, etc. instead of derived names
-        // This ensures consistency with how keys were originally extracted
-        pieces.push(`{value${placeholderIndex}}`);
+        const expr = match[1] || '';
+
+        // Prefer a derived name from the expression when possible
+        let baseName = derivePlaceholderName(expr);
+        if (!baseName || baseName === 'value') {
+            // Fall back to generic value1, value2, etc. when we cannot infer a better name
+            baseName = `value${placeholderIndex}`;
+        }
+
+        // Ensure placeholder names are unique within this template
+        let uniqueName = baseName;
+        let counter = 2;
+        while (usedNames.has(uniqueName)) {
+            uniqueName = `${baseName}${counter}`;
+            counter += 1;
+        }
+        usedNames.add(uniqueName);
+
+        pieces.push(`{${uniqueName}}`);
         placeholderIndex++;
         lastIndex = match.index + match[0].length;
     }

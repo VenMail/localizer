@@ -1004,7 +1004,14 @@ export class DiagnosticAnalyzer {
         const languageId = this.getLanguageIdForUri(uri);
         
         // Only analyze supported source file types
-        const supportedLanguages = ['typescript', 'typescriptreact', 'javascript', 'javascriptreact', 'vue'];
+        const supportedLanguages = [
+            'typescript',
+            'typescriptreact',
+            'javascript',
+            'javascriptreact',
+            'vue',
+            'php',
+        ];
         if (!supportedLanguages.includes(languageId)) {
             return [];
         }
@@ -1027,37 +1034,71 @@ export class DiagnosticAnalyzer {
         
         // Build comment ranges to skip false positives in comments
         const commentRanges = this.findCommentRanges(text);
+        // Build string literal ranges to avoid flagging t('key') patterns that only
+        // appear inside plain strings (e.g. documentation prompts, AI instructions).
+        const stringRanges = this.findStringLiteralRanges(text);
 
-        // Match t('key'), t("key"), $t('key'), $t("key") with a word boundary before t
-        const tCallRegex = /\b\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g;
-        let match;
+        // Match translation calls that reference i18n keys.
+        // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key") with a word boundary before t
+        // Laravel PHP/Blade: __('key'), trans('key'), @lang('key')
+        const tCallPatterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [];
 
-        while ((match = tCallRegex.exec(text)) !== null) {
-            const key = match[2];
-            const matchIndex = match.index;
-            
-            // Skip if match is inside a comment
-            if (this.isIndexInRanges(matchIndex, commentRanges)) {
-                continue;
-            }
-            
-            if (!allKeysSet.has(key)) {
-                // Calculate position
-                const startIndex = match.index + match[0].indexOf(match[2]);
-                const endIndex = startIndex + key.length;
+        tCallPatterns.push({
+            regex: /\b\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+            keyGroupIndex: 2,
+        });
+
+        if (languageId === 'php') {
+            tCallPatterns.push(
+                {
+                    regex: /\b__\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    keyGroupIndex: 2,
+                },
+                {
+                    regex: /\btrans\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    keyGroupIndex: 2,
+                },
+                {
+                    regex: /@lang\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    keyGroupIndex: 2,
+                },
+            );
+        }
+
+        for (const { regex, keyGroupIndex } of tCallPatterns) {
+            regex.lastIndex = 0;
+            let match;
+
+            while ((match = regex.exec(text)) !== null) {
+                const key = match[keyGroupIndex];
+                const matchIndex = match.index;
                 
-                const startPos = this.indexToPosition(text, startIndex);
-                const endPos = this.indexToPosition(text, endIndex);
-                const range = new vscode.Range(startPos, endPos);
+                // Skip if match is inside a comment or string literal
+                if (
+                    this.isIndexInRanges(matchIndex, commentRanges) ||
+                    this.isIndexInRanges(matchIndex, stringRanges)
+                ) {
+                    continue;
+                }
+                
+                if (!allKeysSet.has(key)) {
+                    // Calculate position
+                    const startIndex = match.index + match[0].indexOf(key);
+                    const endIndex = startIndex + key.length;
+                    
+                    const startPos = this.indexToPosition(text, startIndex);
+                    const endPos = this.indexToPosition(text, endIndex);
+                    const range = new vscode.Range(startPos, endPos);
 
-                const diagnostic = new vscode.Diagnostic(
-                    range,
-                    `Missing translation key "${key}" - key not found in locale files`,
-                    config.missingReferenceSeverity ?? config.missingSeverity,
-                );
-                diagnostic.code = 'ai-i18n.missing-reference';
-                diagnostic.source = 'AI Localizer';
-                diagnostics.push(diagnostic);
+                    const diagnostic = new vscode.Diagnostic(
+                        range,
+                        `Missing translation key "${key}" - key not found in locale files`,
+                        config.missingReferenceSeverity ?? config.missingSeverity,
+                    );
+                    diagnostic.code = 'ai-i18n.missing-reference';
+                    diagnostic.source = 'AI Localizer';
+                    diagnostics.push(diagnostic);
+                }
             }
         }
 
@@ -1094,6 +1135,44 @@ export class DiagnosticAnalyzer {
             ranges.push({ start: match.index, end: match.index + match[0].length });
         }
         
+        return ranges;
+    }
+
+    /**
+     * Find ranges of JavaScript/TypeScript string literals (", ' and `) in raw text.
+     * This is a lightweight heuristic used only to suppress false positives where
+     * t('key') appears inside documentation strings or prompt text.
+     */
+    private findStringLiteralRanges(text: string): Array<{ start: number; end: number }> {
+        const ranges: Array<{ start: number; end: number }> = [];
+        const len = text.length;
+        let i = 0;
+
+        while (i < len) {
+            const ch = text[i];
+            if (ch === '"' || ch === '\'' || ch === '`') {
+                const quote = ch;
+                const start = i;
+                i += 1;
+                let escaped = false;
+                while (i < len) {
+                    const c = text[i];
+                    if (escaped) {
+                        escaped = false;
+                    } else if (c === '\\') {
+                        escaped = true;
+                    } else if (c === quote) {
+                        i += 1;
+                        ranges.push({ start, end: i });
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            i += 1;
+        }
+
         return ranges;
     }
     
