@@ -578,6 +578,8 @@ export class CommandRegistry {
                 'src/locales/**/*.json',
                 'locales/**/*.json',
                 'i18n/**/*.json',
+                'lang/**/*.php',
+                'resources/lang/**/*.php',
             ];
 
         const sourceIncludeGlobs =

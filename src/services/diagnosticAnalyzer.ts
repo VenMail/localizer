@@ -1028,7 +1028,27 @@ export class DiagnosticAnalyzer {
 
         await this.i18nIndex.ensureInitialized();
         const allKeys = this.i18nIndex.getAllKeys();
-        const allKeysSet = new Set(allKeys);
+
+        let validKeysSet: Set<string>;
+        if (languageId === 'php') {
+            const laravelKeys: string[] = [];
+            for (const key of allKeys) {
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) {
+                    continue;
+                }
+                const hasLaravelLocation = record.locations.some((loc) => {
+                    const fsPath = loc.uri.fsPath.replace(/\\/g, '/');
+                    return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                });
+                if (hasLaravelLocation) {
+                    laravelKeys.push(key);
+                }
+            }
+            validKeysSet = new Set(laravelKeys);
+        } else {
+            validKeysSet = new Set(allKeys);
+        }
 
         const diagnostics: vscode.Diagnostic[] = [];
         
@@ -1081,7 +1101,7 @@ export class DiagnosticAnalyzer {
                     continue;
                 }
                 
-                if (!allKeysSet.has(key)) {
+                if (!validKeysSet.has(key)) {
                     // Calculate position
                     const startIndex = match.index + match[0].indexOf(key);
                     const endIndex = startIndex + key.length;

@@ -52,6 +52,8 @@ export class I18nIndex {
                 'src/locales/**/*.json',
                 'locales/**/*.json',
                 'i18n/**/*.json',
+                'lang/**/*.php',
+                'resources/lang/**/*.php',
             ];
 
         const folders = vscode.workspace.workspaceFolders || [];
@@ -69,6 +71,8 @@ export class I18nIndex {
                     effectiveGlobs = [
                         `${env.runtimeRoot}/auto/**/*.json`,
                         `${env.runtimeRoot}/**/*.json`,
+                        'lang/**/*.php',
+                        'resources/lang/**/*.php',
                     ];
                 } catch {
                     effectiveGlobs = localeGlobs;
@@ -128,18 +132,28 @@ export class I18nIndex {
                 return;
             }
             if (!text) return;
-            let json: unknown;
-            try {
-                json = JSON.parse(text);
-            } catch (err) {
-                console.error(`Failed to parse JSON in ${file.fsPath}:`, err);
-                return;
+
+            const ext = path.extname(file.fsPath).toLowerCase();
+            if (ext === '.json') {
+                let json: unknown;
+                try {
+                    json = JSON.parse(text);
+                } catch (err) {
+                    console.error(`Failed to parse JSON in ${file.fsPath}:`, err);
+                    return;
+                }
+                const locale = this.inferLocaleFromPath(file);
+                if (!locale) {
+                    return;
+                }
+                this.walkJson('', json, locale, file);
+            } else if (ext === '.php') {
+                const info = this.inferLaravelLocaleAndRoot(file);
+                if (!info) {
+                    return;
+                }
+                this.walkLaravelPhpFile(text, info.locale, file, info.root);
             }
-            const locale = this.inferLocaleFromPath(file);
-            if (!locale) {
-                return;
-            }
-            this.walkJson('', json, locale, file);
         });
     }
 
@@ -200,6 +214,32 @@ export class I18nIndex {
         return null;
     }
 
+    private inferLaravelLocaleAndRoot(uri: vscode.Uri): { locale: string; root: string } | null {
+        const parts = uri.fsPath.split(path.sep).filter(Boolean);
+        const langIndex = parts.lastIndexOf('lang');
+        if (langIndex < 0 || langIndex + 2 >= parts.length) {
+            return null;
+        }
+
+        const locale = parts[langIndex + 1];
+        const afterLocale = parts.slice(langIndex + 2);
+        if (afterLocale.length === 0) {
+            return null;
+        }
+
+        const fileName = afterLocale[afterLocale.length - 1];
+        const baseName = path.basename(fileName, '.php');
+        const prefixParts = afterLocale.slice(0, afterLocale.length - 1);
+        prefixParts.push(baseName);
+        const root = prefixParts.join('.');
+
+        if (!locale || !root) {
+            return null;
+        }
+
+        return { locale, root };
+    }
+
     private walkJson(prefix: string, node: unknown, locale: string, uri: vscode.Uri): void {
         if (!node || typeof node !== 'object' || Array.isArray(node)) {
             return;
@@ -212,6 +252,170 @@ export class I18nIndex {
             } else if (value && typeof value === 'object') {
                 this.walkJson(nextKey, value, locale, uri);
             }
+        }
+    }
+
+    private walkLaravelPhpFile(text: string, locale: string, uri: vscode.Uri, rootPrefix: string): void {
+        const length = text.length;
+        const returnMatch = /return\s*(\[|array\s*\()/i.exec(text);
+        if (!returnMatch) {
+            return;
+        }
+
+        let index = returnMatch.index + returnMatch[0].length;
+
+        const skipWhitespaceAndComments = (start: number): number => {
+            let pos = start;
+            while (pos < length) {
+                const ch = text[pos];
+                if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') {
+                    pos += 1;
+                    continue;
+                }
+                if (ch === '/' && pos + 1 < length) {
+                    const next = text[pos + 1];
+                    if (next === '/') {
+                        pos += 2;
+                        while (pos < length && text[pos] !== '\n') {
+                            pos += 1;
+                        }
+                        continue;
+                    }
+                    if (next === '*') {
+                        pos += 2;
+                        while (pos + 1 < length && !(text[pos] === '*' && text[pos + 1] === '/')) {
+                            pos += 1;
+                        }
+                        if (pos + 1 < length) {
+                            pos += 2;
+                        }
+                        continue;
+                    }
+                }
+                break;
+            }
+            return pos;
+        };
+
+        const parseString = (start: number): { value: string; next: number } | null => {
+            const quote = text[start];
+            if (quote !== '\'' && quote !== '"') {
+                return null;
+            }
+            let pos = start + 1;
+            let result = '';
+            while (pos < length) {
+                const ch = text[pos];
+                if (ch === '\\') {
+                    if (pos + 1 < length) {
+                        const nextCh = text[pos + 1];
+                        result += nextCh;
+                        pos += 2;
+                        continue;
+                    }
+                    pos += 1;
+                    continue;
+                }
+                if (ch === quote) {
+                    return { value: result, next: pos + 1 };
+                }
+                result += ch;
+                pos += 1;
+            }
+            return null;
+        };
+
+        const parseArray = (startIndex: number, prefix: string): number => {
+            let pos = startIndex;
+            const open = text[pos];
+            const close = open === '[' ? ']' : ')';
+            pos += 1;
+
+            while (pos < length) {
+                pos = skipWhitespaceAndComments(pos);
+                if (pos >= length) {
+                    break;
+                }
+                const ch = text[pos];
+                if (ch === close) {
+                    return pos + 1;
+                }
+                if (ch === ',') {
+                    pos += 1;
+                    continue;
+                }
+
+                const keyLit = parseString(pos);
+                if (!keyLit) {
+                    while (pos < length && text[pos] !== ',' && text[pos] !== close) {
+                        pos += 1;
+                    }
+                    continue;
+                }
+                const key = keyLit.value;
+                pos = skipWhitespaceAndComments(keyLit.next);
+
+                if (text.slice(pos, pos + 2) !== '=>') {
+                    while (pos < length && text[pos] !== ',' && text[pos] !== close) {
+                        pos += 1;
+                    }
+                    continue;
+                }
+
+                pos += 2;
+                pos = skipWhitespaceAndComments(pos);
+                if (pos >= length) {
+                    break;
+                }
+
+                const valueChar = text[pos];
+                const currentPrefix = prefix ? `${prefix}.${key}` : key;
+
+                if (valueChar === '\'' || valueChar === '"') {
+                    const valueLit = parseString(pos);
+                    if (valueLit) {
+                        const fullKey = rootPrefix ? `${rootPrefix}.${currentPrefix}` : currentPrefix;
+                        this.registerTranslation(locale, uri, fullKey, valueLit.value);
+                        pos = valueLit.next;
+                    }
+                } else if (valueChar === '[') {
+                    pos = parseArray(pos, currentPrefix);
+                } else if (
+                    (valueChar === 'a' || valueChar === 'A') &&
+                    text.slice(pos, pos + 5).toLowerCase() === 'array'
+                ) {
+                    let j = pos + 5;
+                    j = skipWhitespaceAndComments(j);
+                    if (text[j] === '(') {
+                        pos = parseArray(j, currentPrefix);
+                    } else {
+                        pos = j;
+                    }
+                } else {
+                    while (pos < length && text[pos] !== ',' && text[pos] !== close) {
+                        pos += 1;
+                    }
+                }
+            }
+
+            return pos;
+        };
+
+        while (index < length && text[index] !== '[' && text[index] !== '(') {
+            index += 1;
+        }
+        if (index >= length) {
+            return;
+        }
+
+        index = skipWhitespaceAndComments(index);
+        if (index >= length) {
+            return;
+        }
+
+        const ch = text[index];
+        if (ch === '[' || ch === '(') {
+            parseArray(index, '');
         }
     }
 
@@ -289,26 +493,40 @@ export class I18nIndex {
         }
         if (!text) return;
 
-        let json: unknown;
-        try {
-            json = JSON.parse(text);
-        } catch (err) {
-            console.error(`Failed to parse JSON in ${uri.fsPath}:`, err);
-            return;
-        }
+        const ext = path.extname(uri.fsPath).toLowerCase();
+        if (ext === '.json') {
+            let json: unknown;
+            try {
+                json = JSON.parse(text);
+            } catch (err) {
+                console.error(`Failed to parse JSON in ${uri.fsPath}:`, err);
+                return;
+            }
 
-        const locale = this.inferLocaleFromPath(uri) || existingLocale;
-        if (!locale) {
-            // Can't determine locale, remove the entry
-            this.fileToKeys.delete(fileKey);
-            return;
-        }
+            const locale = this.inferLocaleFromPath(uri) || existingLocale;
+            if (!locale) {
+                // Can't determine locale, remove the entry
+                this.fileToKeys.delete(fileKey);
+                return;
+            }
 
-        // Always set/update the fileToKeys entry, even if no keys are found
-        // This preserves locale information for empty files
-        this.fileToKeys.set(fileKey, { locale, keys: [] });
-        
-        this.walkJson('', json, locale, uri);
+            // Always set/update the fileToKeys entry, even if no keys are found
+            // This preserves locale information for empty files
+            this.fileToKeys.set(fileKey, { locale, keys: [] });
+
+            this.walkJson('', json, locale, uri);
+        } else if (ext === '.php') {
+            const info = this.inferLaravelLocaleAndRoot(uri);
+            const locale = info?.locale || existingLocale;
+            if (!info || !locale) {
+                this.fileToKeys.delete(fileKey);
+                return;
+            }
+
+            this.fileToKeys.set(fileKey, { locale, keys: [] });
+
+            this.walkLaravelPhpFile(text, locale, uri, info.root);
+        }
     }
 
     /**
