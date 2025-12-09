@@ -1,7 +1,13 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { I18nIndex, extractKeyAtPosition } from '../../../core/i18nIndex';
-import { setTranslationValue, setTranslationValuesBatch, deriveRootFromFile } from '../../../core/i18nFs';
+import {
+    clearLocaleDirCache,
+    setLaravelTranslationValue,
+    setTranslationValue,
+    setTranslationValuesBatch,
+    deriveRootFromFile,
+} from '../../../core/i18nFs';
 import { getGranularSyncService } from '../../../services/granularSyncService';
 import { TranslationService } from '../../../services/translationService';
 import { pickWorkspaceFolder } from '../../../core/workspace';
@@ -75,6 +81,8 @@ export class KeyManagementHandler {
     ): Promise<void> {
         const doc = await vscode.workspace.openTextDocument(documentUri);
 
+        const languageId = doc.languageId;
+
         let folder = vscode.workspace.getWorkspaceFolder(documentUri) ?? undefined;
         if (!folder) {
             folder = await pickWorkspaceFolder();
@@ -87,6 +95,7 @@ export class KeyManagementHandler {
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
         const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
         const rootName = deriveRootFromFile(folder, documentUri);
+        const isLaravelSource = languageId === 'php' || languageId === 'blade';
         const keyParts = String(key).split('.').filter(Boolean);
         const keyLeaf = keyParts[keyParts.length - 1] || '';
         const keyPrefix = keyParts.slice(0, -1).join('.');
@@ -153,7 +162,11 @@ export class KeyManagementHandler {
         );
         
         if (sourceFileRecovery) {
-            await setTranslationValue(folder, defaultLocale, key, sourceFileRecovery.value, { rootName });
+            if (isLaravelSource) {
+                await setLaravelTranslationValue(folder, defaultLocale, key, sourceFileRecovery.value);
+            } else {
+                await setTranslationValue(folder, defaultLocale, key, sourceFileRecovery.value, { rootName });
+            }
             vscode.window.showInformationMessage(
                 `AI Localizer: Restored "${key}" = "${sourceFileRecovery.value.slice(0, 50)}${sourceFileRecovery.value.length > 50 ? '...' : ''}" from ${sourceFileRecovery.source}.`,
             );
@@ -170,7 +183,11 @@ export class KeyManagementHandler {
         });
 
         if (recovery) {
-            await setTranslationValue(folder, defaultLocale, key, recovery.value, { rootName });
+            if (isLaravelSource) {
+                await setLaravelTranslationValue(folder, defaultLocale, key, recovery.value);
+            } else {
+                await setTranslationValue(folder, defaultLocale, key, recovery.value, { rootName });
+            }
             vscode.window.showInformationMessage(
                 `AI Localizer: Restored "${key}" from ${recovery.source}.`,
             );
@@ -245,7 +262,11 @@ export class KeyManagementHandler {
                 placeHolder: 'Translation value...',
             });
             if (!customValue) return;
-            await setTranslationValue(folder, defaultLocale, key, customValue, { rootName });
+            if (isLaravelSource) {
+                await setLaravelTranslationValue(folder, defaultLocale, key, customValue);
+            } else {
+                await setTranslationValue(folder, defaultLocale, key, customValue, { rootName });
+            }
             vscode.window.showInformationMessage(
                 `AI Localizer: Created "${key}" = "${customValue}" in locale ${defaultLocale}.`,
             );
@@ -253,7 +274,11 @@ export class KeyManagementHandler {
         }
 
         // Default: create with suggested label
-        await setTranslationValue(folder, defaultLocale, key, suggestedLabel, { rootName });
+        if (isLaravelSource) {
+            await setLaravelTranslationValue(folder, defaultLocale, key, suggestedLabel);
+        } else {
+            await setTranslationValue(folder, defaultLocale, key, suggestedLabel, { rootName });
+        }
         vscode.window.showInformationMessage(
             `AI Localizer: Created "${key}" = "${suggestedLabel}" in locale ${defaultLocale}.`,
         );
@@ -330,14 +355,17 @@ export class KeyManagementHandler {
             'typescript', 'typescriptreact',
             'javascript', 'javascriptreact',
             'vue',
+            'php', 'blade',
         ];
 
         if (!supportedLanguages.includes(languageId)) {
             vscode.window.showWarningMessage(
-                'AI Localizer: Bulk fix is available for JS/TS/JSX/TSX/Vue files.',
+                'AI Localizer: Bulk fix is available for JS/TS/JSX/TSX/Vue/PHP/Blade files.',
             );
             return;
         }
+
+        const isLaravelSource = languageId === 'php' || languageId === 'blade';
 
         // Check if another operation is blocking
         if (!(await this.canProceed('key-management', 'Bulk Fix Missing References'))) {
@@ -362,29 +390,78 @@ export class KeyManagementHandler {
         const commentRanges = findCommentRanges(text);
         const keyMatches: Array<{ key: string; range: vscode.Range; hasVariables: boolean }> = [];
 
-        const tCallRegex = /\b(\$?)t\(\s*(['"])([A-Za-z0-9_.]+)\2\s*([,)])/g;
-        let match;
-        while ((match = tCallRegex.exec(text)) !== null) {
-            const dollarSignLength = match[1] ? 1 : 0;
-            const tCallStart = match.index + dollarSignLength;
+        if (isLaravelSource) {
+            const patterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [
+                {
+                    regex: /\b__\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    keyGroupIndex: 2,
+                },
+                {
+                    regex: /\btrans\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    keyGroupIndex: 2,
+                },
+                {
+                    regex: /@lang\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    keyGroupIndex: 2,
+                },
+            ];
 
-            if (isPositionInComment(tCallStart, commentRanges)) {
-                continue;
+            for (const { regex, keyGroupIndex } of patterns) {
+                regex.lastIndex = 0;
+                let match;
+                // eslint-disable-next-line no-cond-assign
+                while ((match = regex.exec(text)) !== null) {
+                    const matchIndex = match.index;
+
+                    if (isPositionInComment(matchIndex, commentRanges)) {
+                        continue;
+                    }
+
+                    const key = match[keyGroupIndex] as string;
+                    if (!key) {
+                        continue;
+                    }
+
+                    const quoteChar = match[1] as string;
+                    const fullMatch = match[0] as string;
+                    const quotePosInMatch = fullMatch.indexOf(quoteChar);
+                    if (quotePosInMatch === -1) {
+                        continue;
+                    }
+                    const keyStartPosition = matchIndex + quotePosInMatch + 1;
+
+                    const startPos = doc.positionAt(keyStartPosition);
+                    const endPos = doc.positionAt(keyStartPosition + key.length);
+                    const range = new vscode.Range(startPos, endPos);
+                    keyMatches.push({ key, range, hasVariables: false });
+                }
             }
+        } else {
+            const tCallRegex = /\b(\$?)t\(\s*(['"])([A-Za-z0-9_.]+)\2\s*([,)])/g;
+            let match;
+            // eslint-disable-next-line no-cond-assign
+            while ((match = tCallRegex.exec(text)) !== null) {
+                const dollarSignLength = match[1] ? 1 : 0;
+                const tCallStart = match.index + dollarSignLength;
 
-            const key = match[3];
-            const afterKey = match[4];
-            const hasVariables = afterKey === ',';
+                if (isPositionInComment(tCallStart, commentRanges)) {
+                    continue;
+                }
 
-            const quoteChar = match[2];
-            const searchStart = dollarSignLength + 2;
-            const quotePosInMatch = match[0].indexOf(quoteChar, searchStart);
-            const keyStartPosition = match.index + quotePosInMatch + 1;
+                const key = match[3];
+                const afterKey = match[4];
+                const hasVariables = afterKey === ',';
 
-            const startPos = doc.positionAt(keyStartPosition);
-            const endPos = doc.positionAt(keyStartPosition + key.length);
-            const range = new vscode.Range(startPos, endPos);
-            keyMatches.push({ key, range, hasVariables });
+                const quoteChar = match[2];
+                const searchStart = dollarSignLength + 2;
+                const quotePosInMatch = match[0].indexOf(quoteChar, searchStart);
+                const keyStartPosition = match.index + quotePosInMatch + 1;
+
+                const startPos = doc.positionAt(keyStartPosition);
+                const endPos = doc.positionAt(keyStartPosition + key.length);
+                const range = new vscode.Range(startPos, endPos);
+                keyMatches.push({ key, range, hasVariables });
+            }
         }
 
         if (keyMatches.length === 0) {
@@ -396,11 +473,31 @@ export class KeyManagementHandler {
 
         await this.i18nIndex.ensureInitialized();
         const allKeys = this.i18nIndex.getAllKeys();
-        const allKeysSet = new Set(allKeys);
+        const validKeysSet = new Set<string>();
+
+        if (isLaravelSource) {
+            for (const key of allKeys) {
+                if (!key) continue;
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) continue;
+                const hasLaravelLocation = record.locations.some((loc) => {
+                    const fsPath = loc.uri.fsPath.replace(/\\/g, '/');
+                    return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                });
+                if (hasLaravelLocation) {
+                    validKeysSet.add(key);
+                }
+            }
+        } else {
+            for (const key of allKeys) {
+                if (!key) continue;
+                validKeysSet.add(key);
+            }
+        }
         const missingKeys: Array<{ key: string; range: vscode.Range; hasVariables: boolean }> = [];
 
         for (const { key, range, hasVariables } of keyMatches) {
-            if (!allKeysSet.has(key)) {
+            if (!validKeysSet.has(key)) {
                 missingKeys.push({ key, range, hasVariables });
             }
         }
@@ -435,7 +532,7 @@ export class KeyManagementHandler {
                         const cfg = vscode.workspace.getConfiguration('ai-localizer');
                         const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
                         const rootName = deriveRootFromFile(folder!, documentUri);
-                        const batchUpdates = new Map<string, { value: string; rootName: string }>();
+                        const batchUpdates = new Map<string, { value: string; rootName?: string }>();
 
                         let fixedCount = 0;
                         let createdCount = 0;
@@ -596,7 +693,13 @@ export class KeyManagementHandler {
 
                         if (batchUpdates.size > 0) {
                             try {
-                                await setTranslationValuesBatch(folder!, defaultLocale, batchUpdates);
+                                if (isLaravelSource) {
+                                    for (const [key, { value }] of batchUpdates.entries()) {
+                                        await setLaravelTranslationValue(folder!, defaultLocale, key, value);
+                                    }
+                                } else {
+                                    await setTranslationValuesBatch(folder!, defaultLocale, batchUpdates);
+                                }
                             } catch (applyErr) {
                                 this.log?.appendLine(
                                     `[BulkFixMissingRefs] Failed to write ${batchUpdates.size} batch update(s): ${String(applyErr)}`,

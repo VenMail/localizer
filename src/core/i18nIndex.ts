@@ -123,10 +123,11 @@ export class I18nIndex {
             } catch {
                 return;
             }
+
             let text: string | null = null;
             try {
                 const data = await vscode.workspace.fs.readFile(file);
-                text = sharedDecoder.decode(data);
+                text = this.decodeLocaleText(data);
             } catch (err) {
                 console.error(`Failed to read locale file ${file.fsPath}:`, err);
                 return;
@@ -240,6 +241,47 @@ export class I18nIndex {
         return { locale, root };
     }
 
+    private decodeLocaleText(data: Uint8Array): string | null {
+        if (!data || data.length === 0) {
+            return '';
+        }
+
+        // Fast path: no NUL bytes, assume UTF-8
+        let hasNul = false;
+        for (let i = 0; i < data.length; i += 1) {
+            if (data[i] === 0) {
+                hasNul = true;
+                break;
+            }
+        }
+        if (!hasNul) {
+            try {
+                return sharedDecoder.decode(data);
+            } catch (err) {
+                console.error('Failed to decode locale file as UTF-8:', err);
+                return null;
+            }
+        }
+
+        // Heuristic: treat as UTF-16LE (common for Windows "Unicode" files).
+        // Strip BOM if present (FF FE)
+        let start = 0;
+        if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) {
+            start = 2;
+        }
+        const codeUnits: number[] = [];
+        for (let i = start; i + 1 < data.length; i += 2) {
+            const cu = data[i] | (data[i + 1] << 8);
+            codeUnits.push(cu);
+        }
+        try {
+            return String.fromCharCode(...codeUnits);
+        } catch (err) {
+            console.error('Failed to decode locale file as UTF-16LE:', err);
+            return null;
+        }
+    }
+
     private walkJson(prefix: string, node: unknown, locale: string, uri: vscode.Uri): void {
         if (!node || typeof node !== 'object' || Array.isArray(node)) {
             return;
@@ -257,7 +299,7 @@ export class I18nIndex {
 
     private walkLaravelPhpFile(text: string, locale: string, uri: vscode.Uri, rootPrefix: string): void {
         const length = text.length;
-        const returnMatch = /return\s*(\[|array\s*\()/i.exec(text);
+        const returnMatch = /return[\s\S]*?(\[|array\s*\()/i.exec(text);
         if (!returnMatch) {
             return;
         }
@@ -486,7 +528,7 @@ export class I18nIndex {
         let text: string | null = null;
         try {
             const data = await vscode.workspace.fs.readFile(uri);
-            text = sharedDecoder.decode(data);
+            text = this.decodeLocaleText(data);
         } catch (err) {
             console.error(`Failed to read locale file ${uri.fsPath}:`, err);
             return;

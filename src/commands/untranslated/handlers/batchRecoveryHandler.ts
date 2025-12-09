@@ -182,10 +182,18 @@ export class BatchRecoveryHandler {
                 for (const keyVariant of variations) {
                     const value = this.getNestedValue(json, keyVariant);
                     if (value && typeof value === 'string') {
+                        const strValue = String(value);
+                        if (this.isSuspiciousKeyValuePair(key, strValue)) {
+                            this.log?.appendLine(
+                                `[BatchRecovery] Skipping extract-ref candidate for ${keyVariant} because value "${strValue.slice(0, 50)}..." looks mismatched with key`,
+                            );
+                            continue;
+                        }
+
                         const cacheKey = `${folder.uri.fsPath}::${locale}::${key}`;
-                        const result = { value, source: `ref:${commitHash}` };
+                        const result = { value: strValue, source: `ref:${commitHash}` };
                         this.recoveryCache.set(cacheKey, result);
-                        results.set(key, { key, value, source: result.source });
+                        results.set(key, { key, value: strValue, source: result.source });
                         break;
                     }
                 }
@@ -218,7 +226,15 @@ export class BatchRecoveryHandler {
                 for (const keyVariant of variations) {
                     const value = this.getNestedValue(content.json, keyVariant);
                     if (value && typeof value === 'string') {
-                        results.set(key, { key, value, source: 'head' });
+                        const strValue = String(value);
+                        if (this.isSuspiciousKeyValuePair(key, strValue)) {
+                            this.log?.appendLine(
+                                `[BatchRecovery] Skipping HEAD candidate for ${keyVariant} because value "${strValue.slice(0, 50)}..." looks mismatched with key`,
+                            );
+                            continue;
+                        }
+
+                        results.set(key, { key, value: strValue, source: 'head' });
                         break;
                     }
                 }
@@ -252,7 +268,15 @@ export class BatchRecoveryHandler {
                 for (const keyVariant of variations) {
                     const value = this.getNestedValue(content.json, keyVariant);
                     if (value && typeof value === 'string') {
-                        results.set(key, { key, value, source: `head:${file.locale}` });
+                        const strValue = String(value);
+                        if (this.isSuspiciousKeyValuePair(key, strValue)) {
+                            this.log?.appendLine(
+                                `[BatchRecovery] Skipping ALL-locales HEAD candidate for ${keyVariant} because value "${strValue.slice(0, 50)}..." looks mismatched with key`,
+                            );
+                            continue;
+                        }
+
+                        results.set(key, { key, value: strValue, source: `head:${file.locale}` });
                         break;
                     }
                 }
@@ -304,10 +328,18 @@ export class BatchRecoveryHandler {
                         for (const keyVariant of variations) {
                             const value = this.getNestedValue(json, keyVariant);
                             if (value && typeof value === 'string') {
+                                const strValue = String(value);
+                                if (this.isSuspiciousKeyValuePair(key, strValue)) {
+                                    this.log?.appendLine(
+                                        `[BatchRecovery] Skipping history candidate for ${keyVariant} because value "${strValue.slice(0, 50)}..." looks mismatched with key`,
+                                    );
+                                    continue;
+                                }
+
                                 const cacheKey = `${folder.uri.fsPath}::${locale}::${key}`;
-                                const result = { value, source: `history:${commit.hash}` };
+                                const result = { value: strValue, source: `history:${commit.hash}` };
                                 this.recoveryCache.set(cacheKey, result);
-                                results.set(key, { key, value, source: result.source });
+                                results.set(key, { key, value: strValue, source: result.source });
                                 break;
                             }
                         }
@@ -359,11 +391,19 @@ export class BatchRecoveryHandler {
                         for (const keyVariant of variations) {
                             const value = this.getNestedValue(json, keyVariant);
                             if (value && typeof value === 'string') {
+                                const strValue = String(value);
+                                if (this.isSuspiciousKeyValuePair(key, strValue)) {
+                                    this.log?.appendLine(
+                                        `[BatchRecovery] Skipping ALL-locales history candidate for ${keyVariant} because value "${strValue.slice(0, 50)}..." looks mismatched with key`,
+                                    );
+                                    continue;
+                                }
+
                                 // Cache under the requested locale to align with lookups
                                 const cacheKey = `${folder.uri.fsPath}::${requestedLocale}::${key}`;
-                                const result = { value, source: `history:${file.locale}:${commit.hash}` };
+                                const result = { value: strValue, source: `history:${file.locale}:${commit.hash}` };
                                 this.recoveryCache.set(cacheKey, result);
-                                results.set(key, { key, value, source: result.source });
+                                results.set(key, { key, value: strValue, source: result.source });
                                 break;
                             }
                         }
@@ -726,6 +766,57 @@ export class BatchRecoveryHandler {
             current = current[segment];
         }
         return current;
+    }
+
+    private isLabelishKeyPath(key: string): boolean {
+        const parts = key.split('.').filter(Boolean).map((p) => p.toLowerCase());
+        if (!parts.length) return false;
+        const labelish = new Set([
+            'label',
+            'title',
+            'name',
+            'status',
+            'state',
+            'code',
+            'id',
+            'heading',
+            'caption',
+            'short',
+            'tag',
+            'badge',
+        ]);
+        for (const part of parts) {
+            if (labelish.has(part)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private looksLikeLongSentence(text: string): boolean {
+        const trimmed = text.trim();
+        if (!trimmed) return false;
+        const words = trimmed.split(/\s+/).filter(Boolean);
+        const wordCount = words.length;
+        if (/[.!?]/.test(trimmed)) {
+            if (wordCount >= 4) {
+                return true;
+            }
+        }
+        if (/^\s*(we|you|i|they|he|she|it)\b/i.test(trimmed) && wordCount >= 4) {
+            return true;
+        }
+        if (wordCount >= 10) {
+            return true;
+        }
+        return false;
+    }
+
+    private isSuspiciousKeyValuePair(key: string, value: string): boolean {
+        if (!this.isLabelishKeyPath(key)) {
+            return false;
+        }
+        return this.looksLikeLongSentence(value);
     }
 
     /**

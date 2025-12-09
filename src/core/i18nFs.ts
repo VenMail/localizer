@@ -138,6 +138,46 @@ export function deriveRootFromFile(folder: vscode.WorkspaceFolder, uri: vscode.U
     return 'common';
 }
 
+function decodeLocaleText(data: Uint8Array): string | null {
+    if (!data || data.length === 0) {
+        return '';
+    }
+
+    let hasNul = false;
+    for (let i = 0; i < data.length; i += 1) {
+        if (data[i] === 0) {
+            hasNul = true;
+            break;
+        }
+    }
+
+    if (!hasNul) {
+        try {
+            return sharedDecoder.decode(data);
+        } catch (err) {
+            console.error('Failed to decode locale file as UTF-8:', err);
+            return null;
+        }
+    }
+
+    // Heuristic: treat as UTF-16LE (common for Windows "Unicode" files)
+    let start = 0;
+    if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) {
+        start = 2;
+    }
+    const codeUnits: number[] = [];
+    for (let i = start; i + 1 < data.length; i += 2) {
+        const cu = data[i] | (data[i + 1] << 8);
+        codeUnits.push(cu);
+    }
+    try {
+        return String.fromCharCode(...codeUnits);
+    } catch (err) {
+        console.error('Failed to decode locale file as UTF-16LE:', err);
+        return null;
+    }
+}
+
 async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: string): Promise<vscode.Uri> {
     // Check cache first
     const cacheKey = `${folder.uri.fsPath}::${locale}`;
@@ -172,6 +212,242 @@ async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: str
     await vscode.workspace.fs.createDirectory(fallback);
     localeDirCache.set(cacheKey, fallback);
     return fallback;
+}
+
+async function findOrCreateLaravelLocaleDir(
+    folder: vscode.WorkspaceFolder,
+    locale: string,
+): Promise<vscode.Uri> {
+    const cacheKey = `${folder.uri.fsPath}::laravel::${locale}`;
+    const cached = localeDirCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
+    const roots = ['lang', path.join('resources', 'lang')];
+    for (const root of roots) {
+        const baseDir = path.join(folder.uri.fsPath, root);
+        const baseUri = vscode.Uri.file(baseDir);
+        try {
+            const stat = await vscode.workspace.fs.stat(baseUri);
+            if (stat.type === vscode.FileType.Directory) {
+                const localeUri = vscode.Uri.file(path.join(baseDir, locale));
+                try {
+                    const locStat = await vscode.workspace.fs.stat(localeUri);
+                    if (locStat.type === vscode.FileType.Directory) {
+                        localeDirCache.set(cacheKey, localeUri);
+                        return localeUri;
+                    }
+                } catch {
+                    await vscode.workspace.fs.createDirectory(localeUri);
+                    localeDirCache.set(cacheKey, localeUri);
+                    return localeUri;
+                }
+            }
+        } catch {
+        }
+    }
+
+    // Fallback: create lang/<locale>
+    const fallbackBase = path.join(folder.uri.fsPath, 'lang');
+    const fallbackBaseUri = vscode.Uri.file(fallbackBase);
+    try {
+        await vscode.workspace.fs.createDirectory(fallbackBaseUri);
+    } catch {
+    }
+    const fallbackLocaleUri = vscode.Uri.file(path.join(fallbackBase, locale));
+    try {
+        await vscode.workspace.fs.createDirectory(fallbackLocaleUri);
+    } catch {
+    }
+    localeDirCache.set(cacheKey, fallbackLocaleUri);
+    return fallbackLocaleUri;
+}
+
+function serializePhpValue(node: any, indentLevel: number): string {
+    const indentUnit = '    ';
+    const indent = indentUnit.repeat(indentLevel);
+    const childIndent = indentUnit.repeat(indentLevel + 1);
+
+    if (typeof node === 'string') {
+        const escaped = node.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `'${escaped}'`;
+    }
+
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+        return '[]';
+    }
+
+    const keys = Object.keys(node);
+    if (!keys.length) {
+        return '[]';
+    }
+
+    let result = '[\n';
+    for (const key of keys) {
+        const value = (node as any)[key];
+        result += `${childIndent}'${key}' => ${serializePhpValue(value, indentLevel + 1)},\n`;
+    }
+    result += `${indent}]`;
+    return result;
+}
+
+function parseLaravelPhpArray(text: string): { preamble: string; root: any } {
+    const length = text.length;
+    const match = /return[\s\S]*?(\[|array\s*\()/i.exec(text);
+    if (!match) {
+        return { preamble: text.trimEnd(), root: {} };
+    }
+
+    const preamble = text.slice(0, match.index).trimEnd();
+    let index = match.index + match[0].length;
+
+    while (index < length && text[index] !== '[' && text[index] !== '(') {
+        index += 1;
+    }
+    if (index >= length) {
+        return { preamble, root: {} };
+    }
+
+    const root: any = {};
+
+    const skipWhitespaceAndComments = (start: number): number => {
+        let pos = start;
+        while (pos < length) {
+            const ch = text[pos];
+            if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') {
+                pos += 1;
+                continue;
+            }
+            if (ch === '/' && pos + 1 < length) {
+                const next = text[pos + 1];
+                if (next === '/') {
+                    pos += 2;
+                    while (pos < length && text[pos] !== '\n') pos += 1;
+                    continue;
+                }
+                if (next === '*') {
+                    pos += 2;
+                    while (pos + 1 < length && !(text[pos] === '*' && text[pos + 1] === '/')) pos += 1;
+                    if (pos + 1 < length) pos += 2;
+                    continue;
+                }
+            }
+            break;
+        }
+        return pos;
+    };
+
+    const parseString = (start: number): { value: string; next: number } | null => {
+        const quote = text[start];
+        if (quote !== '\'' && quote !== '"') {
+            return null;
+        }
+        let pos = start + 1;
+        let result = '';
+        while (pos < length) {
+            const ch = text[pos];
+            if (ch === '\\') {
+                if (pos + 1 < length) {
+                    const nextCh = text[pos + 1];
+                    result += nextCh;
+                    pos += 2;
+                    continue;
+                }
+                pos += 1;
+                continue;
+            }
+            if (ch === quote) {
+                return { value: result, next: pos + 1 };
+            }
+            result += ch;
+            pos += 1;
+        }
+        return null;
+    };
+
+    const parseArray = (startIndex: number, target: any): number => {
+        let pos = startIndex;
+        const open = text[pos];
+        const close = open === '[' ? ']' : ')';
+        pos += 1;
+
+        while (pos < length) {
+            pos = skipWhitespaceAndComments(pos);
+            if (pos >= length) {
+                break;
+            }
+            const ch = text[pos];
+            if (ch === close) {
+                return pos + 1;
+            }
+            if (ch === ',') {
+                pos += 1;
+                continue;
+            }
+
+            const keyLit = parseString(pos);
+            if (!keyLit) {
+                while (pos < length && text[pos] !== ',' && text[pos] !== close) {
+                    pos += 1;
+                }
+                continue;
+            }
+            const key = keyLit.value;
+            pos = skipWhitespaceAndComments(keyLit.next);
+
+            if (text.slice(pos, pos + 2) !== '=>') {
+                while (pos < length && text[pos] !== ',' && text[pos] !== close) {
+                    pos += 1;
+                }
+                continue;
+            }
+
+            pos += 2;
+            pos = skipWhitespaceAndComments(pos);
+            if (pos >= length) {
+                break;
+            }
+
+            const valueChar = text[pos];
+            if (valueChar === '\'' || valueChar === '"') {
+                const valueLit = parseString(pos);
+                if (valueLit) {
+                    target[key] = valueLit.value;
+                    pos = valueLit.next;
+                }
+            } else if (valueChar === '[') {
+                const child: any = {};
+                pos = parseArray(pos, child);
+                target[key] = child;
+            } else if (
+                (valueChar === 'a' || valueChar === 'A') &&
+                text.slice(pos, pos + 5).toLowerCase() === 'array'
+            ) {
+                let j = pos + 5;
+                j = skipWhitespaceAndComments(j);
+                if (text[j] === '(') {
+                    const child: any = {};
+                    pos = parseArray(j, child);
+                    target[key] = child;
+                } else {
+                    pos = j;
+                }
+            } else {
+                while (pos < length && text[pos] !== ',' && text[pos] !== close) {
+                    pos += 1;
+                }
+            }
+        }
+
+        return pos;
+    };
+
+    if (text[index] === '[' || text[index] === '(') {
+        parseArray(index, root);
+    }
+
+    return { preamble, root };
 }
 
 function getDeepValue(root: any, segments: string[]): unknown {
@@ -266,6 +542,54 @@ export async function setTranslationValueInFile(
         container[last] = value;
         const payload = `${JSON.stringify(root, null, 2)}\n`;
         await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+    });
+}
+
+export async function setLaravelTranslationValue(
+    folder: vscode.WorkspaceFolder,
+    locale: string,
+    fullKey: string,
+    value: string,
+): Promise<void> {
+    const segments = fullKey.split('.').filter(Boolean);
+    if (!segments.length) {
+        return;
+    }
+    const group = segments[0];
+    const relativeSegments = segments.slice(1);
+
+    const localeDir = await findOrCreateLaravelLocaleDir(folder, locale);
+    const fileUri = vscode.Uri.file(path.join(localeDir.fsPath, `${group}.php`));
+
+    await withFileMutex(fileUri, async () => {
+        let text = '';
+        try {
+            const data = await vscode.workspace.fs.readFile(fileUri);
+            const decoded = decodeLocaleText(data);
+            if (decoded) {
+                text = decoded;
+            }
+        } catch {
+            // File doesn't exist yet; we'll create it.
+        }
+
+        const { preamble, root } = parseLaravelPhpArray(text || '');
+        let obj: any = root && typeof root === 'object' && !Array.isArray(root) ? root : {};
+
+        const container = ensureDeepContainer(obj, relativeSegments.slice(0, -1));
+        const last = relativeSegments[relativeSegments.length - 1] || group;
+        container[last] = value;
+
+        const arrayCode = serializePhpValue(obj, 1);
+
+        let header = preamble;
+        if (!header || !header.includes('<?php')) {
+            header = '<?php';
+        }
+        header = header.trimEnd();
+
+        let final = `${header}\n\nreturn ${arrayCode};\n`;
+        await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(final));
     });
 }
 

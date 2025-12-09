@@ -648,7 +648,16 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 actions.push(action);
 
                 // Bulk fix action for all missing references in this file
-                if (!addedBulkActions && (document.languageId === 'typescript' || document.languageId === 'typescriptreact' || document.languageId === 'javascript' || document.languageId === 'javascriptreact' || document.languageId === 'vue')) {
+                if (
+                    !addedBulkActions &&
+                    (document.languageId === 'typescript' ||
+                        document.languageId === 'typescriptreact' ||
+                        document.languageId === 'javascript' ||
+                        document.languageId === 'javascriptreact' ||
+                        document.languageId === 'vue' ||
+                        document.languageId === 'php' ||
+                        document.languageId === 'blade')
+                ) {
                     addedBulkActions = true;
                     const bulkTitle = 'AI Localizer: Bulk fix all missing key references in this file';
                     const bulkAction = new vscode.CodeAction(bulkTitle, vscode.CodeActionKind.QuickFix);

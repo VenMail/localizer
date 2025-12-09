@@ -241,24 +241,30 @@ export class GitRecoveryHandler {
                     for (const keyVariant of keyVariations) {
                         const value = getNestedValue(json, keyVariant);
                         if (value && typeof value === 'string') {
-                            // Quality check: if the value looks like a badly extracted placeholder
-                            // (e.g., "Value1 allowed value2 sent" instead of "{value1} allowed {value2} sent"),
-                            // skip locale history entirely and go straight to source history
-                            const isSuspicious = this.hasSuspiciousPlaceholderPattern(value);
+                            const strValue = String(value);
+
+                            if (this.isSuspiciousKeyValuePair(key, strValue)) {
+                                this.log?.appendLine(
+                                    `${logPrefix} Skipping locale-history candidate for ${keyVariant} because value "${strValue.slice(0, 50)}..." looks mismatched with key`
+                                );
+                                continue;
+                            }
+
+                            const isSuspicious = this.hasSuspiciousPlaceholderPattern(strValue);
                             
                             if (isSuspicious) {
                                 this.log?.appendLine(
-                                    `${logPrefix} ⚠️  Found suspicious value in history (${commit.hash.slice(0, 7)}): "${value.slice(0, 50)}..." - will skip locale history and try source history instead`
+                                    `${logPrefix} ⚠️  Found suspicious value in history (${commit.hash.slice(0, 7)}): "${strValue.slice(0, 50)}..." - will skip locale history and try source history instead`
                                 );
-                                console.log(`[GitRecovery] SUSPICIOUS VALUE DETECTED: "${value}"`);
+                                console.log(`[GitRecovery] SUSPICIOUS VALUE DETECTED: "${strValue}"`);
                                 foundSuspiciousValue = true;
                                 break;
                             }
                             
                             this.log?.appendLine(
-                                `${logPrefix} ✓ Found clean value in history (${commit.hash.slice(0, 7)}): ${keyVariant} = "${value.slice(0, 50)}..."`
+                                `${logPrefix} ✓ Found clean value in history (${commit.hash.slice(0, 7)}): ${keyVariant} = "${strValue.slice(0, 50)}..."`
                             );
-                            const result = { value, source: `locale-history:${path.basename(filePath)}@${commit.hash.slice(0, 7)}` };
+                            const result = { value: strValue, source: `locale-history:${path.basename(filePath)}@${commit.hash.slice(0, 7)}` };
                             this.gitRecoveryCache.set(cacheKey, result);
                             return result;
                         }
@@ -282,18 +288,26 @@ export class GitRecoveryHandler {
                         for (const keyVariant of keyVariations) {
                             const value = getNestedValue(json, keyVariant);
                             if (value && typeof value === 'string') {
-                                // Quality check: skip suspicious placeholder patterns
-                                if (this.hasSuspiciousPlaceholderPattern(value)) {
+                                const strValue = String(value);
+
+                                if (this.isSuspiciousKeyValuePair(key, strValue)) {
                                     this.log?.appendLine(
-                                        `${logPrefix} Found suspicious value in HEAD: "${value.slice(0, 50)}..." - will try source history instead`
+                                        `${logPrefix} Skipping HEAD candidate for ${keyVariant} because value "${strValue.slice(0, 50)}..." looks mismatched with key`
+                                    );
+                                    continue;
+                                }
+
+                                if (this.hasSuspiciousPlaceholderPattern(strValue)) {
+                                    this.log?.appendLine(
+                                        `${logPrefix} Found suspicious value in HEAD: "${strValue.slice(0, 50)}..." - will try source history instead`
                                     );
                                     foundSuspiciousValue = true;
                                     break;
                                 }
                                 
-                                const result = { value, source: 'head' };
+                                const result = { value: strValue, source: 'head' };
                                 this.gitRecoveryCache.set(cacheKey, result);
-                                this.log?.appendLine(`${logPrefix} Found in HEAD: ${keyVariant} = "${value.slice(0, 50)}..."`);
+                                this.log?.appendLine(`${logPrefix} Found in HEAD: ${keyVariant} = "${strValue.slice(0, 50)}..."`);
                                 return result;
                             }
                         }
@@ -808,6 +822,57 @@ export class GitRecoveryHandler {
         return false;
     }
 
+    private isLabelishKeyPath(key: string): boolean {
+        const parts = key.split('.').filter(Boolean).map((p) => p.toLowerCase());
+        if (!parts.length) return false;
+        const labelish = new Set([
+            'label',
+            'title',
+            'name',
+            'status',
+            'state',
+            'code',
+            'id',
+            'heading',
+            'caption',
+            'short',
+            'tag',
+            'badge',
+        ]);
+        for (const part of parts) {
+            if (labelish.has(part)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private looksLikeLongSentence(text: string): boolean {
+        const trimmed = text.trim();
+        if (!trimmed) return false;
+        const words = trimmed.split(/\s+/).filter(Boolean);
+        const wordCount = words.length;
+        if (/[.!?]/.test(trimmed)) {
+            if (wordCount >= 4) {
+                return true;
+            }
+        }
+        if (/^\s*(we|you|i|they|he|she|it)\b/i.test(trimmed) && wordCount >= 4) {
+            return true;
+        }
+        if (wordCount >= 10) {
+            return true;
+        }
+        return false;
+    }
+
+    private isSuspiciousKeyValuePair(key: string, value: string): boolean {
+        if (!this.isLabelishKeyPath(key)) {
+            return false;
+        }
+        return this.looksLikeLongSentence(value);
+    }
+
     private hasSignal(text: string, hintWords: string[], placeholderHints: string[]): boolean {
         const lower = text.toLowerCase();
         const hasHint = hintWords.some(h => lower.includes(h));
@@ -823,6 +888,11 @@ export class GitRecoveryHandler {
         if (this.isKeyLike(trimmed)) return false;
         if (!(/\s/.test(trimmed) || /\{[a-zA-Z_]/.test(trimmed))) return false;
         if (!this.hasSignal(trimmed, hintWords, placeholderHints)) return false;
+        const labelish = hintWords.some((h) => {
+            const v = h.toLowerCase();
+            return v === 'label' || v === 'title' || v === 'name' || v === 'status' || v === 'code' || v === 'id';
+        });
+        if (labelish && this.looksLikeLongSentence(trimmed)) return false;
         return this.meetsHintThreshold(trimmed, hintWords, placeholderHints);
     }
 
