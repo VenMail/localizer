@@ -35,6 +35,9 @@ export class DiagnosticAnalyzer {
     private ignorePatternsLoaded = false;
     private untranslatedIssuesByLocaleKey = new Map<string, boolean>();
     private untranslatedReportActive = false;
+    private sourceKeySetsCache:
+        | { laravelKeys: Set<string>; jsonBackedKeys: Set<string>; keyCount: number }
+        | null = null;
 
     constructor(
         private i18nIndex: I18nIndex,
@@ -267,17 +270,38 @@ export class DiagnosticAnalyzer {
     ): Promise<Map<string, vscode.Diagnostic[]>> {
         this.logVerboseEnabled = config.verboseLogging === true;
         this.safeLog(`[DiagnosticAnalyzer] Analyzing ${uris.length} file(s)...`);
+        const results: { uri: string; diagnostics: vscode.Diagnostic[] }[] = new Array(uris.length);
 
-        const results = await Promise.all(
-            uris.map(async (uri) => {
-                const diagnostics = await this.analyzeFile(uri, config);
-                return { uri: uri.toString(), diagnostics };
-            }),
+        const concurrency = Math.max(
+            1,
+            Number(process.env.AI_I18N_DIAG_CONCURRENCY || 8),
         );
+        let index = 0;
+
+        const worker = async () => {
+            while (true) {
+                const current = index;
+                index += 1;
+                if (current >= uris.length) {
+                    break;
+                }
+                const uri = uris[current];
+                const diagnostics = await this.analyzeFile(uri, config);
+                results[current] = { uri: uri.toString(), diagnostics };
+            }
+        };
+
+        const workerCount = Math.min(concurrency, uris.length);
+        const workers: Promise<void>[] = [];
+        for (let i = 0; i < workerCount; i += 1) {
+            workers.push(worker());
+        }
+        await Promise.all(workers);
 
         const map = new Map<string, vscode.Diagnostic[]>();
-        for (const { uri, diagnostics } of results) {
-            map.set(uri, diagnostics);
+        for (const result of results) {
+            if (!result) continue;
+            map.set(result.uri, result.diagnostics);
         }
 
         return map;
@@ -321,6 +345,7 @@ export class DiagnosticAnalyzer {
         this.untranslatedReportActive = false;
         this.ignorePatterns = null;
         this.ignorePatternsLoaded = false;
+        this.sourceKeySetsCache = null;
     }
 
     /**
@@ -559,7 +584,7 @@ export class DiagnosticAnalyzer {
      *   - "font-medium {color}" (CSS + placeholder)
      */
     private isProbablyNonTranslatable(text: string): boolean {
-        const normalized = String(text || '').trim().replace(/\s+/g, ' ');
+        const normalized = String(text || '').trim();
         if (!normalized) return false;
 
         // Placeholder-only text (no real words, just placeholders and punctuation)
@@ -991,6 +1016,58 @@ export class DiagnosticAnalyzer {
         return range;
     }
 
+    private getSourceKeySets(
+        allKeys: string[],
+    ): { laravelKeys: Set<string>; jsonBackedKeys: Set<string> } {
+        if (
+            this.sourceKeySetsCache &&
+            this.sourceKeySetsCache.keyCount === allKeys.length
+        ) {
+            return {
+                laravelKeys: this.sourceKeySetsCache.laravelKeys,
+                jsonBackedKeys: this.sourceKeySetsCache.jsonBackedKeys,
+            };
+        }
+
+        const laravelKeys = new Set<string>();
+        const jsonBackedKeys = new Set<string>();
+
+        for (const key of allKeys) {
+            const record = this.i18nIndex.getRecord(key);
+            if (!record) {
+                continue;
+            }
+            let hasLaravel = false;
+            let hasJson = false;
+            for (const loc of record.locations) {
+                const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                if (fsPath.endsWith('.json')) {
+                    hasJson = true;
+                }
+                if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
+                    hasLaravel = true;
+                }
+                if (hasLaravel && hasJson) {
+                    break;
+                }
+            }
+            if (hasLaravel) {
+                laravelKeys.add(key);
+            }
+            if (hasJson) {
+                jsonBackedKeys.add(key);
+            }
+        }
+
+        this.sourceKeySetsCache = {
+            laravelKeys,
+            jsonBackedKeys,
+            keyCount: allKeys.length,
+        };
+
+        return { laravelKeys, jsonBackedKeys };
+    }
+
     /**
      * Analyze a source file (ts/tsx/js/jsx/vue) for missing translation key references.
      * Returns diagnostics for any t('key') calls where the key doesn't exist.
@@ -1016,6 +1093,12 @@ export class DiagnosticAnalyzer {
             return [];
         }
 
+        // Never analyze files inside vendor/ directories for missing reference diagnostics.
+        const normalizedPath = uri.fsPath.replace(/\\/g, '/');
+        if (normalizedPath.includes('/vendor/')) {
+            return [];
+        }
+
         this.safeLog(`[DiagnosticAnalyzer] Analyzing source file for missing refs: ${uri.fsPath}`);
 
         let text: string;
@@ -1028,28 +1111,42 @@ export class DiagnosticAnalyzer {
 
         await this.i18nIndex.ensureInitialized();
         const allKeys = this.i18nIndex.getAllKeys();
-
-        let validKeysSet: Set<string>;
+        
+        // STRICT MODE: Only consider keys with Laravel locations for PHP files
+        // and JSON locations for JS/TS/Vue files
+        let validKeysSet = new Set<string>();
+        
         if (languageId === 'php') {
-            const laravelKeys: string[] = [];
-            for (const key of allKeys) {
+            // For PHP files, only keys with Laravel locations are valid
+            for (const key of this.i18nIndex.getAllKeys()) {
                 const record = this.i18nIndex.getRecord(key);
-                if (!record) {
-                    continue;
-                }
-                const hasLaravelLocation = record.locations.some((loc) => {
-                    const fsPath = loc.uri.fsPath.replace(/\\/g, '/');
-                    return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                if (!record) continue;
+                
+                const hasLaravelLocation = record.locations.some(loc => {
+                    const path = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                    return path.includes('/lang/') || path.includes('/resources/lang/');
                 });
+                
                 if (hasLaravelLocation) {
-                    laravelKeys.push(key);
+                    validKeysSet.add(key);
                 }
             }
-            validKeysSet = new Set(laravelKeys);
         } else {
-            validKeysSet = new Set(allKeys);
+            // For JS/TS/Vue, only keys with JSON locations are valid
+            for (const key of this.i18nIndex.getAllKeys()) {
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) continue;
+                
+                const hasJsonLocation = record.locations.some(loc => {
+                    return loc.uri.fsPath.toLowerCase().endsWith('.json');
+                });
+                
+                if (hasJsonLocation) {
+                    validKeysSet.add(key);
+                }
+            }
         }
-
+        
         const diagnostics: vscode.Diagnostic[] = [];
         
         // Build comment ranges to skip false positives in comments
@@ -1102,6 +1199,15 @@ export class DiagnosticAnalyzer {
                 }
                 
                 if (!validKeysSet.has(key)) {
+                    // Global fallback: if the key exists anywhere in the i18n index
+                    // (Laravel PHP or JSON locales), treat it as a valid key. Missing
+                    // reference diagnostics should only fire when the key truly does
+                    // not exist in any locale file.
+                    const record = this.i18nIndex.getRecord(key);
+                    if (record && Array.isArray(record.locations) && record.locations.length > 0) {
+                        continue;
+                    }
+
                     // Calculate position
                     const startIndex = match.index + match[0].indexOf(key);
                     const endIndex = startIndex + key.length;

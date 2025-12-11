@@ -4,15 +4,14 @@ const { existsSync } = require('node:fs');
 const path = require('node:path');
 
 const { detectSrcRoot } = require('./lib/projectConfig');
-const { getIgnorePatterns, isNonTranslatableText } = require('./lib/ignorePatterns');
+const { isCssUtilityString } = require('./lib/ignorePatterns');
 const { listLocales, deleteKeyPathInObject } = require('./lib/localeUtils');
+const { validateText } = require('./lib/validators');
 
 const projectRoot = path.resolve(__dirname, '..');
 const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
 const baseLocale = 'en';
 const srcRoot = detectSrcRoot(projectRoot);
-
-const ignorePatterns = getIgnorePatterns(projectRoot);
 
 async function readJsonSafe(filePath) {
   try {
@@ -155,11 +154,38 @@ async function indexKeyUsage(fullKey) {
 // Expose buildUsageIndex for use in collectInvalidBaseKeys
 // (keeping the cached version for backward compatibility)
 
-function isInvalidBaseValue(text) {
+function classifyBaseValue(text) {
   const trimmed = String(text || '').trim();
-  if (!trimmed) return false;
-  // Reuse shared non-translatable heuristics (CSS, code, placeholders, domains, etc.).
-  return isNonTranslatableText(trimmed, ignorePatterns);
+  if (!trimmed) {
+    // Reuse shared non-translatable heuristics (CSS, code, placeholders, domains, etc.).
+    return { invalid: false, reason: 'empty' };
+  }
+
+  if (isCssUtilityString(trimmed)) {
+    return { invalid: true, reason: 'css_utility' };
+  }
+
+  let result;
+  try {
+    result = validateText(trimmed);
+  } catch {
+    return { invalid: false, reason: 'validator_error' };
+  }
+
+  if (!result) {
+    return { invalid: false, reason: 'unknown' };
+  }
+
+  if (!result.valid) {
+    return { invalid: true, reason: result.reason || 'non_translatable' };
+  }
+
+  return { invalid: false, reason: null };
+}
+
+function isInvalidBaseValue(text) {
+  const result = classifyBaseValue(text);
+  return result.invalid;
 }
 
 async function collectInvalidBaseKeys() {
@@ -172,10 +198,14 @@ async function collectInvalidBaseKeys() {
   let skippedCount = 0;
   
   for (const [keyPath, info] of baseKeys.entries()) {
-    if (!isInvalidBaseValue(info.value)) continue;
+    const classification = classifyBaseValue(info.value);
+    if (!classification.invalid) continue;
     
     // Check if key is actually used in code
     const usages = usageIndex[keyPath] || [];
+    const isCssLike =
+      classification.reason === 'css_utility' ||
+      classification.reason === 'css_content';
     
     // Only mark as invalid if:
     // 1. The base value is non-translatable AND
@@ -187,7 +217,7 @@ async function collectInvalidBaseKeys() {
     // - The value might be valid in other locales
     // - The key might be used correctly in code
     // - Removing it would break the application
-    if (usages.length === 0) {
+    if (usages.length === 0 || isCssLike) {
       // Unused key with invalid base value - safe to remove
       console.log(`[restore-i18n-invalid] Flagging unused invalid key: "${keyPath}" = "${info.value}"`);
       invalid.push({

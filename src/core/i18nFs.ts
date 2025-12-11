@@ -300,7 +300,7 @@ function parseLaravelPhpArray(text: string): { preamble: string; root: any } {
     }
 
     const preamble = text.slice(0, match.index).trimEnd();
-    let index = match.index + match[0].length;
+    let index = match.index;
 
     while (index < length && text[index] !== '[' && text[index] !== '(') {
         index += 1;
@@ -448,6 +448,78 @@ function parseLaravelPhpArray(text: string): { preamble: string; root: any } {
     }
 
     return { preamble, root };
+}
+
+function inferLaravelRootFromUri(uri: vscode.Uri): string | null {
+    const parts = uri.fsPath.split(path.sep).filter(Boolean);
+    const langIndex = parts.lastIndexOf('lang');
+    if (langIndex < 0 || langIndex + 2 >= parts.length) {
+        return null;
+    }
+
+    const afterLocale = parts.slice(langIndex + 2);
+    if (afterLocale.length === 0) {
+        return null;
+    }
+
+    const fileName = afterLocale[afterLocale.length - 1];
+    const baseName = path.basename(fileName, '.php');
+    const prefixParts = afterLocale.slice(0, afterLocale.length - 1);
+    prefixParts.push(baseName);
+    const root = prefixParts.join('.');
+
+    if (!root) {
+        return null;
+    }
+
+    return root;
+}
+
+export async function readLaravelKeyValueFromFile(
+    fileUri: vscode.Uri,
+    fullKey: string,
+): Promise<string | undefined> {
+    let text = '';
+    try {
+        const data = await vscode.workspace.fs.readFile(fileUri);
+        const decoded = decodeLocaleText(data);
+        if (!decoded) {
+            return undefined;
+        }
+        text = decoded;
+    } catch {
+        return undefined;
+    }
+
+    const { root } = parseLaravelPhpArray(text);
+    if (!root || typeof root !== 'object' || Array.isArray(root)) {
+        return undefined;
+    }
+
+    const rootPrefix = inferLaravelRootFromUri(fileUri);
+    if (!rootPrefix) {
+        return undefined;
+    }
+
+    const segments = fullKey.split('.').filter(Boolean);
+    const prefixParts = rootPrefix.split('.').filter(Boolean);
+    if (!segments.length || segments.length < prefixParts.length) {
+        return undefined;
+    }
+
+    for (let i = 0; i < prefixParts.length; i += 1) {
+        if (segments[i] !== prefixParts[i]) {
+            return undefined;
+        }
+    }
+
+    const relativeSegments = segments.slice(prefixParts.length);
+    if (!relativeSegments.length) {
+        return undefined;
+    }
+
+    const value = getDeepValue(root, relativeSegments);
+    return typeof value === 'string' ? value : undefined;
 }
 
 function getDeepValue(root: any, segments: string[]): unknown {

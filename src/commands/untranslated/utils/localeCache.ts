@@ -367,12 +367,27 @@ export class LocaleCache {
         const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
             '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
         ];
-
-        const include = sourceGlobs.length === 1 ? sourceGlobs[0] : `{${sourceGlobs.join(',')}}`;
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
-        const pattern = new vscode.RelativePattern(this.folder, include);
-        
-        const uris = await vscode.workspace.findFiles(pattern, exclude, 500);
+
+        const seen = new Set<string>();
+        const uris: vscode.Uri[] = [];
+        const includes = sourceGlobs.length > 0 ? sourceGlobs : [];
+
+        for (const include of includes) {
+            try {
+                const pattern = new vscode.RelativePattern(this.folder, include);
+                const found = await vscode.workspace.findFiles(pattern, exclude, 500);
+                for (const uri of found) {
+                    const key = uri.toString();
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        uris.push(uri);
+                    }
+                }
+            } catch {
+                // Skip invalid glob patterns
+            }
+        }
         
         // Build search patterns for all keys
         const keyPatterns = keys.map(key => ({

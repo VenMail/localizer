@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 import { I18nIndex, extractKeyAtPosition, escapeMarkdown } from '../core/i18nIndex';
+import { readLaravelKeyValueFromFile } from '../core/i18nFs';
 import { detectFrameworkProfile } from '../frameworks/detection';
 
 /**
@@ -72,20 +73,67 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                 return undefined;
             }
 
-            // Sort locales with default first
-            const locales = Array.from(record.locales.keys()).sort((a, b) => {
+            const languageId = document.languageId;
+            const isLaravelSource = languageId === 'php' || languageId === 'blade';
+
+            const valueMap = new Map<string, string>();
+            let locales: string[] = [];
+
+            if (isLaravelSource) {
+                const laravelByLocale = new Map<string, vscode.Uri>();
+                for (const loc of record.locations) {
+                    const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                    if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
+                        const existing = laravelByLocale.get(loc.locale);
+                        if (!existing || loc.uri.fsPath.length < existing.fsPath.length) {
+                            laravelByLocale.set(loc.locale, loc.uri);
+                        }
+                    }
+                }
+
+                if (laravelByLocale.size === 0) {
+                    return undefined;
+                }
+
+                const entries = Array.from(laravelByLocale.entries());
+                const results = await Promise.all(
+                    entries.map(async ([locale, uri]) => {
+                        const v = await readLaravelKeyValueFromFile(uri, record.key);
+                        return { locale, value: v };
+                    }),
+                );
+
+                for (const { locale, value } of results) {
+                    if (typeof value === 'string' && value !== '') {
+                        valueMap.set(locale, value);
+                    }
+                }
+
+                if (valueMap.size === 0) {
+                    return undefined;
+                }
+
+                locales = Array.from(valueMap.keys());
+            } else {
+                for (const [locale, value] of record.locales.entries()) {
+                    if (typeof value === 'string') {
+                        valueMap.set(locale, value);
+                    }
+                }
+                locales = Array.from(valueMap.keys());
+            }
+
+            locales.sort((a, b) => {
                 if (a === record.defaultLocale) return -1;
                 if (b === record.defaultLocale) return 1;
                 return a.localeCompare(b);
             });
 
-            // Build hover content
             const md = new vscode.MarkdownString();
             md.appendMarkdown(`**i18n key** \`${record.key}\`\n\n`);
             
-            // Show missing locales count if any
-            const missingLocales = locales.filter(l => {
-                const v = record.locales.get(l);
+            const missingLocales = locales.filter((l) => {
+                const v = valueMap.get(l);
                 return v === undefined || v === '';
             });
             if (missingLocales.length > 0) {
@@ -93,7 +141,7 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             }
             
             for (const locale of locales) {
-                const value = record.locales.get(locale);
+                const value = valueMap.get(locale);
                 if (value === undefined || value === '') {
                     const isDefault = locale === record.defaultLocale;
                     const localeLabel = isDefault ? `${locale} (default)` : locale;
@@ -103,7 +151,6 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                 
                 const isDefault = locale === record.defaultLocale;
                 const localeLabel = isDefault ? `${locale} (default)` : locale;
-                // Truncate long values for readability
                 const displayValue = value.length > 80 ? value.substring(0, 77) + '...' : value;
                 md.appendMarkdown(`- **${localeLabel}**: ${escapeMarkdown(displayValue)}\n`);
             }
@@ -208,6 +255,8 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
                 return undefined;
             }
 
+            const isLaravelSource = document.languageId === 'php' || document.languageId === 'blade';
+
             // Collapse to a single primary location per locale using the indexed information
             const primaryByLocale = new Map<string, { locale: string; uri: vscode.Uri }>();
             for (const loc of record.locations) {
@@ -227,6 +276,16 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
             // Start from one canonical location per locale
             const currentFolder = vscode.workspace.getWorkspaceFolder(document.uri) || undefined;
             let locations = Array.from(primaryByLocale.values());
+
+            if (isLaravelSource) {
+                const laravelLocations = locations.filter((loc) => {
+                    const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                    return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                });
+                if (laravelLocations.length > 0) {
+                    locations = laravelLocations;
+                }
+            }
 
             if (currentFolder) {
                 try {
@@ -332,6 +391,7 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
         try {
             await this.i18nIndex.ensureInitialized();
             const langId = document.languageId;
+            const isLaravelSource = langId === 'php' || langId === 'blade';
 
             if (langId === 'json' || langId === 'jsonc') {
                 // Provide IntelliSense for known translations inside locale JSON files
@@ -352,6 +412,16 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
 
                 const record = this.i18nIndex.getRecord(key);
                 if (!record) continue;
+
+                if (isLaravelSource) {
+                    const hasLaravel = record.locations.some((loc) => {
+                        const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                        return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                    });
+                    if (!hasLaravel) {
+                        continue;
+                    }
+                }
 
                 // Calculate the suffix to insert (avoid duplicating the prefix)
                 const insertText = existingPrefix ? key.substring(existingPrefix.length) : key;
@@ -818,7 +888,21 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
             }
         }
 
-        return actions;
+        const unique: vscode.CodeAction[] = [];
+        const seen = new Set<string>();
+
+        for (const action of actions) {
+            const commandId = action.command?.command || '';
+            const argsSig = action.command?.arguments ? JSON.stringify(action.command.arguments) : '';
+            const key = `${commandId}:${action.title}:${argsSig}`;
+            if (seen.has(key)) {
+                continue;
+            }
+            seen.add(key);
+            unique.push(action);
+        }
+
+        return unique;
     }
 
     private parseDiagnosticMessage(message: string): { key: string; locales: string[] } | null {

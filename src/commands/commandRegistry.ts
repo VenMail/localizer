@@ -599,18 +599,35 @@ export class CommandRegistry {
                 '**/coverage/**',
                 '**/out/**',
                 '**/.turbo/**',
+                '**/vendor/**',
             ];
 
         const collectSourceFileUris = async (): Promise<vscode.Uri[]> => {
             const diagConfig = getDiagnosticConfig();
             const verbose = diagConfig.verboseLogging === true;
-            const include =
-                sourceIncludeGlobs.length === 1
-                    ? sourceIncludeGlobs[0]
-                    : `{${sourceIncludeGlobs.join(',')}}`;
             const exclude =
                 sourceExcludeGlobs.length > 0 ? `{${sourceExcludeGlobs.join(',')}}` : undefined;
-            const uris = await vscode.workspace.findFiles(include, exclude);
+
+            const seen = new Set<string>();
+            const uris: vscode.Uri[] = [];
+
+            const includes = sourceIncludeGlobs.length > 0 ? sourceIncludeGlobs : [];
+
+            for (const include of includes) {
+                try {
+                    const found = await vscode.workspace.findFiles(include, exclude);
+                    for (const uri of found) {
+                        const key = uri.toString();
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            uris.push(uri);
+                        }
+                    }
+                } catch {
+                    // Ignore glob errors for individual patterns
+                }
+            }
+
             if (verbose) {
                 this.log.appendLine(
                     `[Diagnostics] Collected ${uris.length} source file(s) for missing reference scan.`,
@@ -795,16 +812,38 @@ export class CommandRegistry {
                     );
                 }
 
-                const results = await Promise.all(
-                    uris.map(async (uri) => {
-                        const diagnostics = await this.diagnosticAnalyzer.analyzeSourceFile(uri, config);
-                        return { uri, diagnostics };
-                    }),
+                const results: { uri: vscode.Uri; diagnostics: vscode.Diagnostic[] }[] = new Array(uris.length);
+
+                const concurrency = Math.max(
+                    1,
+                    Number(process.env.AI_I18N_SOURCE_DIAG_CONCURRENCY || 8),
                 );
+                let index = 0;
+
+                const worker = async () => {
+                    while (true) {
+                        const current = index;
+                        index += 1;
+                        if (current >= uris.length) {
+                            break;
+                        }
+                        const uri = uris[current];
+                        const diagnostics = await this.diagnosticAnalyzer.analyzeSourceFile(uri, config);
+                        results[current] = { uri, diagnostics };
+                    }
+                };
+
+                const workerCount = Math.min(concurrency, uris.length);
+                const workers: Promise<void>[] = [];
+                for (let i = 0; i < workerCount; i += 1) {
+                    workers.push(worker());
+                }
+                await Promise.all(workers);
 
                 sourceFileDiagnostics.clear();
-                for (const { uri, diagnostics } of results) {
-                    sourceFileDiagnostics.set(uri, diagnostics);
+                for (const result of results) {
+                    if (!result) continue;
+                    sourceFileDiagnostics.set(result.uri, result.diagnostics);
                 }
             })();
 

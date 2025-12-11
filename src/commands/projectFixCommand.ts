@@ -395,13 +395,29 @@ export class ProjectFixCommand {
         const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
             '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
             '**/.next/**', '**/.nuxt/**', '**/.vite/**', '**/coverage/**', '**/out/**', '**/.turbo/**',
+            '**/vendor/**',
         ];
-
-        const include = sourceGlobs.length === 1 ? sourceGlobs[0] : `{${sourceGlobs.join(',')}}`;
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
-        
-        const pattern = new vscode.RelativePattern(folder, include);
-        const uris = await vscode.workspace.findFiles(pattern, exclude);
+
+        const seen = new Set<string>();
+        const uris: vscode.Uri[] = [];
+        const includes = sourceGlobs.length > 0 ? sourceGlobs : [];
+
+        for (const include of includes) {
+            try {
+                const pattern = new vscode.RelativePattern(folder, include);
+                const found = await vscode.workspace.findFiles(pattern, exclude);
+                for (const uri of found) {
+                    const key = uri.toString();
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        uris.push(uri);
+                    }
+                }
+            } catch {
+                // Skip invalid glob patterns
+            }
+        }
 
         await this.i18nIndex.ensureInitialized();
         const allKeysSet = new Set(this.i18nIndex.getAllKeys());
@@ -459,13 +475,29 @@ export class ProjectFixCommand {
         const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
             '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
             '**/.next/**', '**/.nuxt/**', '**/.vite/**', '**/coverage/**', '**/out/**', '**/.turbo/**',
+            '**/vendor/**',
         ];
-
-        const include = sourceGlobs.length === 1 ? sourceGlobs[0] : `{${sourceGlobs.join(',')}}`;
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
 
-        const pattern = new vscode.RelativePattern(folder, include);
-        const uris = await vscode.workspace.findFiles(pattern, exclude);
+        const seen = new Set<string>();
+        const uris: vscode.Uri[] = [];
+        const includes = sourceGlobs.length > 0 ? sourceGlobs : [];
+
+        for (const include of includes) {
+            try {
+                const pattern = new vscode.RelativePattern(folder, include);
+                const found = await vscode.workspace.findFiles(pattern, exclude);
+                for (const uri of found) {
+                    const keyStr = uri.toString();
+                    if (!seen.has(keyStr)) {
+                        seen.add(keyStr);
+                        uris.push(uri);
+                    }
+                }
+            } catch {
+                // Skip invalid glob patterns
+            }
+        }
 
         const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const tCallRegex = new RegExp(`\\b\\$?t\\(\\s*['"\`]?${escapedKey}['"\`]?\\s*(?:,|\\))`, 'g');
@@ -503,13 +535,29 @@ export class ProjectFixCommand {
         const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
             '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
             '**/.next/**', '**/.nuxt/**', '**/.vite/**', '**/coverage/**', '**/out/**', '**/.turbo/**',
+            '**/vendor/**',
         ];
-
-        const include = sourceGlobs.length === 1 ? sourceGlobs[0] : `{${sourceGlobs.join(',')}}`;
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
 
-        const pattern = new vscode.RelativePattern(folder, include);
-        const uris = await vscode.workspace.findFiles(pattern, exclude);
+        const seen = new Set<string>();
+        const uris: vscode.Uri[] = [];
+        const includes = sourceGlobs.length > 0 ? sourceGlobs : [];
+
+        for (const include of includes) {
+            try {
+                const pattern = new vscode.RelativePattern(folder, include);
+                const found = await vscode.workspace.findFiles(pattern, exclude);
+                for (const uri of found) {
+                    const key = uri.toString();
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        uris.push(uri);
+                    }
+                }
+            } catch {
+                // Skip invalid glob patterns
+            }
+        }
 
         // Reuse the same t() pattern and comment handling as other source scanners
         const tCallRegex = /\b(\$?)t\(\s*(['"])([A-Za-z0-9_.]+)\2\s*([,)])/g;

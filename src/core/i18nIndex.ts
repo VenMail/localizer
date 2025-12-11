@@ -304,7 +304,7 @@ export class I18nIndex {
             return;
         }
 
-        let index = returnMatch.index + returnMatch[0].length;
+        let index = returnMatch.index;
 
         const skipWhitespaceAndComments = (start: number): number => {
             let pos = start;
