@@ -36,7 +36,13 @@ export class DiagnosticAnalyzer {
     private untranslatedIssuesByLocaleKey = new Map<string, boolean>();
     private untranslatedReportActive = false;
     private sourceKeySetsCache:
-        | { laravelKeys: Set<string>; jsonBackedKeys: Set<string>; keyCount: number }
+        | {
+              laravelKeys: Set<string>;
+              jsonBackedKeys: Set<string>;
+              resxBackedKeys: Set<string>;
+              poBackedKeys: Set<string>;
+              keyCount: number;
+          }
         | null = null;
 
     constructor(
@@ -1029,7 +1035,12 @@ export class DiagnosticAnalyzer {
 
     private getSourceKeySets(
         allKeys: string[],
-    ): { laravelKeys: Set<string>; jsonBackedKeys: Set<string> } {
+    ): {
+        laravelKeys: Set<string>;
+        jsonBackedKeys: Set<string>;
+        resxBackedKeys: Set<string>;
+        poBackedKeys: Set<string>;
+    } {
         if (
             this.sourceKeySetsCache &&
             this.sourceKeySetsCache.keyCount === allKeys.length
@@ -1037,11 +1048,15 @@ export class DiagnosticAnalyzer {
             return {
                 laravelKeys: this.sourceKeySetsCache.laravelKeys,
                 jsonBackedKeys: this.sourceKeySetsCache.jsonBackedKeys,
+                resxBackedKeys: this.sourceKeySetsCache.resxBackedKeys,
+                poBackedKeys: this.sourceKeySetsCache.poBackedKeys,
             };
         }
 
         const laravelKeys = new Set<string>();
         const jsonBackedKeys = new Set<string>();
+        const resxBackedKeys = new Set<string>();
+        const poBackedKeys = new Set<string>();
 
         for (const key of allKeys) {
             const record = this.i18nIndex.getRecord(key);
@@ -1050,6 +1065,8 @@ export class DiagnosticAnalyzer {
             }
             let hasLaravel = false;
             let hasJson = false;
+            let hasResx = false;
+            let hasPo = false;
             for (const loc of record.locations) {
                 const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
                 if (fsPath.endsWith('.json')) {
@@ -1058,7 +1075,13 @@ export class DiagnosticAnalyzer {
                 if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
                     hasLaravel = true;
                 }
-                if (hasLaravel && hasJson) {
+                if (fsPath.endsWith('.resx')) {
+                    hasResx = true;
+                }
+                if (fsPath.endsWith('.po')) {
+                    hasPo = true;
+                }
+                if (hasLaravel && hasJson && hasResx && hasPo) {
                     break;
                 }
             }
@@ -1068,15 +1091,23 @@ export class DiagnosticAnalyzer {
             if (hasJson) {
                 jsonBackedKeys.add(key);
             }
+            if (hasResx) {
+                resxBackedKeys.add(key);
+            }
+            if (hasPo) {
+                poBackedKeys.add(key);
+            }
         }
 
         this.sourceKeySetsCache = {
             laravelKeys,
             jsonBackedKeys,
+            resxBackedKeys,
+            poBackedKeys,
             keyCount: allKeys.length,
         };
 
-        return { laravelKeys, jsonBackedKeys };
+        return { laravelKeys, jsonBackedKeys, resxBackedKeys, poBackedKeys };
     }
 
     /**
@@ -1091,6 +1122,8 @@ export class DiagnosticAnalyzer {
         const fileKey = uri.toString();
         const languageId = this.getLanguageIdForUri(uri);
         const isLaravelSource = languageId === 'php' || languageId === 'blade';
+        const isDotNetSource = languageId === 'csharp' || languageId === 'razor';
+        const isPythonSource = languageId === 'python';
         
         // Only analyze supported source file types
         const supportedLanguages = [
@@ -1101,6 +1134,9 @@ export class DiagnosticAnalyzer {
             'vue',
             'php',
             'blade',
+            'csharp',
+            'razor',
+            'python',
         ];
         if (!supportedLanguages.includes(languageId)) {
             return [];
@@ -1126,8 +1162,15 @@ export class DiagnosticAnalyzer {
         const allKeys = this.i18nIndex.getAllKeys();
 
         // Use cached key sets to avoid recomputing classifications on every file
-        const { laravelKeys, jsonBackedKeys } = this.getSourceKeySets(allKeys);
-        const validKeysSet = isLaravelSource ? laravelKeys : jsonBackedKeys;
+        const { laravelKeys, jsonBackedKeys, resxBackedKeys, poBackedKeys } =
+            this.getSourceKeySets(allKeys);
+        const validKeysSet = isLaravelSource
+            ? laravelKeys
+            : isDotNetSource
+            ? resxBackedKeys
+            : isPythonSource
+            ? poBackedKeys
+            : jsonBackedKeys;
         
         const diagnostics: vscode.Diagnostic[] = [];
         
@@ -1140,8 +1183,11 @@ export class DiagnosticAnalyzer {
         // Match translation calls that reference i18n keys.
         // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key")
         // Laravel PHP/Blade: __('key'), trans('key'), @lang('key')
+        // ASP.NET C#/Razor: Localizer["Key"], HtmlLocalizer["Key"], etc.
+        // Python (Django/Flask): _('key'), gettext('key')
         const tCallPatterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [];
 
+        // Generic JS/TS/Vue helpers
         tCallPatterns.push({
             regex: /\b\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
             keyGroupIndex: 2,
@@ -1162,6 +1208,18 @@ export class DiagnosticAnalyzer {
                     keyGroupIndex: 2,
                 },
             );
+        } else if (isDotNetSource) {
+            // Match patterns like Localizer["My.Key"], HtmlLocalizer["My.Key"], etc.
+            tCallPatterns.push({
+                regex: /\b[A-Za-z_][A-Za-z0-9_]*\s*\[\s*(['"])([A-Za-z0-9_.:]+)\1\s*\]/g,
+                keyGroupIndex: 2,
+            });
+        } else if (isPythonSource) {
+            // _("key"), gettext('key')
+            tCallPatterns.push({
+                regex: /\b(_|gettext)\(\s*(['"])([A-Za-z0-9_.]+)\2\s*(?:,|\))/g,
+                keyGroupIndex: 3,
+            });
         }
 
         for (const { regex, keyGroupIndex } of tCallPatterns) {
@@ -1181,20 +1239,33 @@ export class DiagnosticAnalyzer {
                 }
                 
                 if (!validKeysSet.has(key)) {
-                    // Fallback: if the key exists anywhere in the index, always
-                    // treat it as valid for Laravel sources. For JS/TS/Vue, only
-                    // trust keys that have a JSON-backed location.
+                    // Fallback: if the key exists anywhere in the index, treat it as
+                    // valid when it has a backing file appropriate for the source
+                    // language (JSON for JS/TS, PHP for Laravel, RESX for .NET,
+                    // PO for Python/Django/Flask).
                     const record = this.i18nIndex.getRecord(key);
                     if (record && Array.isArray(record.locations) && record.locations.length > 0) {
+                        const hasJsonLocation = record.locations.some((loc) =>
+                            loc.uri.fsPath.toLowerCase().endsWith('.json'),
+                        );
+                        const hasResxLocation = record.locations.some((loc) =>
+                            loc.uri.fsPath.toLowerCase().endsWith('.resx'),
+                        );
+                        const hasPoLocation = record.locations.some((loc) =>
+                            loc.uri.fsPath.toLowerCase().endsWith('.po'),
+                        );
+
                         if (isLaravelSource) {
+                            // Any backing location is acceptable for Laravel usages.
                             continue;
                         }
-
-                        const hasJsonLocation = record.locations.some((loc) => {
-                            return loc.uri.fsPath.toLowerCase().endsWith('.json');
-                        });
-
-                        if (!isLaravelSource && hasJsonLocation) {
+                        if (isDotNetSource && hasResxLocation) {
+                            continue;
+                        }
+                        if (isPythonSource && hasPoLocation) {
+                            continue;
+                        }
+                        if (!isDotNetSource && !isPythonSource && hasJsonLocation) {
                             continue;
                         }
                     }
@@ -1243,6 +1314,12 @@ export class DiagnosticAnalyzer {
         // Match multi-line comments: /* ... */
         const multiLineRegex = /\/\*[\s\S]*?\*\//g;
         while ((match = multiLineRegex.exec(text)) !== null) {
+            ranges.push({ start: match.index, end: match.index + match[0].length });
+        }
+
+        // Match hash-style comments: # ... until end of line (Python, shell, etc.)
+        const hashLineRegex = /^[ \t]*#[^\n]*/gm;
+        while ((match = hashLineRegex.exec(text)) !== null) {
             ranges.push({ start: match.index, end: match.index + match[0].length });
         }
         
@@ -1341,6 +1418,15 @@ export class DiagnosticAnalyzer {
                 return 'javascriptreact';
             case 'vue':
                 return 'vue';
+            case 'cs':
+                return 'csharp';
+            case 'cshtml':
+            case 'razor':
+                return 'razor';
+            case 'py':
+                return 'python';
+            case 'go':
+                return 'go';
             default:
                 return ext;
         }

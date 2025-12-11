@@ -53,8 +53,15 @@ export class I18nIndex {
             'locales/**/*.json',
             '**/locales/**/*.json',
             'i18n/**/*.json',
+            // Python / Django / Flask gettext catalogs (.po)
+            '**/locale/*/LC_MESSAGES/*.po',
+            '**/locales/*/LC_MESSAGES/*.po',
+            '**/translations/*/LC_MESSAGES/*.po',
+            // Laravel PHP locales
             '**/lang/**/*.php',
             '**/resources/lang/**/*.php',
+            // .NET / ASP.NET RESX resources (conventionally under Resources/)
+            '**/Resources/**/*.resx',
         ];
 
         // Start from user-defined globs if present, otherwise from defaults
@@ -177,6 +184,18 @@ export class I18nIndex {
                     return;
                 }
                 this.walkLaravelPhpFile(text, info.locale, file, info.root);
+            } else if (ext === '.resx') {
+                const locale = this.inferDotNetLocaleFromResxPath(file);
+                if (!locale) {
+                    return;
+                }
+                this.walkResxFile(text, locale, file);
+            } else if (ext === '.po') {
+                const locale = this.inferPoLocaleFromPath(file);
+                if (!locale) {
+                    return;
+                }
+                this.walkPoFile(text, locale, file);
             }
         });
     }
@@ -242,12 +261,54 @@ export class I18nIndex {
             }
         }
 
-        // 3) Fallback: treat the filename itself as the locale (common for src/en.json)
+        // 3) Fallback: infer from filename (supports src/en.json and active.en.json)
         const fileName = path.basename(uri.fsPath);
-        const match = fileName.match(/^([A-Za-z0-9_-]+)\.json$/);
+        const match = fileName.match(/^([A-Za-z0-9_.-]+)\.json$/);
         if (match) {
-            return match[1];
+            const base = match[1];
+            const dotIndex = base.lastIndexOf('.');
+            const candidate = dotIndex >= 0 ? base.slice(dotIndex + 1) : base;
+            if (/^[A-Za-z0-9_-]+$/.test(candidate)) {
+                return candidate;
+            }
         }
+        return null;
+    }
+
+    private inferPoLocaleFromPath(uri: vscode.Uri): string | null {
+        const parts = uri.fsPath.split(path.sep).filter(Boolean);
+        const markers = ['locale', 'locales', 'translations'];
+
+        for (const marker of markers) {
+            const idx = parts.lastIndexOf(marker);
+            if (idx >= 0 && idx + 1 < parts.length) {
+                const candidate = parts[idx + 1];
+                if (/^[A-Za-z0-9_@.-]+$/.test(candidate)) {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private inferDotNetLocaleFromResxPath(uri: vscode.Uri): string | null {
+        const fileName = path.basename(uri.fsPath);
+
+        // Match patterns like:
+        //   - Resources.en.resx
+        //   - SharedResources.fr-FR.resx
+        //   - Views.Home.de.resx
+        const match = fileName.match(/^(.+?)\.([A-Za-z]{2}(?:-[A-Za-z0-9]{2,})?)\.resx$/);
+        if (match) {
+            return match[2];
+        }
+
+        // Fallback: treat culture-neutral .resx as default locale
+        if (/^.+\.resx$/i.test(fileName)) {
+            return this.defaultLocale;
+        }
+
         return null;
     }
 
@@ -319,9 +380,40 @@ export class I18nIndex {
     }
 
     private walkJson(prefix: string, node: unknown, locale: string, uri: vscode.Uri): void {
-        if (!node || typeof node !== 'object' || Array.isArray(node)) {
+        if (!node || typeof node !== 'object') {
             return;
         }
+
+        if (Array.isArray(node)) {
+            // Handle go-i18n style catalogs: an array of objects with id/key and translation/message fields.
+            for (const element of node) {
+                if (!element || typeof element !== 'object' || Array.isArray(element)) {
+                    continue;
+                }
+                const obj = element as Record<string, unknown>;
+                const idValue =
+                    typeof obj.id === 'string'
+                        ? obj.id
+                        : typeof obj.key === 'string'
+                        ? obj.key
+                        : null;
+                if (!idValue) {
+                    continue;
+                }
+                const rawValue =
+                    (obj.translation as unknown) ??
+                    (obj.message as unknown) ??
+                    (obj.text as unknown) ??
+                    (obj.other as unknown);
+                if (typeof rawValue !== 'string' || !rawValue.trim()) {
+                    continue;
+                }
+                const key = prefix ? `${prefix}.${idValue}` : idValue;
+                this.registerTranslation(locale, uri, key, rawValue);
+            }
+            return;
+        }
+
         const recordNode = node as Record<string, unknown>;
         for (const [key, value] of Object.entries(recordNode)) {
             const nextKey = prefix ? `${prefix}.${key}` : key;
@@ -330,6 +422,153 @@ export class I18nIndex {
             } else if (value && typeof value === 'object') {
                 this.walkJson(nextKey, value, locale, uri);
             }
+        }
+    }
+
+    private walkPoFile(text: string, locale: string, uri: vscode.Uri): void {
+        const lines = text.split(/\r?\n/);
+        let currentMsgIdParts: string[] | null = null;
+        let currentMsgStrParts: string[] | null = null;
+        let inMsgId = false;
+        let inMsgStr = false;
+
+        const decodePoString = (input: string): string => {
+            const match = input.match(/"([\s\S]*)"/);
+            if (!match) {
+                return '';
+            }
+            let s = match[1];
+            s = s.replace(/\\"/g, '"').replace(/\\\\/g, '\\').replace(/\\n/g, '\n');
+            return s;
+        };
+
+        const flushEntry = () => {
+            if (!currentMsgIdParts) {
+                return;
+            }
+            const msgid = currentMsgIdParts.join('');
+            if (!msgid) {
+                currentMsgIdParts = null;
+                currentMsgStrParts = null;
+                inMsgId = false;
+                inMsgStr = false;
+                return;
+            }
+            const msgstr =
+                currentMsgStrParts && currentMsgStrParts.length > 0
+                    ? currentMsgStrParts.join('')
+                    : msgid;
+
+            const key = msgid;
+            const value = msgstr;
+            if (key) {
+                this.registerTranslation(locale, uri, key, value);
+            }
+
+            currentMsgIdParts = null;
+            currentMsgStrParts = null;
+            inMsgId = false;
+            inMsgStr = false;
+        };
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+
+            if (!line) {
+                flushEntry();
+                continue;
+            }
+
+            if (line.startsWith('#')) {
+                // Comment line; does not affect current entry
+                continue;
+            }
+
+            if (line.startsWith('msgid ')) {
+                flushEntry();
+                inMsgId = true;
+                inMsgStr = false;
+                currentMsgIdParts = [];
+                currentMsgStrParts = null;
+                const str = decodePoString(line.slice('msgid '.length));
+                currentMsgIdParts.push(str);
+                continue;
+            }
+
+            if (line.startsWith('msgid_plural')) {
+                // Ignore plural ids; keep using the singular msgid as the key
+                continue;
+            }
+
+            if (line.startsWith('msgstr')) {
+                inMsgId = false;
+                inMsgStr = true;
+                currentMsgStrParts = [];
+                const idx = line.indexOf('"');
+                if (idx >= 0) {
+                    const str = decodePoString(line.slice(idx));
+                    currentMsgStrParts.push(str);
+                }
+                continue;
+            }
+
+            if (line.startsWith('msgstr[')) {
+                inMsgId = false;
+                inMsgStr = true;
+                if (!currentMsgStrParts) {
+                    currentMsgStrParts = [];
+                }
+                const idx = line.indexOf('"');
+                if (idx >= 0) {
+                    const str = decodePoString(line.slice(idx));
+                    currentMsgStrParts.push(str);
+                }
+                continue;
+            }
+
+            if (line.startsWith('"')) {
+                const str = decodePoString(line);
+                if (inMsgId && currentMsgIdParts) {
+                    currentMsgIdParts.push(str);
+                } else if (inMsgStr && currentMsgStrParts) {
+                    currentMsgStrParts.push(str);
+                }
+            }
+        }
+
+        flushEntry();
+    }
+
+    private walkResxFile(text: string, locale: string, uri: vscode.Uri): void {
+        // Lightweight RESX parser: extract <data name="Key"><value>Text</value></data>
+        const dataRegex = /<data\s+[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/data>/gi;
+        let match: RegExpExecArray | null;
+
+        const decodeEntities = (input: string): string => {
+            return input
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&amp;/g, '&')
+                .replace(/&quot;/g, '"')
+                .replace(/&apos;/g, "'");
+        };
+
+        while ((match = dataRegex.exec(text)) !== null) {
+            const name = match[1];
+            const body = match[2];
+            const valueMatch = /<value[^>]*>([\s\S]*?)<\/value>/i.exec(body);
+            if (!valueMatch) {
+                continue;
+            }
+            const rawValue = valueMatch[1].trim();
+            if (!rawValue) {
+                continue;
+            }
+            const normalized = decodeEntities(rawValue.replace(/\r?\n+/g, ' ').trim());
+            if (!normalized) {
+                continue;
+            }
+            this.registerTranslation(locale, uri, name, normalized);
         }
     }
 
@@ -604,6 +843,26 @@ export class I18nIndex {
             this.fileToKeys.set(fileKey, { locale, keys: [] });
 
             this.walkLaravelPhpFile(text, locale, uri, info.root);
+        } else if (ext === '.resx') {
+            const locale = this.inferDotNetLocaleFromResxPath(uri) || existingLocale;
+            if (!locale) {
+                this.fileToKeys.delete(fileKey);
+                return;
+            }
+
+            this.fileToKeys.set(fileKey, { locale, keys: [] });
+
+            this.walkResxFile(text, locale, uri);
+        } else if (ext === '.po') {
+            const locale = this.inferPoLocaleFromPath(uri) || existingLocale;
+            if (!locale) {
+                this.fileToKeys.delete(fileKey);
+                return;
+            }
+
+            this.fileToKeys.set(fileKey, { locale, keys: [] });
+
+            this.walkPoFile(text, locale, uri);
         }
     }
 

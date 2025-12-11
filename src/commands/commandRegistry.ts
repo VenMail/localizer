@@ -577,15 +577,21 @@ export class CommandRegistry {
                 'src/i18n/**/*.json',
                 'src/locales/**/*.json',
                 'locales/**/*.json',
+                '**/locales/**/*.json',
                 'i18n/**/*.json',
                 'lang/**/*.php',
                 'resources/lang/**/*.php',
+                '**/Resources/**/*.resx',
+                '**/locale/*/LC_MESSAGES/*.po',
+                '**/locales/*/LC_MESSAGES/*.po',
+                '**/translations/*/LC_MESSAGES/*.po',
             ];
 
         const sourceIncludeGlobs =
             globalCfg.get<string[]>('i18n.sourceGlobs') || [
-                '**/*.{ts,tsx,js,jsx,vue,php}',
+                '**/*.{ts,tsx,js,jsx,vue,php,cs,py,go}',
                 '**/*.blade.php',
+                '**/*.{cshtml,razor}',
             ];
         const sourceExcludeGlobs =
             globalCfg.get<string[]>('i18n.sourceExcludeGlobs') || [
@@ -731,6 +737,9 @@ export class CommandRegistry {
                 'vue',
                 'php',
                 'blade',
+                'csharp',
+                'razor',
+                'python',
             ].includes(languageId);
         };
 

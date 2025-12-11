@@ -209,6 +209,10 @@ Example (user or workspace settings):
 
 ## Release Notes
 
+### 0.1.4
+
+- Fixes for laravel go-i18n style catalogs. Added Python, C# and GoLang support.
+
 ### 0.1.1
 
 - Major refactors, verified robust support for React and Vue based frameworks. Added one command to fix all issues.

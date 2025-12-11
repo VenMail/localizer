@@ -266,11 +266,31 @@ export class AutoMonitor {
                         ? 'i18n:extract'
                         : 'i18n:rewrite';
 
+                const relativeFiles = cleanFiles.map((p) => vscode.workspace.asRelativePath(p));
+                let filesPreview = relativeFiles[0];
+                if (relativeFiles.length === 2) {
+                    filesPreview = `${relativeFiles[0]}, ${relativeFiles[1]}`;
+                } else if (relativeFiles.length > 2) {
+                    filesPreview = `${relativeFiles[0]}, ${relativeFiles[1]}, ... (+${relativeFiles.length - 2} more)`;
+                }
+
+                const scriptsToRun: string[] = [];
+                if (autoExtract) scriptsToRun.push('i18n:extract');
+                if (autoRewrite) scriptsToRun.push('i18n:rewrite');
+                const scriptsDetail =
+                    scriptsToRun.length > 1
+                        ? `"${scriptsToRun[0]}" and "${scriptsToRun[1]}"`
+                        : `"${scriptsToRun[0]}"`;
+
                 const choice = await vscode.window.showQuickPick(
                     [
                         {
                             label: `Run ${scriptsLabel} now`,
-                            description: `Process ${cleanFiles.length} clean file(s) with AI i18n scripts`,
+                            description:
+                                cleanFiles.length === 1
+                                    ? `Run for 1 clean file: ${relativeFiles[0]}`
+                                    : `Run for ${cleanFiles.length} clean files (e.g. ${filesPreview})`,
+                            detail: `Will run package.json script(s) ${scriptsDetail} and may update locale JSON files and rewrite translation usages in code.`,
                         },
                         {
                             label: 'Skip this time',
@@ -279,7 +299,7 @@ export class AutoMonitor {
                         {
                             label: 'Disable auto extract/rewrite',
                             description:
-                                'Turn off ai-localizer.i18n.autoExtract and ai-localizer.i18n.autoRewrite for this workspace',
+                                'Stop running i18n:extract/i18n:rewrite automatically for this workspace (you can still run them manually).',
                         },
                     ],
                     {
