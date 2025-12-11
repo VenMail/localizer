@@ -184,15 +184,22 @@ export class CleanupHandler {
                 }
 
                 const deletedKeys = new Set<string>();
+                const keysStillInUse: string[] = [];
                 for (const item of unused) {
                     if (!item || typeof item.keyPath !== 'string') continue;
-                    if (deleteKeyPathInObject(freshRoot, item.keyPath)) {
-                        deletedKeys.add(item.keyPath);
+                    const keyPath = item.keyPath;
+                    const hasUsage = await this.checkKeyUsageInCode(folder!, keyPath);
+                    if (hasUsage) {
+                        keysStillInUse.push(keyPath);
+                        continue;
+                    }
+                    if (deleteKeyPathInObject(freshRoot, keyPath)) {
+                        deletedKeys.add(keyPath);
                     }
                 }
 
                 if (!deletedKeys.size) {
-                    return { deletedKeys, deletedFromOtherFiles: 0 };
+                    return { deletedKeys, deletedFromOtherFiles: 0, keysStillInUse };
                 }
 
                 await operationLock.withFileLock(targetUri, 'cleanup-unused', async () => {
@@ -221,7 +228,7 @@ export class CleanupHandler {
                     }
                 }
 
-                return { deletedKeys, deletedFromOtherFiles };
+                return { deletedKeys, deletedFromOtherFiles, keysStillInUse };
             }
         );
 
@@ -229,24 +236,33 @@ export class CleanupHandler {
             return;
         }
 
-        const { deletedKeys, deletedFromOtherFiles } = result;
+        const { deletedKeys, deletedFromOtherFiles, keysStillInUse } = result;
 
         if (!deletedKeys.size) {
-            vscode.window.showInformationMessage(
-                'AI Localizer: No unused keys were removed from this file.',
-            );
+            if (keysStillInUse && keysStillInUse.length > 0) {
+                vscode.window.showInformationMessage(
+                    `AI Localizer: Skipped ${keysStillInUse.length} key(s) because they are still referenced in source code. No unused keys were removed from this file.`,
+                );
+            } else {
+                vscode.window.showInformationMessage(
+                    'AI Localizer: No unused keys were removed from this file.',
+                );
+            }
             return;
         }
 
+        let message: string;
         if (deletedFromOtherFiles > 0) {
-            vscode.window.showInformationMessage(
-                `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file and cleaned up unused keys in ${deletedFromOtherFiles} other locale file(s).`,
-            );
+            message = `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file and cleaned up unused keys in ${deletedFromOtherFiles} other locale file(s).`;
         } else {
-            vscode.window.showInformationMessage(
-                `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file.`,
-            );
+            message = `AI Localizer: Removed ${deletedKeys.size} unused key(s) from this file.`;
         }
+
+        if (keysStillInUse && keysStillInUse.length > 0) {
+            message += ` ${keysStillInUse.length} key(s) were skipped because they are still referenced in source code.`;
+        }
+
+        vscode.window.showInformationMessage(message);
     }
 
     /**
@@ -331,6 +347,14 @@ export class CleanupHandler {
 
         let root: any = await readJsonFile(documentUri) || {};
         if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+        const inUse = await this.checkKeyUsageInCode(folder, keyPath);
+        if (inUse) {
+            vscode.window.showInformationMessage(
+                `AI Localizer: Key ${keyPath} is still referenced in source code. Skipping removal.`,
+            );
+            return;
+        }
 
         if (!deleteKeyPathInObject(root, keyPath)) {
             vscode.window.showInformationMessage(
@@ -588,7 +612,11 @@ export class CleanupHandler {
         keyPath: string,
     ): Promise<boolean> {
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
-        const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
+        const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || [
+            '**/*.{ts,tsx,js,jsx,vue}',
+            '**/*.php',
+            '**/*.blade.php',
+        ];
         const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
             '**/node_modules/**',
             '**/.git/**',
@@ -602,6 +630,14 @@ export class CleanupHandler {
             `t("${keyPath}"`,
             `$t('${keyPath}'`,
             `$t("${keyPath}"`,
+            `__('${keyPath}'`,
+            `__("${keyPath}"`,
+            `@lang('${keyPath}'`,
+            `@lang("${keyPath}"`,
+            `trans('${keyPath}'`,
+            `trans("${keyPath}"`,
+            `Lang::get('${keyPath}'`,
+            `Lang::get("${keyPath}"`,
         ];
 
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
@@ -810,23 +846,27 @@ export class CleanupHandler {
 
         // Safety check for keys in use
         const usages = Array.isArray(entry.usages) ? entry.usages : [];
-        if (usages.length > 0) {
-            const safetyChoice = await vscode.window.showWarningMessage(
-                `AI Localizer: Key "${keyPath}" is marked as invalid but is being used in ${usages.length} location(s) in code. ` +
-                `This may be from an outdated report. Removing it would break the application. ` +
-                `Please regenerate the invalid keys report. Do you want to cancel this operation?`,
-                { modal: true },
-                'Cancel',
-                'Remove from locale files only (risky)',
+
+        const hasCurrentUsages = await this.checkKeyUsageInCode(folder, keyPath);
+        if (hasCurrentUsages) {
+            vscode.window.showWarningMessage(
+                `AI Localizer: Key "${keyPath}" is still referenced in source code. It cannot be safely removed. ` +
+                `Please restore inline strings in code or regenerate the invalid keys report before retrying.`,
             );
-            if (!safetyChoice || safetyChoice === 'Cancel') {
-                return;
-            }
+            return;
         }
 
         // Remove from this locale file
         let root: any = await readJsonFile(documentUri) || {};
         if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+        const inUse = await this.checkKeyUsageInCode(folder, keyPath);
+        if (inUse) {
+            vscode.window.showInformationMessage(
+                `AI Localizer: Key ${keyPath} is still referenced in source code. Skipping removal.`,
+            );
+            return;
+        }
 
         if (deleteKeyPathInObject(root, keyPath)) {
             await writeJsonFile(documentUri, root);

@@ -170,6 +170,13 @@ export class ReportHandler {
             vscode.window.showInformationMessage(
                 `AI Localizer: Applied ${totalWritten} AI translation updates.`,
             );
+
+            // Rescan to refresh index and diagnostics after applying AI fixes
+            try {
+                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+            } catch {
+                // Ignore rescan failures; updates are already written
+            }
         } catch (err) {
             console.error('Failed to apply AI fixes:', err);
             vscode.window.showErrorMessage(`AI Localizer: Failed to apply AI fixes. ${err}`);

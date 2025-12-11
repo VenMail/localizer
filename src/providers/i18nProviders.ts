@@ -581,6 +581,14 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
 
     private decoder = new TextDecoder('utf-8');
 
+    private isLaravelLocaleFile(document: vscode.TextDocument): boolean {
+        const fsPath = document.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+        if (!fsPath.endsWith('.php')) {
+            return false;
+        }
+        return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+    }
+
     constructor(private i18nIndex: I18nIndex) {}
 
     async provideCodeActions(
@@ -745,7 +753,10 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 }
             }
 
-            if (!addedBulkActions && (document.languageId === 'json' || document.languageId === 'jsonc')) {
+            const isJsonLocale = document.languageId === 'json' || document.languageId === 'jsonc';
+            const isLaravelLocale = this.isLaravelLocaleFile(document);
+
+            if (!addedBulkActions && (isJsonLocale || isLaravelLocale)) {
                 addedBulkActions = true;
 
                 // Add bulk translate action for all untranslated keys in this file
@@ -761,30 +772,32 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 };
                 actions.push(bulkTranslateAction);
 
-                const cleanupTitle = 'AI Localizer: Cleanup unused keys in this file (from report)';
-                const cleanupAction = new vscode.CodeAction(
-                    cleanupTitle,
-                    vscode.CodeActionKind.QuickFix,
-                );
-                cleanupAction.command = {
-                    title: cleanupTitle,
-                    command: 'ai-localizer.i18n.cleanupUnusedKeysInFile',
-                    arguments: [document.uri],
-                };
-                actions.push(cleanupAction);
+                if (isJsonLocale) {
+                    const cleanupTitle = 'AI Localizer: Cleanup unused keys in this file (from report)';
+                    const cleanupAction = new vscode.CodeAction(
+                        cleanupTitle,
+                        vscode.CodeActionKind.QuickFix,
+                    );
+                    cleanupAction.command = {
+                        title: cleanupTitle,
+                        command: 'ai-localizer.i18n.cleanupUnusedKeysInFile',
+                        arguments: [document.uri],
+                    };
+                    actions.push(cleanupAction);
 
-                const invalidTitle =
-                    'AI Localizer: Remove invalid/non-translatable keys in this file (from report)';
-                const invalidAction = new vscode.CodeAction(
-                    invalidTitle,
-                    vscode.CodeActionKind.QuickFix,
-                );
-                invalidAction.command = {
-                    title: invalidTitle,
-                    command: 'ai-localizer.i18n.restoreInvalidKeysInFile',
-                    arguments: [document.uri],
-                };
-                actions.push(invalidAction);
+                    const invalidTitle =
+                        'AI Localizer: Remove invalid/non-translatable keys in this file (from report)';
+                    const invalidAction = new vscode.CodeAction(
+                        invalidTitle,
+                        vscode.CodeActionKind.QuickFix,
+                    );
+                    invalidAction.command = {
+                        title: invalidTitle,
+                        command: 'ai-localizer.i18n.restoreInvalidKeysInFile',
+                        arguments: [document.uri],
+                    };
+                    actions.push(invalidAction);
+                }
             }
         }
 

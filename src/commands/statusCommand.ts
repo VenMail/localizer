@@ -8,6 +8,17 @@ import { ProjectConfigService } from '../services/projectConfigService';
 export class StatusCommand {
     constructor(private statusBar: I18nStatusBar, private projectConfigService: ProjectConfigService) {}
 
+    private isLaravelLocaleFile(document: vscode.TextDocument | undefined): boolean {
+        if (!document) {
+            return false;
+        }
+        const fsPath = document.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+        if (!fsPath.endsWith('.php')) {
+            return false;
+        }
+        return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+    }
+
     async execute(): Promise<void> {
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoMonitor = config.get<boolean>('i18n.autoMonitor', true);
@@ -81,14 +92,18 @@ export class StatusCommand {
         const isBlade = lang === 'blade' || lang === 'php';
 
         const isJson = lang === 'json' || lang === 'jsonc';
+        const isLaravelLocale = this.isLaravelLocaleFile(editor?.document);
 
-        if (isJson && editor) {
+        if ((isJson || isLaravelLocale) && editor) {
             items.unshift({
                 label: 'Bulk-translate untranslated keys in all locale files (project)',
                 description:
-                    'Use AI to translate all missing/untranslated keys across all locale JSON files in this workspace',
+                    'Use AI to translate all missing/untranslated keys across all locale files in this workspace',
                 action: 'bulkTranslateProject',
             });
+        }
+
+        if (isJson && editor) {
             items.unshift({
                 label: 'Apply all style suggestions in this file',
                 description: 'Apply all AI i18n style suggestions in the current locale JSON file',
@@ -114,6 +129,12 @@ export class StatusCommand {
                 description:
                     'Run bulk-translate, cleanup unused keys, remove invalid keys, and apply all style suggestions (each step will confirm).',
                 action: 'fixAllIssuesLocaleFile',
+            });
+        } else if (isLaravelLocale && editor) {
+            items.unshift({
+                label: 'Bulk-translate untranslated keys in this locale file',
+                description: 'Use AI to translate all missing/untranslated keys in this Laravel lang file',
+                action: 'bulkTranslateLocaleFile',
             });
         }
 

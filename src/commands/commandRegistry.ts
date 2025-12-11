@@ -44,6 +44,33 @@ export class CommandRegistry {
         );
     }
 
+    private async clearI18nReports(): Promise<void> {
+        const folders = vscode.workspace.workspaceFolders || [];
+        if (!folders.length) {
+            return;
+        }
+
+        const reportFiles = [
+            '.i18n-untranslated-report.json',
+            '.i18n-untranslated-untranslated.json',
+            '.i18n-untranslated-compact.json',
+            '.i18n-unused-report.json',
+            '.i18n-invalid-report.json',
+            '.i18n-review-generated.json',
+        ];
+
+        for (const folder of folders) {
+            const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+            for (const name of reportFiles) {
+                const uri = vscode.Uri.joinPath(scriptsDir, name);
+                try {
+                    await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
+                } catch {
+                }
+            }
+        }
+    }
+
     private clearLocaleDebounceTimers(): void {
         for (const timer of this.localeDiagnosticsDebounce.values()) {
             clearTimeout(timer);
@@ -266,6 +293,9 @@ export class CommandRegistry {
                     },
                     async (progress) => {
                         try {
+                            progress.report({ message: 'Cleaning existing i18n reports (unused/invalid/untranslated)...' });
+                            await this.clearI18nReports();
+
                             progress.report({ message: 'Configuring project i18n (scripts, locales, srcRoot)...' });
                             await configureCmd.execute();
 

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { I18nIndex } from '../../../core/i18nIndex';
 import { TranslationService } from '../../../services/translationService';
-import { setTranslationValuesBatch } from '../../../core/i18nFs';
+import { setLaravelTranslationValue, setTranslationValuesBatch } from '../../../core/i18nFs';
 import { getGranularSyncService } from '../../../services/granularSyncService';
 import { pickWorkspaceFolder } from '../../../core/workspace';
 import { operationLock, OperationType } from '../utils/operationLock';
@@ -60,6 +60,31 @@ export class TranslationHandler {
         return base.toLowerCase();
     }
 
+    private isLaravelRecord(record: any): boolean {
+        if (!record || !Array.isArray(record.locations)) {
+            return false;
+        }
+        for (const loc of record.locations) {
+            const uri: vscode.Uri | undefined = loc && loc.uri;
+            if (!uri) {
+                continue;
+            }
+            const fsPath = uri.fsPath.replace(/\\/g, '/').toLowerCase();
+            if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private isLaravelLocaleFileUri(uri: vscode.Uri): boolean {
+        const fsPath = uri.fsPath.replace(/\\/g, '/').toLowerCase();
+        if (!fsPath.endsWith('.php')) {
+            return false;
+        }
+        return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+    }
+
     /**
      * Apply quick fix for untranslated key
      */
@@ -107,23 +132,26 @@ export class TranslationHandler {
         }
 
         const rootName = this.getRootNameForRecord(record);
+        const isLaravel = this.isLaravelRecord(record);
 
-        // Sync missing keys with placeholder values
+        // Sync missing keys with placeholder values for JSON-based locales only
         const placeholderUpdates = new Map<string, Map<string, { value: string; rootName?: string }>>();
-        for (const locale of targetLocales) {
-            const current = record.locales.get(locale);
-            if (typeof current !== 'string' || !current.trim()) {
-                let localeUpdates = placeholderUpdates.get(locale);
-                if (!localeUpdates) {
-                    localeUpdates = new Map();
-                    placeholderUpdates.set(locale, localeUpdates);
+        if (!isLaravel) {
+            for (const locale of targetLocales) {
+                const current = record.locales.get(locale);
+                if (typeof current !== 'string' || !current.trim()) {
+                    let localeUpdates = placeholderUpdates.get(locale);
+                    if (!localeUpdates) {
+                        localeUpdates = new Map();
+                        placeholderUpdates.set(locale, localeUpdates);
+                    }
+                    localeUpdates.set(key, { value: defaultValue, rootName });
                 }
-                localeUpdates.set(key, { value: defaultValue, rootName });
             }
-        }
 
-        for (const [locale, updates] of placeholderUpdates.entries()) {
-            await setTranslationValuesBatch(folder, locale, updates);
+            for (const [locale, updates] of placeholderUpdates.entries()) {
+                await setTranslationValuesBatch(folder, locale, updates);
+            }
         }
 
         const translations = await this.translationService.translateToLocales(
@@ -146,19 +174,25 @@ export class TranslationHandler {
             return;
         }
 
-        // Write AI translations in batch
-        const translationUpdates = new Map<string, Map<string, { value: string; rootName?: string }>>();
-        for (const [locale, newValue] of translations.entries()) {
-            let localeUpdates = translationUpdates.get(locale);
-            if (!localeUpdates) {
-                localeUpdates = new Map();
-                translationUpdates.set(locale, localeUpdates);
+        // Write AI translations
+        if (isLaravel) {
+            for (const [locale, newValue] of translations.entries()) {
+                await setLaravelTranslationValue(folder, locale, key, newValue);
             }
-            localeUpdates.set(key, { value: newValue, rootName });
-        }
+        } else {
+            const translationUpdates = new Map<string, Map<string, { value: string; rootName?: string }>>();
+            for (const [locale, newValue] of translations.entries()) {
+                let localeUpdates = translationUpdates.get(locale);
+                if (!localeUpdates) {
+                    localeUpdates = new Map();
+                    translationUpdates.set(locale, localeUpdates);
+                }
+                localeUpdates.set(key, { value: newValue, rootName });
+            }
 
-        for (const [locale, updates] of translationUpdates.entries()) {
-            await setTranslationValuesBatch(folder, locale, updates);
+            for (const [locale, updates] of translationUpdates.entries()) {
+                await setTranslationValuesBatch(folder, locale, updates);
+            }
         }
 
         vscode.window.showInformationMessage(
@@ -187,9 +221,11 @@ export class TranslationHandler {
         }
 
         const doc = await vscode.workspace.openTextDocument(targetUri);
-        if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+        const isJsonFile = doc.languageId === 'json' || doc.languageId === 'jsonc';
+        const isLaravelLocaleFile = this.isLaravelLocaleFileUri(targetUri);
+        if (!isJsonFile && !isLaravelLocaleFile) {
             vscode.window.showInformationMessage(
-                'AI Localizer: Bulk translate only applies to locale JSON files.',
+                'AI Localizer: Bulk translate only applies to locale JSON or Laravel lang files.',
             );
             return;
         }
@@ -340,15 +376,23 @@ export class TranslationHandler {
                                 message: `Writing ${batchUpdates.size} translation(s) to ${targetLocale}...`,
                             });
 
-                            const writeResult = await setTranslationValuesBatch(folder!, targetLocale, batchUpdates);
-                            translatedCount = writeResult.written;
+                            if (isLaravelLocaleFile) {
+                                for (const [fullKey, { value }] of batchUpdates.entries()) {
+                                    await setLaravelTranslationValue(folder!, targetLocale, fullKey, value);
+                                    translatedCount += 1;
+                                    fixed.push({ locale: targetLocale, keyPath: fullKey });
+                                }
+                            } else {
+                                const writeResult = await setTranslationValuesBatch(folder!, targetLocale, batchUpdates);
+                                translatedCount = writeResult.written;
 
-                            for (const [key] of batchUpdates.entries()) {
-                                fixed.push({ locale: targetLocale, keyPath: key });
-                            }
+                                for (const [key] of batchUpdates.entries()) {
+                                    fixed.push({ locale: targetLocale, keyPath: key });
+                                }
 
-                            if (writeResult.errors.length > 0) {
-                                console.error('AI Localizer: Some translations failed to write:', writeResult.errors);
+                                if (writeResult.errors.length > 0) {
+                                    console.error('AI Localizer: Some translations failed to write:', writeResult.errors);
+                                }
                             }
                         }
                     },
@@ -372,6 +416,13 @@ export class TranslationHandler {
             vscode.window.showInformationMessage(
                 `AI Localizer: Translated ${translatedCount} key(s) in ${targetLocale}.`,
             );
+
+            // Rescan to refresh index and diagnostics after bulk translation
+            try {
+                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+            } catch {
+                // Ignore rescan failures; translations are already written
+            }
         } else {
             const apiChoice = await vscode.window.showInformationMessage(
                 'AI Localizer: No translations were generated (check API key and settings).',
@@ -394,6 +445,7 @@ export class TranslationHandler {
         globalDefaultLocale: string,
         pruneReportsCallback: (folder: vscode.WorkspaceFolder, fixed: Array<{ locale: string; keyPath: string }>) => Promise<void>,
     ): Promise<void> {
+        const isLaravelDefaultFile = this.isLaravelLocaleFileUri(documentUri);
         const keysInFile = fileInfo?.keys || [];
         if (!keysInFile.length) {
             vscode.window.showInformationMessage(
@@ -401,28 +453,74 @@ export class TranslationHandler {
             );
             return;
         }
+
         const missingPerLocale = new Map<string, TranslationItem[]>();
 
-        for (const key of keysInFile) {
-            const record = this.i18nIndex.getRecord(key);
-            if (!record) continue;
+        // Primary source of truth: current untranslated diagnostics for this file
+        const fileDiagnostics = vscode.languages.getDiagnostics(documentUri);
+        if (fileDiagnostics && fileDiagnostics.length) {
+            try {
+                const { parseUntranslatedDiagnostic } = await import('../utils/diagnosticParser');
 
-            const defaultLocale = record.defaultLocale || globalDefaultLocale;
-            const defaultValue = record.locales.get(defaultLocale);
-            if (typeof defaultValue !== 'string' || !defaultValue.trim()) continue;
+                for (const d of fileDiagnostics) {
+                    if (String(d.code) !== 'ai-i18n.untranslated') continue;
 
-            for (const [locale, currentValue] of record.locales.entries()) {
-                if (!locale || locale === defaultLocale) continue;
-                const current = typeof currentValue === 'string' ? currentValue.trim() : '';
-                const needsTranslation = !current || current === defaultValue.trim();
-                if (!needsTranslation) continue;
+                    const parsed = parseUntranslatedDiagnostic(String(d.message || ''));
+                    if (!parsed || !parsed.key || !parsed.locales || !parsed.locales.length) continue;
 
-                let list = missingPerLocale.get(locale);
-                if (!list) {
-                    list = [];
-                    missingPerLocale.set(locale, list);
+                    const key = parsed.key;
+                    if (!keysInFile.includes(key)) continue;
+
+                    const record = this.i18nIndex.getRecord(key);
+                    if (!record) continue;
+
+                    const defaultLocale = record.defaultLocale || globalDefaultLocale;
+                    const defaultValue = record.locales.get(defaultLocale);
+                    if (typeof defaultValue !== 'string' || !defaultValue.trim()) continue;
+
+                    for (const locale of parsed.locales) {
+                        if (!locale || locale === defaultLocale) continue;
+
+                        let list = missingPerLocale.get(locale);
+                        if (!list) {
+                            list = [];
+                            missingPerLocale.set(locale, list);
+                        }
+                        list.push({ key, defaultValue, defaultLocale });
+                    }
                 }
-                list.push({ key, defaultValue, defaultLocale });
+            } catch {
+                // If diagnostic parsing fails for any reason, fall back to index-based detection below
+            }
+        }
+
+        // Fallback when no untranslated diagnostics were found: infer missing locales from index
+        if (!missingPerLocale.size) {
+            const allLocales = this.i18nIndex.getAllLocales();
+
+            for (const key of keysInFile) {
+                const record = this.i18nIndex.getRecord(key);
+                if (!record) continue;
+
+                const defaultLocale = record.defaultLocale || globalDefaultLocale;
+                const defaultValue = record.locales.get(defaultLocale);
+                if (typeof defaultValue !== 'string' || !defaultValue.trim()) continue;
+                const trimmedDefault = defaultValue.trim();
+
+                for (const locale of allLocales) {
+                    if (!locale || locale === defaultLocale) continue;
+                    const currentValue = record.locales.get(locale);
+                    const current = typeof currentValue === 'string' ? currentValue.trim() : '';
+                    const needsTranslation = !current || current === trimmedDefault;
+                    if (!needsTranslation) continue;
+
+                    let list = missingPerLocale.get(locale);
+                    if (!list) {
+                        list = [];
+                        missingPerLocale.set(locale, list);
+                    }
+                    list.push({ key, defaultValue, defaultLocale });
+                }
             }
         }
 
@@ -559,18 +657,26 @@ export class TranslationHandler {
                                     increment: (100 / selectedLocales.length) * 0.5,
                                 });
 
-                                const writeResult = await setTranslationValuesBatch(folder, selectedLocale, batchUpdates);
-                                totalTranslatedCount += writeResult.written;
+                                if (isLaravelDefaultFile) {
+                                    for (const [fullKey, { value }] of batchUpdates.entries()) {
+                                        await setLaravelTranslationValue(folder, selectedLocale, fullKey, value);
+                                        totalTranslatedCount += 1;
+                                        fixed.push({ locale: selectedLocale, keyPath: fullKey });
+                                    }
+                                } else {
+                                    const writeResult = await setTranslationValuesBatch(folder, selectedLocale, batchUpdates);
+                                    totalTranslatedCount += writeResult.written;
 
-                                for (const [key] of batchUpdates.entries()) {
-                                    fixed.push({ locale: selectedLocale, keyPath: key });
-                                }
+                                    for (const [key] of batchUpdates.entries()) {
+                                        fixed.push({ locale: selectedLocale, keyPath: key });
+                                    }
 
-                                if (writeResult.errors.length > 0) {
-                                    console.error(
-                                        `AI Localizer: Some translations failed to write for ${selectedLocale}:`,
-                                        writeResult.errors,
-                                    );
+                                    if (writeResult.errors.length > 0) {
+                                        console.error(
+                                            `AI Localizer: Some translations failed to write for ${selectedLocale}:`,
+                                            writeResult.errors,
+                                        );
+                                    }
                                 }
                             }
 
@@ -598,6 +704,13 @@ export class TranslationHandler {
                 ? `${totalTranslatedCount} key(s) across ${selLocales.length} locale(s)`
                 : `${totalTranslatedCount} key(s) in ${selLocales[0]}`;
             vscode.window.showInformationMessage(`AI Localizer: Translated ${localeSummary}.`);
+
+            // Rescan to refresh index and diagnostics after bulk translation from default file
+            try {
+                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+            } catch {
+                // Ignore rescan failures; translations are already written
+            }
         } else {
             const apiChoice = await vscode.window.showInformationMessage(
                 'AI Localizer: No translations were generated (check API key and settings).',
@@ -775,26 +888,45 @@ export class TranslationHandler {
                                         continue;
                                     }
 
-                                    const batchUpdates = new Map<string, { value: string; rootName?: string }>();
+                                    const jsonBatchUpdates = new Map<string, { value: string; rootName?: string }>();
+                                    const laravelUpdates = new Map<string, string>();
                                     for (const item of items) {
                                         if (token.isCancellationRequested) break;
                                         const newValue = translations.get(item.key);
                                         if (!newValue) continue;
                                         const record = this.i18nIndex.getRecord(item.key);
-                                        const rootName = record ? this.getRootNameForRecord(record) : 'common';
-                                        batchUpdates.set(item.key, { value: newValue, rootName });
+                                        const isLaravel = record && this.isLaravelRecord(record);
+                                        if (isLaravel) {
+                                            laravelUpdates.set(item.key, newValue);
+                                        } else {
+                                            const rootName = record ? this.getRootNameForRecord(record) : 'common';
+                                            jsonBatchUpdates.set(item.key, { value: newValue, rootName });
+                                        }
                                     }
 
-                                    if (batchUpdates.size > 0 && !token.isCancellationRequested) {
-                                        const writeResult = await setTranslationValuesBatch(folder!, locale, batchUpdates);
-                                        translatedTotal += writeResult.written;
+                                    if (!token.isCancellationRequested) {
+                                        if (jsonBatchUpdates.size > 0) {
+                                            const writeResult = await setTranslationValuesBatch(folder!, locale, jsonBatchUpdates);
+                                            translatedTotal += writeResult.written;
 
-                                        for (const [key] of batchUpdates.entries()) {
-                                            fixed.push({ locale, keyPath: key });
+                                            for (const [key] of jsonBatchUpdates.entries()) {
+                                                fixed.push({ locale, keyPath: key });
+                                            }
+
+                                            if (writeResult.errors.length > 0) {
+                                                console.error(
+                                                    `AI Localizer: Some translations failed to write for ${locale}:`,
+                                                    writeResult.errors,
+                                                );
+                                            }
                                         }
 
-                                        if (writeResult.errors.length > 0) {
-                                            console.error(`AI Localizer: Some translations failed to write for ${locale}:`, writeResult.errors);
+                                        if (laravelUpdates.size > 0) {
+                                            for (const [fullKey, value] of laravelUpdates.entries()) {
+                                                await setLaravelTranslationValue(folder!, locale, fullKey, value);
+                                                translatedTotal += 1;
+                                                fixed.push({ locale, keyPath: fullKey });
+                                            }
                                         }
                                     }
                                 } catch (err) {
@@ -829,7 +961,7 @@ export class TranslationHandler {
                 );
 
                 return { fixed, translatedTotal };
-            }
+            },
         );
 
         if (!result) {
@@ -847,6 +979,13 @@ export class TranslationHandler {
                 `AI Localizer: Translated ${translatedTotal} key(s) across ${missingPerLocale.size} locale(s).`,
             );
             await generateAutoIgnoreCallback(folder);
+
+            // Rescan once after project-wide bulk translation completes
+            try {
+                await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
+            } catch {
+                // Ignore rescan failures; translations are already written
+            }
         } else {
             const apiChoice = await vscode.window.showInformationMessage(
                 'AI Localizer: No translations were generated (check API key and settings).',
@@ -922,4 +1061,5 @@ export class TranslationHandler {
         }
     }
 }
+
 
