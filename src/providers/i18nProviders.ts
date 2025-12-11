@@ -399,7 +399,11 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
             }
 
             const keyInfo = extractKeyAtPosition(document, position);
-            const existingPrefix = keyInfo ? keyInfo.key : '';
+            if (!keyInfo) {
+                // Only offer completions when cursor is inside a translation key string
+                return [];
+            }
+            const existingPrefix = keyInfo.key;
 
             const items: vscode.CompletionItem[] = [];
             const allKeys = this.i18nIndex.getAllKeys();

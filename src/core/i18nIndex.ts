@@ -45,16 +45,35 @@ export class I18nIndex {
             return;
         }
 
-        const localeGlobs =
-            config.get<string[]>('i18n.localeGlobs') || [
-                'resources/js/i18n/auto/**/*.json',
-                'src/i18n/**/*.json',
-                'src/locales/**/*.json',
-                'locales/**/*.json',
-                'i18n/**/*.json',
-                'lang/**/*.php',
-                'resources/lang/**/*.php',
-            ];
+        const userGlobs = config.get<string[]>('i18n.localeGlobs');
+        const defaultGlobs: string[] = [
+            'resources/js/i18n/auto/**/*.json',
+            'src/i18n/**/*.json',
+            'src/locales/**/*.json',
+            'locales/**/*.json',
+            '**/locales/**/*.json',
+            'i18n/**/*.json',
+            '**/lang/**/*.php',
+            '**/resources/lang/**/*.php',
+        ];
+
+        // Start from user-defined globs if present, otherwise from defaults
+        const baseGlobs: string[] = userGlobs && userGlobs.length ? [...userGlobs] : [...defaultGlobs];
+
+        // Always ensure Laravel PHP locale files are scanned, even when the user
+        // customizes i18n.localeGlobs. This prevents missing-reference diagnostics
+        // when a Laravel project is nested under a higher-level workspace folder.
+        const laravelPhpGlobs: string[] = [
+            'lang/**/*.php',
+            'resources/lang/**/*.php',
+            '**/lang/**/*.php',
+            '**/resources/lang/**/*.php',
+        ];
+        for (const glob of laravelPhpGlobs) {
+            if (!baseGlobs.includes(glob)) {
+                baseGlobs.push(glob);
+            }
+        }
 
         const folders = vscode.workspace.workspaceFolders || [];
         if (!folders.length) {
@@ -64,18 +83,22 @@ export class I18nIndex {
         const fileKeySet = new Set<string>();
         const fileList: vscode.Uri[] = [];
         for (const folder of folders) {
-            let effectiveGlobs: string[] = localeGlobs;
-            if (!config.get<string[]>('i18n.localeGlobs')) {
+            // Start from the shared base globs for every folder
+            let effectiveGlobs: string[] = [...baseGlobs];
+
+            // When localeGlobs is not explicitly configured, augment the
+            // base globs with framework-specific runtime roots so we pick
+            // up generated/auto JSON files without losing generic paths
+            // like locales/** or i18n/**.
+            if (!userGlobs) {
                 try {
                     const env = await getProjectEnv(folder);
-                    effectiveGlobs = [
+                    effectiveGlobs.push(
                         `${env.runtimeRoot}/auto/**/*.json`,
                         `${env.runtimeRoot}/**/*.json`,
-                        'lang/**/*.php',
-                        'resources/lang/**/*.php',
-                    ];
+                    );
                 } catch {
-                    effectiveGlobs = localeGlobs;
+                    // If framework/env detection fails, fall back to baseGlobs only
                 }
             }
 
@@ -202,11 +225,24 @@ export class I18nIndex {
 
     private inferLocaleFromPath(uri: vscode.Uri): string | null {
         const parts = uri.fsPath.split(path.sep).filter(Boolean);
+
+        // 1) Auto-generated runtime JSON: .../auto/<locale>/...
         const autoIndex = parts.lastIndexOf('auto');
         if (autoIndex >= 0 && autoIndex + 1 < parts.length) {
             const raw = parts[autoIndex + 1];
             return path.basename(raw, '.json');
         }
+
+        // 2) Next.js / next-i18next style: .../locales/<locale>/<namespace>.json
+        const localesIndex = parts.lastIndexOf('locales');
+        if (localesIndex >= 0 && localesIndex + 1 < parts.length) {
+            const candidate = parts[localesIndex + 1];
+            if (/^[A-Za-z0-9_-]+$/.test(candidate)) {
+                return candidate;
+            }
+        }
+
+        // 3) Fallback: treat the filename itself as the locale (common for src/en.json)
         const fileName = path.basename(uri.fsPath);
         const match = fileName.match(/^([A-Za-z0-9_-]+)\.json$/);
         if (match) {

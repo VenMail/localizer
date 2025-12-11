@@ -125,11 +125,22 @@ export class DiagnosticAnalyzer {
         const defaultLocaleGlobal = config.defaultLocale || 'en';
         const discoveredLocales = this.i18nIndex.getAllLocales();
         const configuredLocales = projectConfig?.locales || [];
-        const union = new Set<string>([...configuredLocales, ...discoveredLocales, defaultLocaleGlobal]);
-        const localesBase = [
-            defaultLocaleGlobal,
-            ...Array.from(union).filter((l) => l !== defaultLocaleGlobal),
-        ];
+
+        // If the project has an explicit locale list (aiI18n.locales in package.json),
+        // treat that as the source of truth and only analyze those locales (plus default).
+        // Otherwise, fall back to all discovered locales in the workspace.
+        let localesBase: string[];
+        if (projectConfig && configuredLocales.length > 0) {
+            const set = new Set<string>([defaultLocaleGlobal, ...configuredLocales]);
+            localesBase = Array.from(set);
+        } else {
+            const union = new Set<string>([...discoveredLocales, defaultLocaleGlobal]);
+            localesBase = [
+                defaultLocaleGlobal,
+                ...Array.from(union).filter((l) => l !== defaultLocaleGlobal),
+            ];
+        }
+
         const localesSet = new Set<string>(localesBase);
         for (const fl of forcedLocales || []) {
             if (fl) localesSet.add(fl);
@@ -1079,6 +1090,7 @@ export class DiagnosticAnalyzer {
         this.logVerboseEnabled = config.verboseLogging === true;
         const fileKey = uri.toString();
         const languageId = this.getLanguageIdForUri(uri);
+        const isLaravelSource = languageId === 'php' || languageId === 'blade';
         
         // Only analyze supported source file types
         const supportedLanguages = [
@@ -1088,6 +1100,7 @@ export class DiagnosticAnalyzer {
             'javascriptreact',
             'vue',
             'php',
+            'blade',
         ];
         if (!supportedLanguages.includes(languageId)) {
             return [];
@@ -1111,41 +1124,10 @@ export class DiagnosticAnalyzer {
 
         await this.i18nIndex.ensureInitialized();
         const allKeys = this.i18nIndex.getAllKeys();
-        
-        // STRICT MODE: Only consider keys with Laravel locations for PHP files
-        // and JSON locations for JS/TS/Vue files
-        let validKeysSet = new Set<string>();
-        
-        if (languageId === 'php') {
-            // For PHP files, only keys with Laravel locations are valid
-            for (const key of this.i18nIndex.getAllKeys()) {
-                const record = this.i18nIndex.getRecord(key);
-                if (!record) continue;
-                
-                const hasLaravelLocation = record.locations.some(loc => {
-                    const path = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
-                    return path.includes('/lang/') || path.includes('/resources/lang/');
-                });
-                
-                if (hasLaravelLocation) {
-                    validKeysSet.add(key);
-                }
-            }
-        } else {
-            // For JS/TS/Vue, only keys with JSON locations are valid
-            for (const key of this.i18nIndex.getAllKeys()) {
-                const record = this.i18nIndex.getRecord(key);
-                if (!record) continue;
-                
-                const hasJsonLocation = record.locations.some(loc => {
-                    return loc.uri.fsPath.toLowerCase().endsWith('.json');
-                });
-                
-                if (hasJsonLocation) {
-                    validKeysSet.add(key);
-                }
-            }
-        }
+
+        // Use cached key sets to avoid recomputing classifications on every file
+        const { laravelKeys, jsonBackedKeys } = this.getSourceKeySets(allKeys);
+        const validKeysSet = isLaravelSource ? laravelKeys : jsonBackedKeys;
         
         const diagnostics: vscode.Diagnostic[] = [];
         
@@ -1156,7 +1138,7 @@ export class DiagnosticAnalyzer {
         const stringRanges = this.findStringLiteralRanges(text);
 
         // Match translation calls that reference i18n keys.
-        // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key") with a word boundary before t
+        // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key")
         // Laravel PHP/Blade: __('key'), trans('key'), @lang('key')
         const tCallPatterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [];
 
@@ -1165,7 +1147,7 @@ export class DiagnosticAnalyzer {
             keyGroupIndex: 2,
         });
 
-        if (languageId === 'php') {
+        if (isLaravelSource) {
             tCallPatterns.push(
                 {
                     regex: /\b__\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
@@ -1199,13 +1181,22 @@ export class DiagnosticAnalyzer {
                 }
                 
                 if (!validKeysSet.has(key)) {
-                    // Global fallback: if the key exists anywhere in the i18n index
-                    // (Laravel PHP or JSON locales), treat it as a valid key. Missing
-                    // reference diagnostics should only fire when the key truly does
-                    // not exist in any locale file.
+                    // Fallback: if the key exists anywhere in the index, always
+                    // treat it as valid for Laravel sources. For JS/TS/Vue, only
+                    // trust keys that have a JSON-backed location.
                     const record = this.i18nIndex.getRecord(key);
                     if (record && Array.isArray(record.locations) && record.locations.length > 0) {
-                        continue;
+                        if (isLaravelSource) {
+                            continue;
+                        }
+
+                        const hasJsonLocation = record.locations.some((loc) => {
+                            return loc.uri.fsPath.toLowerCase().endsWith('.json');
+                        });
+
+                        if (!isLaravelSource && hasJsonLocation) {
+                            continue;
+                        }
                     }
 
                     // Calculate position
