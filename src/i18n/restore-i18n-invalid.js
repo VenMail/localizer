@@ -107,12 +107,18 @@ async function buildUsageIndex() {
 
   console.log(`[restore-i18n-invalid] Scanning ${files.length} source files for key usage...`);
 
+  function getLineNumberFromIndex(text, idx) {
+    let line = 1;
+    for (let i = 0; i < idx && i < text.length; i += 1) {
+      if (text.charCodeAt(i) === 10) line += 1;
+    }
+    return line;
+  }
+
   for (const file of files) {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
-    const lines = code.split(/\r?\n/);
-    
-    // Multiple patterns to catch different t() call formats
+
     const patterns = [
       /(?:^|[^a-zA-Z0-9_])t\(\s*['"]([^'\"]+)['"]\s*(?:,|\))/g,      // t('key') or t("key")
       /(?:^|[^a-zA-Z0-9_])t\(\s*`([^`]+)`\s*(?:,|\))/g,              // t(`key`)
@@ -120,21 +126,18 @@ async function buildUsageIndex() {
       /(?:^|[^a-zA-Z0-9_])\$t\(\s*`([^`]+)`\s*(?:,|\))/g,            // $t(`key`)
     ];
 
-    for (let i = 0; i < lines.length; i += 1) {
-      const lineText = lines[i];
-      
-      for (const regex of patterns) {
-        regex.lastIndex = 0; // Reset regex state
-        let match;
-        while ((match = regex.exec(lineText)) !== null) {
-          const key = match[1];
-          if (!key || key.includes('${')) continue; // Skip template literals with interpolation
-          
-          if (!index[key]) {
-            index[key] = [];
-          }
-          index[key].push({ file: rel, line: i + 1 });
+    for (const regex of patterns) {
+      regex.lastIndex = 0;
+      let match;
+      while ((match = regex.exec(code)) !== null) {
+        const key = match[1];
+        if (!key || key.includes('${')) continue;
+
+        if (!index[key]) {
+          index[key] = [];
         }
+        const line = getLineNumberFromIndex(code, match.index);
+        index[key].push({ file: rel, line });
       }
     }
   }

@@ -16,10 +16,28 @@ const ignorePatternsPath = path.resolve(projectRoot, 'scripts', 'i18n-ignore-pat
 // Initialize ignore patterns from shared utility
 getIgnorePatterns(projectRoot);
 
+function shouldPersistIgnorePattern(normalized) {
+  const value = String(normalized || '').trim();
+  if (!value) return false;
+
+  const isLower = value === value.toLowerCase();
+  const isKeyLike = isLower && /^[a-z0-9_]+(\.[a-z0-9_]+)+$/.test(value);
+  if (!isKeyLike) return true;
+
+  const lastSegment = value.split('.').pop();
+  const tlds = new Set(['com', 'net', 'org', 'io', 'dev', 'app', 'co', 'edu', 'gov', 'info']);
+  if (lastSegment && tlds.has(lastSegment)) {
+    return true;
+  }
+
+  return false;
+}
+
 function addExactIgnorePattern(value) {
   if (!value) return;
   const normalized = String(value).replace(/\s+/g, ' ').trim();
   if (!normalized) return;
+  if (!shouldPersistIgnorePattern(normalized)) return;
   const patterns = getIgnorePatterns(projectRoot);
   if (!patterns.exact) {
     patterns.exact = [];

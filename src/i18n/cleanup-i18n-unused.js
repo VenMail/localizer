@@ -105,23 +105,26 @@ async function buildUsageIndex() {
 
   console.log(`[cleanup-i18n-unused] Scanning ${files.length} source files for key usage...`);
 
+  function getLineNumberFromIndex(text, idx) {
+    let line = 1;
+    for (let i = 0; i < idx && i < text.length; i += 1) {
+      if (text.charCodeAt(i) === 10) line += 1;
+    }
+    return line;
+  }
+
   for (const file of files) {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
-    const lines = code.split(/\r?\n/);
-    // Match t('key'), t(\"key\"), t(`key`), $t('key'), with or without params
-    const regex = /\$?t\(\s*['"`]([^'"`]+)['"`]\s*(?:,|\))/g;
-
-    for (let i = 0; i < lines.length; i += 1) {
-      const lineText = lines[i];
-      let match;
-      while ((match = regex.exec(lineText)) !== null) {
-        const key = match[1];
-        if (!index[key]) {
-          index[key] = [];
-        }
-        index[key].push({ file: rel, line: i + 1 });
+    const regex = /\$?t\(\s*(['"`])([^'"`]+)\1\s*(?:,|\))/g;
+    let match;
+    while ((match = regex.exec(code)) !== null) {
+      const key = match[2];
+      if (!index[key]) {
+        index[key] = [];
       }
+      const line = getLineNumberFromIndex(code, match.index);
+      index[key].push({ file: rel, line });
     }
   }
 

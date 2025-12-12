@@ -203,7 +203,6 @@ export class ProjectFixCommand {
                     // ═══════════════════════════════════════════════════════════════
                     progress.report({ message: 'Building index...' });
                     await this.i18nIndex.ensureInitialized(true);
-                    const keysBeforeCleanup = new Set(this.i18nIndex.getAllKeys());
                     if (token.isCancellationRequested) return;
 
                     progress.report({ message: 'Fixing missing key references (before cleanup)...' });
@@ -249,17 +248,6 @@ export class ProjectFixCommand {
                     progress.report({ message: 'Rebuilding index after cleanup...' });
                     await this.i18nIndex.ensureInitialized(true);
                     if (token.isCancellationRequested) return;
-
-                    const keysAfterCleanup = new Set(this.i18nIndex.getAllKeys());
-                    const removedKeys: string[] = [];
-                    for (const k of keysBeforeCleanup) {
-                        if (!keysAfterCleanup.has(k)) {
-                            removedKeys.push(k);
-                        }
-                    }
-                    if (removedKeys.length) {
-                        await this.appendKeysToAutoIgnore(folder, removedKeys);
-                    }
 
                     // ═══════════════════════════════════════════════════════════════
                     // PHASE 7: Final check for remaining issues

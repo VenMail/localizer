@@ -208,6 +208,9 @@ Example (user or workspace settings):
 - (Optional) OpenAI API key for AI-assisted translations
 
 ## Release Notes
+### 0.1.5
+
+- Fix invalid cleanup issues arising from auto ignore patterns.
 
 ### 0.1.4
 
