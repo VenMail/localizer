@@ -116,7 +116,7 @@ async function buildUsageIndex() {
   for (const file of files) {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
-    const regex = /\$?t\(\s*(['"`])([^'"`]+)\1\s*(?:,|\))/g;
+    const regex = /\$?t\s*\(\s*(['"`])([^'"`]+)\1\s*(?:,|\))/g;
     let match;
     while ((match = regex.exec(code)) !== null) {
       const key = match[2];

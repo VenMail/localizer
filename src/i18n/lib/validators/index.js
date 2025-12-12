@@ -414,6 +414,13 @@ function validateText(text, options = {}) {
   if (isPlaceholderOnly(trimmed)) {
     return { valid: false, reason: 'placeholder_only' };
   }
+
+  // Early allowlist for common UI text to avoid aggressive false positives
+  if (isCommonUIString(trimmed)) {
+    if (!isCodeContent(trimmed) && !isHtmlContent(trimmed) && !isUrl(trimmed)) {
+      return { valid: true, reason: null };
+    }
+  }
   
   if (isCssContent(trimmed)) {
     return { valid: false, reason: 'css_content' };

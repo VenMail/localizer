@@ -440,6 +440,36 @@ export class ConvertSelectionCommand {
         const isBladeLike = langId === 'blade' || langId === 'php';
 
         if (isJsLike) {
+            // JSX expression string literals (common in TSX/JSX): {'Some text'} or {"Some text"}
+            // This helps when the user selects the whole JSX line (including <span> and expressions).
+            const jsxExprStringRegex = /\{\s*(['"])((?:\\.|(?!\1)[\s\S])+?)\1\s*\}/g;
+            let jsxMatch: RegExpExecArray | null;
+            // eslint-disable-next-line no-cond-assign
+            while ((jsxMatch = jsxExprStringRegex.exec(selectionText)) !== null) {
+                const quote = jsxMatch[1];
+                const inner = jsxMatch[2];
+
+                if (!this.isTranslatableText(inner)) {
+                    continue;
+                }
+
+                const matchText = jsxMatch[0];
+                const quotePosInMatch = matchText.indexOf(quote);
+                if (quotePosInMatch === -1) {
+                    continue;
+                }
+
+                const startOffset = baseOffset + jsxMatch.index + quotePosInMatch;
+                const endOffset = startOffset + 1 + inner.length + 1;
+                const startPos = document.positionAt(startOffset);
+                const endPos = document.positionAt(endOffset);
+                candidates.push({ range: new vscode.Range(startPos, endPos), text: inner.trim() });
+            }
+
+            if (candidates.length > 0) {
+                return candidates;
+            }
+
             // First, try to extract string from object property value pattern
             // e.g., "description: `some text`" or "title: 'some text'"
             const propertyValueMatch = selectionText.match(/^\s*(?:[\w$]+|['"][^'"]+['"])\s*:\s*(['"`])([\s\S]+?)\1\s*,?\s*$/s);

@@ -431,6 +431,19 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
                 const insertText = existingPrefix ? key.substring(existingPrefix.length) : key;
                 const item = new vscode.CompletionItem(key, vscode.CompletionItemKind.Value);
                 item.insertText = insertText;
+                item.command = {
+                    title: 'Go to Translation File',
+                    command: 'ai-localizer.i18n.gotoTranslationFromHover',
+                    arguments: [
+                        {
+                            uri: document.uri.toString(),
+                            position: {
+                                line: keyInfo.range.start.line,
+                                character: keyInfo.range.start.character,
+                            },
+                        },
+                    ],
+                };
                 
                 // Set detail to default locale translation
                 const defaultTranslation = record.locales.get(record.defaultLocale) ?? '';

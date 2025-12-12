@@ -955,6 +955,21 @@ export class ProjectFixCommand {
                 return false;
             }
 
+            const simplifyRedundantStringFallbacks = (input: string): string => {
+                let out = input;
+                const withParens = /\(\s*(['"`])((?:\\.|(?!\1)[^\\\r\n])+?)\1\s*\)\s*(\|\||\?\?)\s*\(\s*\1\2\1\s*\)/g;
+                const withoutParens = /(['"`])((?:\\.|(?!\1)[^\\\r\n])+?)\1\s*(\|\||\?\?)\s*\1\2\1/g;
+                for (let i = 0; i < 10; i += 1) {
+                    const next = out.replace(withParens, (_m, q, v) => `${q}${v}${q}`)
+                        .replace(withoutParens, (_m, q, v) => `${q}${v}${q}`);
+                    if (next === out) break;
+                    out = next;
+                }
+                return out;
+            };
+
+            newLineText = simplifyRedundantStringFallbacks(newLineText);
+
             const edit = new vscode.WorkspaceEdit();
             const range = doc.lineAt(lineNumber).range;
             edit.replace(fileUri, range, newLineText);
