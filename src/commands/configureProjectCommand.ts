@@ -56,7 +56,7 @@ export class ConfigureProjectCommand {
             if (currentConfig && !currentConfig.scripts.postbuild) {
                 const choice = await vscode.window.showQuickPick(
                     [
-                        { label: 'Yes', description: 'Run i18n extraction and sync after build' },
+                        { label: 'Yes', description: 'Run i18n sync after build' },
                         { label: 'No', description: 'Leave postbuild unchanged' },
                     ],
                     { placeHolder: 'Wire AI i18n scripts into postbuild?' },
@@ -65,7 +65,7 @@ export class ConfigureProjectCommand {
                 if (choice && choice.label === 'Yes') {
                     await this.projectConfigService.updateConfig(folder, {
                         scripts: {
-                            postbuild: 'npm run i18n:extract && npm run i18n:rewrite && npm run i18n:sync',
+                            postbuild: 'npm run i18n:sync',
                         },
                     });
                 }
