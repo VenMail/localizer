@@ -411,7 +411,7 @@ export class ProjectFixCommand {
         const allKeysSet = new Set(this.i18nIndex.getAllKeys());
         
         // Regex to match t('key'), $t('key'), t("key"), etc.
-        const tCallRegex = /\b(\$?)t\(\s*(['"])([A-Za-z0-9_.]+)\2\s*([,)])/g;
+        const tCallRegex = /\b(\$?)t\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\2\s*([,)])/g;
 
         let missingReferences = 0;
         const filesWithMissingRefs: vscode.Uri[] = [];
@@ -488,7 +488,7 @@ export class ProjectFixCommand {
         }
 
         const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tCallRegex = new RegExp(`\\b\\$?t\\(\\s*['"\`]?${escapedKey}['"\`]?\\s*(?:,|\\))`, 'g');
+        const tCallRegex = new RegExp(`\\b\\$?t\\s*\\(\\s*['"\`]?${escapedKey}['"\`]?\\s*(?:,|\\))`, 'g');
 
         let count = 0;
         for (const uri of uris) {
@@ -548,7 +548,7 @@ export class ProjectFixCommand {
         }
 
         // Reuse the same t() pattern and comment handling as other source scanners
-        const tCallRegex = /\b(\$?)t\(\s*(['"])([A-Za-z0-9_.]+)\2\s*([,)])/g;
+        const tCallRegex = /\b(\$?)t\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\2\s*([,)])/g;
 
         for (const uri of uris) {
             try {

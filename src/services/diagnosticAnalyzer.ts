@@ -54,6 +54,61 @@ export class DiagnosticAnalyzer {
     // Per-run logging flag (set from config)
     private logVerboseEnabled = false;
 
+    private static readonly SOURCE_SUPPORTED_LANGUAGES = new Set<string>([
+        'typescript',
+        'typescriptreact',
+        'javascript',
+        'javascriptreact',
+        'vue',
+        'php',
+        'blade',
+        'csharp',
+        'razor',
+        'python',
+    ]);
+
+    private static readonly I18N_KEY_PATTERN = '[A-Za-z0-9_\\.\\-]+';
+
+    private buildTranslationCallPatterns(options: {
+        isLaravelSource: boolean;
+        isPythonSource: boolean;
+    }): Array<{ regex: RegExp; keyGroupIndex: number }> {
+        const { isLaravelSource, isPythonSource } = options;
+        const key = DiagnosticAnalyzer.I18N_KEY_PATTERN;
+        const patterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [];
+
+        // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key")
+        patterns.push({
+            regex: new RegExp(`\\b\\$?t\\s*\\(\\s*(['"\`])(${key})\\1\\s*(?:,|\\))`, 'g'),
+            keyGroupIndex: 2,
+        });
+
+        if (isLaravelSource) {
+            patterns.push(
+                {
+                    regex: new RegExp(`\\b__\\s*\\(\\s*(['"])(${key})\\1\\s*(?:,|\\))`, 'g'),
+                    keyGroupIndex: 2,
+                },
+                {
+                    regex: new RegExp(`\\btrans\\s*\\(\\s*(['"])(${key})\\1\\s*(?:,|\\))`, 'g'),
+                    keyGroupIndex: 2,
+                },
+                {
+                    regex: new RegExp(`@lang\\s*\\(\\s*(['"])(${key})\\1\\s*(?:,|\\))`, 'g'),
+                    keyGroupIndex: 2,
+                },
+            );
+        } else if (isPythonSource) {
+            // _("key"), gettext('key')
+            patterns.push({
+                regex: new RegExp(`\\b(_|gettext)\\s*\\(\\s*(['"])(${key})\\2\\s*(?:,|\\))`, 'g'),
+                keyGroupIndex: 3,
+            });
+        }
+
+        return patterns;
+    }
+
     /**
      * Suppress verbose logging while bulk operations (key management, translations, cleanup) are running.
      */
@@ -1126,19 +1181,7 @@ export class DiagnosticAnalyzer {
         const isPythonSource = languageId === 'python';
         
         // Only analyze supported source file types
-        const supportedLanguages = [
-            'typescript',
-            'typescriptreact',
-            'javascript',
-            'javascriptreact',
-            'vue',
-            'php',
-            'blade',
-            'csharp',
-            'razor',
-            'python',
-        ];
-        if (!supportedLanguages.includes(languageId)) {
+        if (!DiagnosticAnalyzer.SOURCE_SUPPORTED_LANGUAGES.has(languageId)) {
             return [];
         }
 
@@ -1185,42 +1228,7 @@ export class DiagnosticAnalyzer {
         // Laravel PHP/Blade: __('key'), trans('key'), @lang('key')
         // ASP.NET C#/Razor: Localizer["Key"], HtmlLocalizer["Key"], etc.
         // Python (Django/Flask): _('key'), gettext('key')
-        const tCallPatterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [];
-
-        // Generic JS/TS/Vue helpers
-        tCallPatterns.push({
-            regex: /\b\$?t\(\s*(['"`])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
-            keyGroupIndex: 2,
-        });
-
-        if (isLaravelSource) {
-            tCallPatterns.push(
-                {
-                    regex: /\b__\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
-                    keyGroupIndex: 2,
-                },
-                {
-                    regex: /\btrans\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
-                    keyGroupIndex: 2,
-                },
-                {
-                    regex: /@lang\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
-                    keyGroupIndex: 2,
-                },
-            );
-        } else if (isDotNetSource) {
-            // Match patterns like Localizer["My.Key"], HtmlLocalizer["My.Key"], etc.
-            tCallPatterns.push({
-                regex: /\b[A-Za-z_][A-Za-z0-9_]*\s*\[\s*(['"])([A-Za-z0-9_.:]+)\1\s*\]/g,
-                keyGroupIndex: 2,
-            });
-        } else if (isPythonSource) {
-            // _("key"), gettext('key')
-            tCallPatterns.push({
-                regex: /\b(_|gettext)\(\s*(['"])([A-Za-z0-9_.]+)\2\s*(?:,|\))/g,
-                keyGroupIndex: 3,
-            });
-        }
+        const tCallPatterns = this.buildTranslationCallPatterns({ isLaravelSource, isPythonSource });
 
         for (const { regex, keyGroupIndex } of tCallPatterns) {
             regex.lastIndex = 0;

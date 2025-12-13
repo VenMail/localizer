@@ -375,16 +375,16 @@ export class ReportHandler {
             await this.i18nIndex.ensureInitialized();
 
             const selectionText = document.getText(selection);
-            const keyRegex = /['"`]([A-Za-z0-9_.]+)['"`]/g;
+            const keyRegex = /['"`]([A-Za-z0-9_\.\-]+)['"`]/g;
             const keysInSelection = new Set<string>();
 
             let match: RegExpExecArray | null;
+            // eslint-disable-next-line no-cond-assign
             while ((match = keyRegex.exec(selectionText)) !== null) {
                 const key = match[1];
-                if (!key) continue;
-                const record = this.i18nIndex.getRecord(key);
-                if (!record) continue;
-                keysInSelection.add(key);
+                if (key) {
+                    keysInSelection.add(key);
+                }
             }
 
             if (!keysInSelection.size) {

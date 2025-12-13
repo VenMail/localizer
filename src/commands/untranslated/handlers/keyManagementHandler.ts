@@ -393,15 +393,15 @@ export class KeyManagementHandler {
         if (isLaravelSource) {
             const patterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [
                 {
-                    regex: /\b__\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    regex: /\b__\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g,
                     keyGroupIndex: 2,
                 },
                 {
-                    regex: /\btrans\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    regex: /\btrans\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g,
                     keyGroupIndex: 2,
                 },
                 {
-                    regex: /@lang\(\s*(['"])([A-Za-z0-9_.]+)\1\s*(?:,|\))/g,
+                    regex: /@lang\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g,
                     keyGroupIndex: 2,
                 },
             ];
@@ -437,7 +437,7 @@ export class KeyManagementHandler {
                 }
             }
         } else {
-            const tCallRegex = /\b(\$?)t\(\s*(['"])([A-Za-z0-9_.]+)\2\s*([,)])/g;
+            const tCallRegex = /\b(\$?)t\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\2\s*([,)])/g;
             let match;
             // eslint-disable-next-line no-cond-assign
             while ((match = tCallRegex.exec(text)) !== null) {
