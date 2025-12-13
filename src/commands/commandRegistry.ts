@@ -15,6 +15,7 @@ import { UntranslatedCommands } from './untranslatedCommands';
 import { ComponentCommands } from './componentCommands';
 import { ScaffoldMessagesCommand } from './scaffoldMessagesCommand';
 import { ProjectFixCommand } from './projectFixCommand';
+import { UninstallProjectI18nCommand } from './uninstallProjectI18nCommand';
 import { operationLock } from './untranslated/utils/operationLock';
 import { ReviewGeneratedService } from '../services/reviewGeneratedService';
 import * as path from 'path';
@@ -223,6 +224,18 @@ export class CommandRegistry {
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.fixAllIssuesInProject', () =>
                 projectFixCmd.execute(),
+            ),
+        );
+
+        // Uninstall i18n command
+        const uninstallCmd = new UninstallProjectI18nCommand(
+            this.i18nIndex,
+            this.context,
+            this.log,
+        );
+        disposables.push(
+            vscode.commands.registerCommand('ai-localizer.i18n.uninstallProjectI18n', () =>
+                uninstallCmd.execute(),
             ),
         );
 

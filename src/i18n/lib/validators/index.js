@@ -90,7 +90,8 @@ function hasBalancedDelimiters(text) {
   }
   
   // Check quotes
-  const singleQuotes = (trimmed.match(/'/g) || []).length;
+  const apostrophes = (trimmed.match(/[A-Za-z]'[A-Za-z]/g) || []).length;
+  const singleQuotes = (trimmed.match(/'/g) || []).length - apostrophes;
   const doubleQuotes = (trimmed.match(/"/g) || []).length;
   if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) {
     return false;

@@ -45,6 +45,7 @@
     "onCommand:ai-localizer.i18n.applyAllStyleSuggestionsInFile",
     "onCommand:ai-localizer.i18n.showHealthReport",
     "onCommand:ai-localizer.i18n.fixAllIssuesInProject",
+    "onCommand:ai-localizer.i18n.uninstallProjectI18n",
     "onLanguage:javascript",
     "onLanguage:typescript",
     "onLanguage:javascriptreact",
@@ -178,6 +179,10 @@
       {
         "command": "ai-localizer.i18n.fixAllIssuesInProject",
         "title": "AI Localizer: Fix All i18n Issues in Project"
+      },
+      {
+        "command": "ai-localizer.i18n.uninstallProjectI18n",
+        "title": "AI Localizer: Uninstall i18n from Project"
       },
       {
         "command": "ai-localizer.i18n.gotoTranslationFromHover",

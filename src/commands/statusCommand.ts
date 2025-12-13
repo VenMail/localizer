@@ -85,6 +85,12 @@ export class StatusCommand {
                         'Run extract, rewrite, sync, AI fixes, and cleanup unused/invalid keys across this workspace.',
                     action: 'fixAllIssuesProject',
                 });
+                items.unshift({
+                    label: '$(trash) Uninstall i18n from this project',
+                    description:
+                        'Replace t() calls back to string literals and optionally remove AI Localizer i18n scripts.',
+                    action: 'uninstallProjectI18n',
+                });
             }
         }
 
@@ -211,6 +217,9 @@ export class StatusCommand {
                 break;
             case 'fixAllIssuesProject':
                 await vscode.commands.executeCommand('ai-localizer.i18n.fixAllIssuesInProject');
+                break;
+            case 'uninstallProjectI18n':
+                await vscode.commands.executeCommand('ai-localizer.i18n.uninstallProjectI18n');
                 break;
             case 'runExtract':
                 await vscode.commands.executeCommand('ai-localizer.i18n.runExtractScript');

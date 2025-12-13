@@ -12,6 +12,15 @@ const projectRoot = path.resolve(__dirname, '..');
 const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
 const baseLocale = 'en';
 const srcRoot = detectSrcRoot(projectRoot);
+const srcRoots = (() => {
+  const roots = new Set();
+  if (srcRoot && existsSync(srcRoot)) roots.add(srcRoot);
+  const resourcesJs = path.resolve(projectRoot, 'resources', 'js');
+  if (existsSync(resourcesJs)) roots.add(resourcesJs);
+  const srcDir = path.resolve(projectRoot, 'src');
+  if (existsSync(srcDir)) roots.add(srcDir);
+  return Array.from(roots);
+})();
 
 async function readJsonSafe(filePath) {
   try {
@@ -89,7 +98,8 @@ async function collectSourceFiles(dir, out) {
       }
       await collectSourceFiles(entryPath, out);
     } else if (entry.isFile()) {
-      if (/\.(tsx|ts|jsx|js)$/i.test(entry.name)) {
+      if (entry.name.endsWith('.d.ts')) continue;
+      if (/\.(tsx|ts|jsx|js|mjs|mts|vue|svelte)$/i.test(entry.name)) {
         out.push(entryPath);
       }
     }
@@ -100,12 +110,17 @@ let cachedUsageIndex = null;
 
 async function buildUsageIndex() {
   const index = Object.create(null);
-  if (!srcRoot || !existsSync(srcRoot)) return index;
+  if (!srcRoots.length) return index;
 
   const files = [];
-  await collectSourceFiles(srcRoot, files);
+  for (const root of srcRoots) {
+    // eslint-disable-next-line no-await-in-loop
+    await collectSourceFiles(root, files);
+  }
 
-  console.log(`[restore-i18n-invalid] Scanning ${files.length} source files for key usage...`);
+  const uniqueFiles = Array.from(new Set(files));
+
+  console.log(`[restore-i18n-invalid] Scanning ${uniqueFiles.length} source files for key usage...`);
 
   function getLineNumberFromIndex(text, idx) {
     let line = 1;
@@ -115,7 +130,7 @@ async function buildUsageIndex() {
     return line;
   }
 
-  for (const file of files) {
+  for (const file of uniqueFiles) {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
 
