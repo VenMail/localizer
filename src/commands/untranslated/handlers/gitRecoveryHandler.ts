@@ -408,11 +408,9 @@ export class GitRecoveryHandler {
         key: string,
     ): Promise<string[]> {
         const files: string[] = [];
-        const searchPatterns = [
-            `t('${key}'`,
-            `t("${key}"`,
-            `$t('${key}'`,
-            `$t("${key}"`,
+        const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchPatterns: RegExp[] = [
+            new RegExp(`\\b\\$?t\\s*\\(\\s*(['"\`])${escapedKey}\\1\\s*(?:,|\\))`),
         ];
 
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
@@ -449,7 +447,7 @@ export class GitRecoveryHandler {
                 const content = new TextDecoder().decode(data);
 
                 for (const searchPattern of searchPatterns) {
-                    if (content.includes(searchPattern)) {
+                    if (searchPattern.test(content)) {
                         files.push(uri.fsPath);
                         break;
                     }

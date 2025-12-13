@@ -119,26 +119,19 @@ async function buildUsageIndex() {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
 
-    const patterns = [
-      /(?:^|[^a-zA-Z0-9_])t\(\s*['"]([^'\"]+)['"]\s*(?:,|\))/g,      // t('key') or t("key")
-      /(?:^|[^a-zA-Z0-9_])t\(\s*`([^`]+)`\s*(?:,|\))/g,              // t(`key`)
-      /(?:^|[^a-zA-Z0-9_])\$t\(\s*['"]([^'\"]+)['"]\s*(?:,|\))/g,    // $t('key')
-      /(?:^|[^a-zA-Z0-9_])\$t\(\s*`([^`]+)`\s*(?:,|\))/g,            // $t(`key`)
-    ];
+    const tCallRegex = /(?:^|[^a-zA-Z0-9_$])\$?t\s*\(\s*(['"`])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g;
 
-    for (const regex of patterns) {
-      regex.lastIndex = 0;
-      let match;
-      while ((match = regex.exec(code)) !== null) {
-        const key = match[1];
-        if (!key || key.includes('${')) continue;
+    tCallRegex.lastIndex = 0;
+    let match;
+    while ((match = tCallRegex.exec(code)) !== null) {
+      const key = match[2];
+      if (!key || key.includes('${')) continue;
 
-        if (!index[key]) {
-          index[key] = [];
-        }
-        const line = getLineNumberFromIndex(code, match.index);
-        index[key].push({ file: rel, line });
+      if (!index[key]) {
+        index[key] = [];
       }
+      const line = getLineNumberFromIndex(code, match.index);
+      index[key].push({ file: rel, line });
     }
   }
 

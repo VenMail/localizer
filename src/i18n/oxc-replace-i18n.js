@@ -612,7 +612,7 @@ function rewriteVueTemplate(template, namespace, keyMap) {
           // Idempotency guard: skip if this string is the argument of an existing $t() or t() call
           // Check if there's a $t( or t( immediately before this match position
           const beforeMatch = expr.slice(0, offset);
-          if (/\$?t\(\s*$/.test(beforeMatch)) return m;
+          if (/\$?t\s*\(\s*$/.test(beforeMatch)) return m;
           
           // Skip if text looks like a translation key (dot-separated path starting with capital)
           if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(candidate)) return m;

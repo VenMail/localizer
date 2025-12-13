@@ -7,6 +7,37 @@ const { existsSync } = require('node:fs');
 const path = require('node:path');
 const { getProjectLocales, detectSrcRoot } = require('./projectConfig');
 
+let namespaceFileMapCache = null;
+
+async function buildNamespaceFileMap(baseGroupedDir) {
+  if (namespaceFileMapCache) {
+    return namespaceFileMapCache;
+  }
+  const map = new Map();
+  if (!baseGroupedDir || !existsSync(baseGroupedDir)) {
+    namespaceFileMapCache = map;
+    return map;
+  }
+  try {
+    const entries = await readdir(baseGroupedDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const full = path.resolve(baseGroupedDir, entry.name);
+      const json = await readJson(full);
+      if (!isPlainObject(json)) continue;
+      for (const ns of Object.keys(json)) {
+        if (ns && !map.has(ns)) {
+          map.set(ns, entry.name);
+        }
+      }
+    }
+  } catch {
+    // Ignore mapping failures; fall back to default behavior
+  }
+  namespaceFileMapCache = map;
+  return map;
+}
+
 function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -91,6 +122,9 @@ function getFilePathForKey(keyPath, baseGroupedDir) {
   
   // First segment is typically the namespace/file name
   const namespace = segments[0];
+  if (namespaceFileMapCache && namespaceFileMapCache.has(namespace)) {
+    return namespaceFileMapCache.get(namespace);
+  }
   return `${namespace}.json`;
 }
 
@@ -150,6 +184,7 @@ async function syncKeys(projectRoot, keys, options = {}) {
   const useGrouped = existsSync(baseGroupedDir);
   
   if (useGrouped) {
+    await buildNamespaceFileMap(baseGroupedDir);
     // Group keys by their target file
     const keysByFile = new Map();
     for (const key of keys) {
@@ -402,6 +437,7 @@ async function ensureKeys(projectRoot, keys, values = {}, options = {}) {
   const useGrouped = existsSync(baseGroupedDir);
   
   if (useGrouped) {
+    await buildNamespaceFileMap(baseGroupedDir);
     // Group keys by file
     const keysByFile = new Map();
     for (const key of keys) {

@@ -117,7 +117,7 @@ class VueReplacer extends BaseReplacer {
 
     modified = modified.replace(mustacheRegex, (match, before, quote, text, after) => {
       // Skip if already inside a $t() or t() call (idempotency guard)
-      if (/\$?t\(\s*$/.test(before)) return match;
+      if (/\$?t\s*\(\s*$/.test(before)) return match;
       // Skip if text looks like a translation key (dot-separated path)
       if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       

@@ -612,6 +612,7 @@ export class CleanupHandler {
         keyPath: string,
     ): Promise<boolean> {
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
+        const maxSourceFilesToScan = cfg.get<number>('i18n.maxSourceFilesToScan') ?? 5000;
         const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || [
             '**/*.{ts,tsx,js,jsx,vue}',
             '**/*.php',
@@ -624,20 +625,15 @@ export class CleanupHandler {
             '**/build/**',
         ];
 
-        // Search patterns for the key
-        const searchPatterns = [
-            `t('${keyPath}'`,
-            `t("${keyPath}"`,
-            `$t('${keyPath}'`,
-            `$t("${keyPath}"`,
-            `__('${keyPath}'`,
-            `__("${keyPath}"`,
-            `@lang('${keyPath}'`,
-            `@lang("${keyPath}"`,
-            `trans('${keyPath}'`,
-            `trans("${keyPath}"`,
-            `Lang::get('${keyPath}'`,
-            `Lang::get("${keyPath}"`,
+        const escapedKey = keyPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchPatterns: RegExp[] = [
+            // JS/TS/Vue: t('key'), t ("key"), $t(`key`)
+            new RegExp(`\\b\\$?t\\s*\\(\\s*(['"\`])${escapedKey}\\1\\s*(?:,|\\))`),
+            // Laravel: __('key'), trans('key'), @lang('key')
+            new RegExp(`\\b__\\s*\\(\\s*(['"])${escapedKey}\\1\\s*(?:,|\\))`),
+            new RegExp(`\\btrans\\s*\\(\\s*(['"])${escapedKey}\\1\\s*(?:,|\\))`),
+            new RegExp(`@lang\\s*\\(\\s*(['"])${escapedKey}\\1\\s*(?:,|\\))`),
+            new RegExp(`\\bLang::get\\s*\\(\\s*(['"])${escapedKey}\\1\\s*(?:,|\\))`),
         ];
 
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
@@ -649,7 +645,7 @@ export class CleanupHandler {
         for (const include of includes) {
             try {
                 const pattern = new vscode.RelativePattern(folder, include);
-                const found = await vscode.workspace.findFiles(pattern, exclude, 100);
+                const found = await vscode.workspace.findFiles(pattern, exclude, maxSourceFilesToScan);
                 for (const uri of found) {
                     const key = uri.toString();
                     if (!seen.has(key)) {
@@ -668,9 +664,7 @@ export class CleanupHandler {
                 const content = new TextDecoder().decode(data);
 
                 for (const searchPattern of searchPatterns) {
-                    if (content.includes(searchPattern)) {
-                        return true; // Key is still in use
-                    }
+                    if (searchPattern.test(content)) return true;
                 }
             } catch {
                 // Skip files that can't be read

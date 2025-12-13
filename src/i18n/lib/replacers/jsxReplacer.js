@@ -177,6 +177,41 @@ class JsxReplacer extends BaseReplacer {
       return `${prefix}{t('${fullKey}')}`;
     });
 
+    // 6b. JSX attribute expression values that contain string literals
+    // Matches: title={condition ? "text1" : "text2"}
+    // Only supports expressions without nested { } blocks for safety.
+    const jsxAttrExprRegex = new RegExp(
+      `((?:${attrNames})\\s*=\\s*)\\{([^{}]{2,400})\\}`,
+      'g'
+    );
+
+    const stringLiteralRegex = /(['"\`])((?:\\.|(?!\1)[^\\\r\n])+?)\1/g;
+
+    modified = modified.replace(jsxAttrExprRegex, (match, prefix, expr) => {
+      const attrMatch = prefix.match(/(\S+)\s*=/);
+      const attrName = attrMatch ? attrMatch[1] : 'text';
+      const kind = this.inferKindFromAttr(attrName);
+
+      let exprChanged = false;
+
+      const nextExpr = expr.replace(stringLiteralRegex, (m, quote, text) => {
+        // Idempotency guard: skip if text looks like a translation key
+        if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return m;
+        if (typeof text === 'string' && text.includes('${')) return m;
+        if (!canTranslate(text)) return m;
+
+        const fullKey = this.lookupKey(keyMap, namespace, kind, text);
+        if (!fullKey) return m;
+
+        exprChanged = true;
+        changeCount++;
+        return `t('${fullKey}')`;
+      });
+
+      if (!exprChanged) return match;
+      return `${prefix}{${nextExpr}}`;
+    });
+
     // 7. Return statements with string literals
     // Matches: return "text" or return 'text'
     const returnRegex = /(return\s+)(['"])([^'"]{3,200})\2(\s*[;\n])/g;

@@ -180,6 +180,183 @@ export class I18nHoverProvider implements vscode.HoverProvider {
 export class I18nDefinitionProvider implements vscode.DefinitionProvider {
     constructor(private i18nIndex: I18nIndex) {}
 
+    private skipJsonWhitespaceAndComments(text: string, index: number): number {
+        let i = index;
+        while (i < text.length) {
+            const ch = text[i];
+            if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') {
+                i += 1;
+                continue;
+            }
+
+            // JSONC: line comment
+            if (ch === '/' && text[i + 1] === '/') {
+                i += 2;
+                while (i < text.length && text[i] !== '\n') i += 1;
+                continue;
+            }
+
+            // JSONC: block comment
+            if (ch === '/' && text[i + 1] === '*') {
+                i += 2;
+                while (i + 1 < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1;
+                i = i + 2;
+                continue;
+            }
+
+            return i;
+        }
+        return i;
+    }
+
+    private parseJsonString(
+        text: string,
+        index: number,
+    ): { value: string; start: number; end: number } | null {
+        const quote = text[index];
+        if (quote !== '"') return null;
+
+        const start = index;
+        let i = index + 1;
+        let value = '';
+        while (i < text.length) {
+            const ch = text[i];
+            if (ch === '\\') {
+                const next = text[i + 1];
+                if (next === undefined) return null;
+                // We don't need perfect unescaping for key comparisons; preserve common escapes.
+                value += next;
+                i += 2;
+                continue;
+            }
+            if (ch === quote) {
+                return { value, start, end: i + 1 };
+            }
+            value += ch;
+            i += 1;
+        }
+        return null;
+    }
+
+    private skipJsonValue(text: string, index: number): number {
+        let i = this.skipJsonWhitespaceAndComments(text, index);
+        if (i >= text.length) return i;
+
+        const ch = text[i];
+        if (ch === '"') {
+            const str = this.parseJsonString(text, i);
+            return str ? str.end : i + 1;
+        }
+
+        if (ch === '{' || ch === '[') {
+            const open = ch;
+            const close = ch === '{' ? '}' : ']';
+            let depth = 0;
+            while (i < text.length) {
+                i = this.skipJsonWhitespaceAndComments(text, i);
+                if (i >= text.length) return i;
+
+                const c = text[i];
+                if (c === '"') {
+                    const s = this.parseJsonString(text, i);
+                    i = s ? s.end : i + 1;
+                    continue;
+                }
+                if (c === open) {
+                    depth += 1;
+                    i += 1;
+                    continue;
+                }
+                if (c === close) {
+                    depth -= 1;
+                    i += 1;
+                    if (depth <= 0) return i;
+                    continue;
+                }
+                i += 1;
+            }
+            return i;
+        }
+
+        // Primitive value: read until delimiter
+        while (i < text.length) {
+            const c = text[i];
+            if (c === ',' || c === '}' || c === ']') {
+                return i;
+            }
+            i += 1;
+        }
+        return i;
+    }
+
+    private findJsonKeyRangeInObject(
+        text: string,
+        startIndex: number,
+        targetParts: string[],
+        partIndex: number,
+    ): { start: number; end: number } | null {
+        let i = this.skipJsonWhitespaceAndComments(text, startIndex);
+        if (text[i] !== '{') return null;
+        i += 1;
+
+        while (i < text.length) {
+            i = this.skipJsonWhitespaceAndComments(text, i);
+            if (i >= text.length) return null;
+            if (text[i] === '}') return null;
+
+            const keyNode = this.parseJsonString(text, i);
+            if (!keyNode) return null;
+            i = this.skipJsonWhitespaceAndComments(text, keyNode.end);
+            if (text[i] !== ':') return null;
+            i = this.skipJsonWhitespaceAndComments(text, i + 1);
+
+            const currentPart = targetParts[partIndex];
+            const isMatch = keyNode.value === currentPart;
+            if (isMatch) {
+                if (partIndex === targetParts.length - 1) {
+                    return { start: keyNode.start, end: keyNode.end };
+                }
+                const next = this.skipJsonWhitespaceAndComments(text, i);
+                if (text[next] === '{') {
+                    const nested = this.findJsonKeyRangeInObject(
+                        text,
+                        next,
+                        targetParts,
+                        partIndex + 1,
+                    );
+                    if (nested) return nested;
+                }
+            }
+
+            i = this.skipJsonValue(text, i);
+            i = this.skipJsonWhitespaceAndComments(text, i);
+            if (text[i] === ',') {
+                i += 1;
+                continue;
+            }
+            if (text[i] === '}') {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private findJsonKeyRange(text: string, key: string): { start: number; end: number } | null {
+        const rootIndex = this.skipJsonWhitespaceAndComments(text, 0);
+        if (rootIndex >= text.length || text[rootIndex] !== '{') return null;
+
+        // Prefer nested key paths (Auth.Authorize.heading.key)
+        const dottedParts = key.split('.').filter(Boolean);
+        if (dottedParts.length > 1) {
+            const nested = this.findJsonKeyRangeInObject(text, rootIndex, dottedParts, 0);
+            if (nested) return nested;
+        }
+
+        // Fallback: flat JSON where the entire dotted key is a single property
+        return this.findJsonKeyRangeInObject(text, rootIndex, [key], 0);
+    }
+
     /**
      * Find the exact position of a key in a JSON file
      * Returns a range that can be used to navigate to the key
@@ -192,6 +369,16 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
             // Open the document (loads into memory, doesn't show in editor yet)
             const document = await vscode.workspace.openTextDocument(uri);
             const text = document.getText();
+
+            const ext = uri.fsPath.split('.').pop()?.toLowerCase() || '';
+            if (ext === 'json' || ext === 'jsonc') {
+                const rangeOffsets = this.findJsonKeyRange(text, key);
+                if (rangeOffsets) {
+                    const startPos = document.positionAt(rangeOffsets.start);
+                    const endPos = document.positionAt(rangeOffsets.end);
+                    return new vscode.Range(startPos, endPos);
+                }
+            }
             
             // Split key into parts (e.g., "Namespace.button.save" -> ["Namespace", "button", "save"])
             const keyParts = key.split('.');
@@ -200,7 +387,7 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
             // Search for the key in the JSON structure
             // Look for patterns like: "lastPart": "value" or "lastPart":"value"
             const escapedKey = lastPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const searchPattern = new RegExp(`"${escapedKey}"\s*:\s*`, 'g');
+            const searchPattern = new RegExp(`"${escapedKey}"\\s*:\\s*`, 'g');
             const matches = [...text.matchAll(searchPattern)];
             
             if (matches.length > 0) {

@@ -390,15 +390,15 @@ export class LocaleCache {
         }
         
         // Build search patterns for all keys
-        const keyPatterns = keys.map(key => ({
-            key,
-            patterns: [
-                `t('${key}'`,
-                `t("${key}"`,
-                `$t('${key}'`,
-                `$t("${key}"`,
-            ],
-        }));
+        const keyPatterns = keys.map((key) => {
+            const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return {
+                key,
+                patterns: [
+                    new RegExp(`\\b\\$?t\\s*\\(\\s*(['"\`])${escapedKey}\\1\\s*(?:,|\\))`),
+                ],
+            };
+        });
 
         // Read files and index which keys they contain
         const batchSize = 20;
@@ -411,7 +411,7 @@ export class LocaleCache {
                     
                     for (const { key, patterns } of keyPatterns) {
                         for (const pattern of patterns) {
-                            if (content.includes(pattern)) {
+                            if (pattern.test(content)) {
                                 if (!this.sourceFileKeyIndex.has(key)) {
                                     this.sourceFileKeyIndex.set(key, new Set());
                                 }

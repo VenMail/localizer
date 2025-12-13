@@ -128,6 +128,21 @@ function getRootFromFilePath(filePath) {
   return 'common';
 }
 
+function pickPreferredRoot(a, b) {
+  const rank = (name) => {
+    const n = String(name || '').toLowerCase();
+    if (n === 'pages') return 0;
+    if (n === 'views') return 1;
+    if (n === 'components') return 2;
+    if (n === 'src') return 3;
+    if (n === 'resources') return 4;
+    if (n === 'common') return 99;
+    if (!n) return 100;
+    return 10;
+  };
+  return rank(a) <= rank(b) ? a : b;
+}
+
 // ============================================================================
 // Translation Registration
 // ============================================================================
@@ -241,6 +256,8 @@ async function processFile(filePath) {
     const existingRoot = namespaceRoots.get(topNamespace);
     if (!existingRoot) {
       namespaceRoots.set(topNamespace, rootSegment);
+    } else if (existingRoot !== rootSegment) {
+      namespaceRoots.set(topNamespace, pickPreferredRoot(existingRoot, rootSegment));
     }
   }
 

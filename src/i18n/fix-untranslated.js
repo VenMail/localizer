@@ -105,13 +105,13 @@ async function buildUsageIndex() {
     const rel = path.relative(projectRoot, file);
     const code = await readFile(file, 'utf8');
     const lines = code.split(/\r?\n/);
-    const regex = /t\(\s*['"]([^'\"]+)['"]\s*\)/g;
+    const regex = /(?:^|[^a-zA-Z0-9_$])\$?t\s*\(\s*(['"`])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g;
 
     for (let i = 0; i < lines.length; i += 1) {
       const lineText = lines[i];
       let match;
       while ((match = regex.exec(lineText)) !== null) {
-        const key = match[1];
+        const key = match[2];
         if (!index[key]) {
           index[key] = [];
         }
