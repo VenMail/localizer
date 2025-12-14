@@ -69,7 +69,9 @@ async function readJsonSafe(filePath) {
   try {
     const raw = await readFile(filePath, 'utf8');
     return JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    console.error(`[fix-untranslated] Failed to read/parse JSON: ${filePath}`);
+    console.error(err?.message || err);
     return null;
   }
 }
@@ -380,6 +382,8 @@ async function main() {
     process.exit(1);
   }
 
+  let hadLocaleReadErrors = false;
+
   const locales = await listLocales(autoDir, { includeJsonFiles: false });
   if (!locales.includes('en')) {
     console.error('[fix-untranslated] No "en" locale found under', autoDir);
@@ -457,7 +461,10 @@ async function main() {
 
       const locJson = await readJsonSafe(locFile);
       const enJson = await readJsonSafe(enFile);
-      if (!locJson || !enJson) continue;
+      if (!locJson || !enJson) {
+        hadLocaleReadErrors = true;
+        continue;
+      }
 
       const fileIssues = [];
       walkCompare(
@@ -477,8 +484,17 @@ async function main() {
   }
 
   if (issues.length === 0) {
+    if (hadLocaleReadErrors) {
+      console.error('[fix-untranslated] Aborting: one or more locale JSON files could not be parsed.');
+      process.exit(1);
+    }
     console.log('[fix-untranslated] No untranslated or style issues detected.');
     process.exit(0);
+  }
+
+  if (hadLocaleReadErrors) {
+    console.error('[fix-untranslated] Aborting: one or more locale JSON files could not be parsed.');
+    process.exit(1);
   }
 
   function groupIssuesByFile(issuesSubset) {

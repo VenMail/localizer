@@ -156,6 +156,18 @@ function isCssUtilityString(text) {
     .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
 
   const tokens = withoutPlaceholders.split(/\s+/).filter(Boolean);
+
+  const cssTokenPrefixPattern = /^(text|bg|border|p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|w|h|min-w|max-w|min-h|max-h|flex|grid|gap|items|justify|self|place|content|space|divide|ring|shadow|opacity|z|top|left|right|bottom|inset|rounded|cursor|overflow|display|position|stroke|fill|animate|transition|transform|scale|rotate|translate|skew|origin|filter|backdrop|brightness|contrast|blur|saturate|hue|font|leading|tracking|col|row)-/i;
+  const hasStrongCssSignal = tokens.some((t) => {
+    const lower = String(t || '').toLowerCase();
+    return (
+      /-\d/.test(lower) ||
+      /[:\[\]\/]/.test(lower) ||
+      /^!/.test(lower) ||
+      cssTokenPrefixPattern.test(lower) ||
+      isUnderscoreCssToken(lower)
+    );
+  });
   
   // Handle edge case: single token that looks like CSS
   if (tokens.length === 1) {
@@ -217,8 +229,10 @@ function isCssUtilityString(text) {
     }
     // Tailwind-style classes: text-gray-200, stroke-current, bg-blue-500, etc.
     if (/^-?[a-z][a-z0-9]*(?:-[a-z0-9/:%]+)+$/.test(lower)) {
-      cssLikeCount += 1;
-      continue;
+      if (/\d/.test(lower) || /[:\[\]\/]/.test(lower) || /^!/.test(lower) || cssTokenPrefixPattern.test(lower)) {
+        cssLikeCount += 1;
+        continue;
+      }
     }
     // Numeric suffixes: mb3, p2, w100, etc.
     if (/^[a-z]+[0-9]+$/.test(lower)) {
@@ -228,7 +242,9 @@ function isCssUtilityString(text) {
     // CSS color/value keywords: current, auto, full, none, etc.
     // Use exact word boundaries to prevent substring matching
     if (/^(current|auto|full|none|start|end|center|stretch|between|around|evenly|primary|secondary|success|danger|warning|info|light|dark|white|black|gray|grey|red|blue|green|yellow|purple|pink|indigo|teal|orange|cyan|amber|lime|emerald|sky|violet|fuchsia|rose)$/i.test(lower)) {
-      cssLikeCount += 1;
+      if (hasStrongCssSignal) {
+        cssLikeCount += 1;
+      }
     }
   }
 

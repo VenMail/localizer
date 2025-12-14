@@ -49,6 +49,9 @@ const ignorePatterns = loadIgnorePatterns(projectRoot);
 const translations = Object.create(null);
 const textKeyMap = new Map();
 const namespaceRoots = new Map();
+const lockedNamespaceRoots = new Set();
+const groupRootLeafCounts = new Map();
+const groupRootsSeen = new Map();
 
 // Simple mutex for thread-safe registration
 // JavaScript is single-threaded but async operations can interleave
@@ -81,7 +84,28 @@ function isCommonShortText(text) {
   return true;
 }
 
-function cleanupExistingTranslations(existing) {
+function cleanupExistingTranslations(existing, silent = false) {
+  const cleanMode = String(process.env.AI_I18N_CLEAN_EXISTING || 'css').trim().toLowerCase();
+  if (!cleanMode || cleanMode === '0' || cleanMode === 'false' || cleanMode === 'off' || cleanMode === 'none') {
+    return;
+  }
+
+  let allowedReasons = null;
+  if (cleanMode === 'css') {
+    allowedReasons = new Set(['css_content']);
+  } else if (cleanMode === 'safe') {
+    allowedReasons = new Set([
+      'css_content',
+      'spreadsheet_reference',
+      'code_content',
+      'event_handler',
+      'html_content',
+      'vue_binding',
+    ]);
+  } else if (cleanMode === 'all') {
+    allowedReasons = null;
+  }
+
   let removed = 0;
   const root = existing && typeof existing === 'object' ? existing : {};
   for (const [namespace, kinds] of Object.entries(root)) {
@@ -92,7 +116,7 @@ function cleanupExistingTranslations(existing) {
         const text = typeof value === 'string' ? value : null;
         if (!text) continue;
         const validation = validateText(String(text).trim(), { ignorePatterns });
-        if (!validation.valid) {
+        if (!validation.valid && (!allowedReasons || allowedReasons.has(validation.reason))) {
           delete entries[slug];
           removed += 1;
         }
@@ -105,7 +129,7 @@ function cleanupExistingTranslations(existing) {
       delete root[namespace];
     }
   }
-  if (removed > 0) {
+  if (removed > 0 && !silent) {
     console.log(`[i18n-extract] Cleaned ${removed} invalid existing translations with updated validators.`);
   }
 }
@@ -141,6 +165,29 @@ function pickPreferredRoot(a, b) {
     return 10;
   };
   return rank(a) <= rank(b) ? a : b;
+}
+
+function primeNamespaceRootsFromGroupedFile(obj, rootName) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+  const rn = String(rootName || '').toLowerCase();
+  if (!rn) return;
+  for (const group of Object.keys(obj)) {
+    if (!group || group === 'Commons') continue;
+    const seen = groupRootsSeen.get(group) || new Set();
+    seen.add(rn);
+    groupRootsSeen.set(group, seen);
+    const subtree = obj[group];
+    const leafCount = countStringLeaves(subtree);
+    const prev = groupRootLeafCounts.get(group);
+    if (!prev || leafCount > prev.leafCount) {
+      groupRootLeafCounts.set(group, { rootName: rn, leafCount });
+      namespaceRoots.set(group, rn);
+      lockedNamespaceRoots.add(group);
+    } else if (!namespaceRoots.get(group)) {
+      namespaceRoots.set(group, prev.rootName);
+      lockedNamespaceRoots.add(group);
+    }
+  }
 }
 
 // ============================================================================
@@ -252,7 +299,7 @@ async function processFile(filePath) {
 
   const rootSegment = getRootFromFilePath(filePath);
   const topNamespace = String(namespace || '').split('.')[0] || 'Common';
-  if (topNamespace !== 'Commons') {
+  if (topNamespace !== 'Commons' && !lockedNamespaceRoots.has(topNamespace)) {
     const existingRoot = namespaceRoots.get(topNamespace);
     if (!existingRoot) {
       namespaceRoots.set(topNamespace, rootSegment);
@@ -319,6 +366,23 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
   await Promise.all(runners);
 }
 
+function countStringLeaves(node) {
+  if (typeof node === 'string') return 1;
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return 0;
+  let sum = 0;
+  for (const v of Object.values(node)) sum += countStringLeaves(v);
+  return sum;
+}
+
+function countLeavesByTopKey(obj) {
+  const out = Object.create(null);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
+  for (const k of Object.keys(obj)) {
+    out[k] = countStringLeaves(obj[k]);
+  }
+  return out;
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -343,11 +407,16 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
     let existingTranslations = null;
     const groupedDir = path.resolve(outputDir, 'en');
 
+    let hadExistingLocaleReadErrors = false;
+
     async function readJsonSafe(p) {
       try {
         const raw = await readFile(p, 'utf8');
         return JSON.parse(raw);
-      } catch {
+      } catch (err) {
+        hadExistingLocaleReadErrors = true;
+        console.error(`[i18n-extract] Failed to read/parse JSON: ${p}`);
+        console.error(err?.message || err);
         return null;
       }
     }
@@ -376,7 +445,11 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
           if (entry.isDirectory()) stack.push(full);
           else if (entry.isFile() && entry.name.endsWith('.json')) {
             const obj = await readJsonSafe(full);
-            if (obj && typeof obj === 'object') deepMerge(existingTranslations, obj);
+            if (obj && typeof obj === 'object') {
+              const inferredRoot = path.basename(entry.name, '.json');
+              primeNamespaceRootsFromGroupedFile(obj, inferredRoot);
+              deepMerge(existingTranslations, obj);
+            }
           }
         }
       }
@@ -406,6 +479,11 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
       primeTextKeyMap(existingTranslations, textKeyMap);
     }
 
+    if (hadExistingLocaleReadErrors) {
+      console.error('[i18n-extract] Aborting: one or more existing locale JSON files could not be parsed. No files were modified.');
+      process.exit(1);
+    }
+
     // Collect all supported files
     const files = [];
     await collectFiles(srcRoot, files);
@@ -426,13 +504,48 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
     const localeDir = path.resolve(outputDir, 'en');
     await mkdir(localeDir, { recursive: true });
 
-    try {
-      const existingEntries = await readdir(localeDir, { withFileTypes: true });
-      for (const entry of existingEntries) {
-        const full = path.join(localeDir, entry.name);
-        await rm(full, { recursive: true, force: true });
+    const existingTotal = existingTranslations ? countStringLeaves(existingTranslations) : 0;
+    const nextTotal = countStringLeaves(sorted);
+    const minKeepRatio = Number(process.env.AI_I18N_MIN_KEEP_RATIO || 0.9);
+    const allowDestructive = String(process.env.AI_I18N_ALLOW_DESTRUCTIVE || '').trim() === '1';
+
+    if (!allowDestructive && existingTotal > 0 && nextTotal < Math.floor(existingTotal * minKeepRatio)) {
+      console.error(
+        `[i18n-extract] Aborting: extraction would reduce stored strings from ${existingTotal} to ${nextTotal} (< ${(minKeepRatio * 100).toFixed(0)}% of previous). ` +
+        'Set AI_I18N_ALLOW_DESTRUCTIVE=1 to override if you really intend this.'
+      );
+      process.exit(1);
+    }
+    let existingPerRootCounts = null;
+    let existingPerRootObjects = null;
+    if (existsSync(localeDir)) {
+      try {
+        existingPerRootCounts = {};
+        existingPerRootObjects = {};
+        const entries = readdirSync(localeDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+          const p = path.resolve(localeDir, entry.name);
+          const obj = await readJsonSafe(p);
+          if (!obj || typeof obj !== 'object') continue;
+          const rootName = path.basename(entry.name, '.json').toLowerCase();
+          let cleaned = null;
+          try {
+            cleaned = JSON.parse(JSON.stringify(obj));
+          } catch {
+            cleaned = obj;
+          }
+          if (cleaned && typeof cleaned === 'object') {
+            cleanupExistingTranslations(cleaned, true);
+          }
+          existingPerRootCounts[rootName] = countStringLeaves(cleaned);
+          existingPerRootObjects[rootName] = cleaned;
+        }
+      } catch (err) {
+        console.error('[i18n-extract] Failed to read existing grouped files for shrink guard.');
+        console.error(err?.message || err);
       }
-    } catch {}
+    }
 
     const groups = Object.keys(sorted).sort();
     const perRoot = {};
@@ -445,9 +558,83 @@ async function runConcurrent(items, worker, limit = CONCURRENCY) {
       } else {
         rootName = namespaceRoots.get(group) || 'common';
       }
-      const rootTree = perRoot[rootName] || (perRoot[rootName] = {});
-      rootTree[group] = subtree;
+      const roots = groupRootsSeen.get(group);
+      if (roots && roots.size > 0) {
+        for (const rn of roots) {
+          const rootTree = perRoot[rn] || (perRoot[rn] = {});
+          rootTree[group] = subtree;
+        }
+      } else {
+        const rootTree = perRoot[rootName] || (perRoot[rootName] = {});
+        rootTree[group] = subtree;
+      }
     }
+
+    if (!allowDestructive && existingPerRootCounts) {
+      const shrinkViolations = [];
+      const minRatioCount = Number(process.env.AI_I18N_MIN_PER_FILE_RATIO_COUNT || 120);
+      const maxSmallFileDrop = Number(process.env.AI_I18N_MAX_SMALL_FILE_DROP || 10);
+      for (const [rootName, prevCount] of Object.entries(existingPerRootCounts)) {
+        const nextTree = perRoot[rootName];
+        const nextCount = nextTree ? countStringLeaves(nextTree) : 0;
+        if (prevCount <= 0) continue;
+        if (nextCount >= prevCount) continue;
+        const delta = prevCount - nextCount;
+        if (prevCount >= minRatioCount) {
+          if (nextCount < Math.floor(prevCount * minKeepRatio)) {
+            shrinkViolations.push({ rootName, prevCount, nextCount });
+          }
+        } else {
+          if (delta > maxSmallFileDrop) {
+            shrinkViolations.push({ rootName, prevCount, nextCount });
+          }
+        }
+      }
+
+      if (shrinkViolations.length > 0) {
+        for (const v of shrinkViolations) {
+          const prevObj = existingPerRootObjects ? existingPerRootObjects[v.rootName] : null;
+          const nextObj = perRoot[v.rootName] || null;
+          if (!prevObj || !nextObj) continue;
+
+          const prevByGroup = countLeavesByTopKey(prevObj);
+          const nextByGroup = countLeavesByTopKey(nextObj);
+
+          const deltas = [];
+          for (const k of Object.keys(prevByGroup)) {
+            const prevCount = prevByGroup[k] || 0;
+            const nextCount = nextByGroup[k] || 0;
+            const delta = nextCount - prevCount;
+            if (delta < 0) deltas.push({ k, prevCount, nextCount, delta });
+          }
+
+          deltas.sort((a, b) => a.delta - b.delta);
+          const top = deltas.slice(0, 12).map(d => `${d.k} ${d.prevCount} -> ${d.nextCount}`).join(', ');
+          if (top) {
+            console.error(`[i18n-extract] Largest decreases in ${v.rootName}.json: ${top}`);
+          }
+        }
+        const detail = shrinkViolations
+          .sort((a, b) => b.prevCount - a.prevCount)
+          .slice(0, 8)
+          .map(v => `${v.rootName}.json ${v.prevCount} -> ${v.nextCount}`)
+          .join(', ');
+        console.error(
+          `[i18n-extract] Aborting: extraction would shrink one or more grouped locale files below ${(minKeepRatio * 100).toFixed(0)}% of previous. ` +
+          `Examples: ${detail}. ` +
+          'Set AI_I18N_ALLOW_DESTRUCTIVE=1 to override if you really intend this.'
+        );
+        process.exit(1);
+      }
+    }
+
+    try {
+      const existingEntries = await readdir(localeDir, { withFileTypes: true });
+      for (const entry of existingEntries) {
+        const full = path.join(localeDir, entry.name);
+        await rm(full, { recursive: true, force: true });
+      }
+    } catch {}
 
     let fileCount = 0;
     for (const [rootName, tree] of Object.entries(perRoot)) {

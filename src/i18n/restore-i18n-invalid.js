@@ -12,6 +12,8 @@ const projectRoot = path.resolve(__dirname, '..');
 const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
 const baseLocale = 'en';
 const srcRoot = detectSrcRoot(projectRoot);
+
+let hadLocaleReadErrors = false;
 const srcRoots = (() => {
   const roots = new Set();
   if (srcRoot && existsSync(srcRoot)) roots.add(srcRoot);
@@ -19,6 +21,8 @@ const srcRoots = (() => {
   if (existsSync(resourcesJs)) roots.add(resourcesJs);
   const srcDir = path.resolve(projectRoot, 'src');
   if (existsSync(srcDir)) roots.add(srcDir);
+  // Fallback: include project root so we don't miss unconventional layouts
+  roots.add(projectRoot);
   return Array.from(roots);
 })();
 
@@ -26,7 +30,9 @@ async function readJsonSafe(filePath) {
   try {
     const raw = await readFile(filePath, 'utf8');
     return JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    console.error(`[restore-i18n-invalid] Failed to read/parse JSON: ${filePath}`);
+    console.error(err?.message || err);
     return null;
   }
 }
@@ -70,7 +76,10 @@ async function loadBaseLocaleKeys() {
     await collectJsonFiles(groupedDir, files);
     for (const file of files) {
       const json = await readJsonSafe(file);
-      if (!json || typeof json !== 'object') continue;
+      if (!json || typeof json !== 'object') {
+        hadLocaleReadErrors = true;
+        continue;
+      }
       const rel = path.relative(autoDir, file).replace(/\\/g, '/');
       collectKeysFromObject(json, '', rel, keys);
     }
@@ -80,7 +89,10 @@ async function loadBaseLocaleKeys() {
       return keys;
     }
     const json = await readJsonSafe(singlePath);
-    if (!json || typeof json !== 'object') return keys;
+    if (!json || typeof json !== 'object') {
+      hadLocaleReadErrors = true;
+      return keys;
+    }
     const rel = path.relative(autoDir, singlePath).replace(/\\/g, '/');
     collectKeysFromObject(json, '', rel, keys);
   }
@@ -93,7 +105,10 @@ async function collectSourceFiles(dir, out) {
   for (const entry of entries) {
     const entryPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (['node_modules', 'vendor', '.git', 'storage', 'bootstrap', 'public'].includes(entry.name)) {
+      if ([
+        'node_modules', 'vendor', '.git', 'storage', 'bootstrap', 'public',
+        'dist', 'build', 'out', 'coverage', '.next', '.nuxt', '.vite', '.turbo',
+      ].includes(entry.name) || entry.name.startsWith('.')) {
         continue;
       }
       await collectSourceFiles(entryPath, out);
@@ -527,9 +542,15 @@ async function main() {
     process.exit(1);
   }
 
+  hadLocaleReadErrors = false;
+
   const apply = process.argv.includes('--apply');
 
   const invalid = await collectInvalidBaseKeys();
+  if (hadLocaleReadErrors) {
+    console.error('[restore-i18n-invalid] Aborting: one or more locale JSON files could not be parsed. No locale files were modified.');
+    process.exit(1);
+  }
   if (!invalid.length) {
     console.log('[restore-i18n-invalid] No invalid/non-translatable base keys detected.');
     return;

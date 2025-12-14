@@ -547,8 +547,8 @@ export class ProjectFixCommand {
             }
         }
 
-        // Reuse the same t() pattern and comment handling as other source scanners
-        const tCallRegex = /\b(\$?)t\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\2\s*([,)])/g;
+        const tCallRegex = /\b(\$?)t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_\.\-:]+)\2\s*([,)])/g;
+        const keyLiteralRegex = /(['"`])([A-Za-z0-9_\-]+(?:[\.:][A-Za-z0-9_\-]+)+)\1/g;
 
         for (const uri of uris) {
             try {
@@ -569,6 +569,26 @@ export class ProjectFixCommand {
                     }
 
                     const key = match[3];
+                    if (candidateKeys.has(key)) {
+                        usedKeys.add(key);
+                        if (usedKeys.size === candidateKeys.size) {
+                            return usedKeys;
+                        }
+                    }
+                }
+
+                if (usedKeys.size === candidateKeys.size) {
+                    return usedKeys;
+                }
+
+                tCallRegex.lastIndex = 0;
+                keyLiteralRegex.lastIndex = 0;
+                while ((match = keyLiteralRegex.exec(text)) !== null) {
+                    if (isPositionInComment(match.index, commentRanges)) {
+                        continue;
+                    }
+
+                    const key = match[2];
                     if (candidateKeys.has(key)) {
                         usedKeys.add(key);
                         if (usedKeys.size === candidateKeys.size) {

@@ -1515,11 +1515,15 @@ async function processVueFile(filePath, keyMap) {
 (async () => {
   try {
     // Load translations
+    let hadLocaleReadErrors = false;
     async function readJsonSafe(p) {
       try {
         const raw = await readFile(p, 'utf8');
         return JSON.parse(raw);
-      } catch {
+      } catch (err) {
+        hadLocaleReadErrors = true;
+        console.error(`[i18n-replace] Failed to read/parse JSON: ${p}`);
+        console.error(err?.message || err);
         return null;
       }
     }
@@ -1563,6 +1567,11 @@ async function processVueFile(filePath, keyMap) {
         console.error(`[i18n-replace] No translations found at ${translationsPath} or ${groupedDir}`);
         process.exit(1);
       }
+    }
+
+    if (hadLocaleReadErrors) {
+      console.error('[i18n-replace] Aborting: one or more locale JSON files could not be parsed. No source files were modified.');
+      process.exit(1);
     }
 
     const keyMap = buildKeyMapFromTranslations(translations);
