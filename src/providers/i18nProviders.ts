@@ -4,6 +4,7 @@ import { TextDecoder } from 'util';
 import { I18nIndex, extractKeyAtPosition, escapeMarkdown } from '../core/i18nIndex';
 import { readLaravelKeyValueFromFile } from '../core/i18nFs';
 import { detectFrameworkProfile } from '../frameworks/detection';
+import { ProjectConfigService } from '../services/projectConfigService';
 
 /**
  * Language selector for source files using i18n keys
@@ -178,6 +179,8 @@ export class I18nHoverProvider implements vscode.HoverProvider {
  * Allows jumping to translation files with locale selection
  */
 export class I18nDefinitionProvider implements vscode.DefinitionProvider {
+    private projectConfigService = new ProjectConfigService();
+
     constructor(private i18nIndex: I18nIndex) {}
 
     private skipJsonWhitespaceAndComments(text: string, index: number): number {
@@ -419,15 +422,39 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
             // If nothing is indexed yet, offer to initialize i18n for the project
             const allKeys = this.i18nIndex.getAllKeys();
             if (!allKeys.length) {
+                const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+                const isConfigured = folder
+                    ? await this.projectConfigService.hasI18nScripts(folder)
+                    : false;
+
+                const buttons = isConfigured
+                    ? ['Rescan Translations']
+                    : ['Disable for this Project', 'Configure i18n'];
+
                 const choice = await vscode.window.showInformationMessage(
                     'AI Localizer: No translations indexed for this workspace yet.',
-                    'Rescan Translations',
-                    'Configure i18n',
+                    ...buttons,
                 );
+
                 if (choice === 'Rescan Translations') {
                     await vscode.commands.executeCommand('ai-localizer.i18n.rescan');
                 } else if (choice === 'Configure i18n') {
                     await vscode.commands.executeCommand('ai-localizer.i18n.configureProject');
+                } else if (choice === 'Disable for this Project') {
+                    const configTarget = vscode.workspace.getConfiguration(
+                        'ai-localizer',
+                        folder?.uri,
+                    );
+                    await configTarget.update(
+                        'i18n.enabled',
+                        false,
+                        folder
+                            ? vscode.ConfigurationTarget.WorkspaceFolder
+                            : vscode.ConfigurationTarget.Workspace,
+                    );
+                    vscode.window.showInformationMessage(
+                        'AI Localizer: i18n has been disabled for this project.',
+                    );
                 }
                 return undefined;
             }

@@ -178,6 +178,90 @@ function decodeLocaleText(data: Uint8Array): string | null {
     }
 }
 
+type LocaleWriteTarget =
+    | { mode: 'file'; fileUri: vscode.Uri }
+    | { mode: 'dir'; localeDir: vscode.Uri };
+
+async function resolveLocaleWriteTarget(
+    folder: vscode.WorkspaceFolder,
+    locale: string,
+): Promise<LocaleWriteTarget> {
+    const cfg = vscode.workspace.getConfiguration('ai-localizer', folder.uri);
+    const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
+    const bases = ['resources/js/i18n/auto', 'src/i18n', 'src/locales', 'locales', 'i18n'];
+
+    for (const base of bases) {
+        const baseUri = vscode.Uri.file(path.join(folder.uri.fsPath, base));
+        try {
+            const stat = await vscode.workspace.fs.stat(baseUri);
+            if (stat.type !== vscode.FileType.Directory) {
+                continue;
+            }
+        } catch {
+            continue;
+        }
+
+        const localeDirUri = vscode.Uri.file(path.join(baseUri.fsPath, locale));
+        try {
+            const dirStat = await vscode.workspace.fs.stat(localeDirUri);
+            if (dirStat.type === vscode.FileType.Directory) {
+                return { mode: 'dir', localeDir: localeDirUri };
+            }
+        } catch {
+        }
+
+        const localeFileUri = vscode.Uri.file(path.join(baseUri.fsPath, `${locale}.json`));
+        try {
+            const fileStat = await vscode.workspace.fs.stat(localeFileUri);
+            if (fileStat.type === vscode.FileType.File) {
+                return { mode: 'file', fileUri: localeFileUri };
+            }
+        } catch {
+        }
+
+        // If the base dir uses single-file locales (<locale>.json at the base),
+        // treat this locale as single-file even if it doesn't exist yet.
+        const baseLocaleFileUri = vscode.Uri.file(
+            path.join(baseUri.fsPath, `${defaultLocale}.json`),
+        );
+        try {
+            const baseFileStat = await vscode.workspace.fs.stat(baseLocaleFileUri);
+            if (baseFileStat.type === vscode.FileType.File) {
+                return { mode: 'file', fileUri: localeFileUri };
+            }
+        } catch {
+        }
+    }
+
+    const localeDir = await findOrCreateLocaleDir(folder, locale);
+    return { mode: 'dir', localeDir };
+}
+
+async function readLocaleJsonObject(fileUri: vscode.Uri): Promise<{ root: any; ok: boolean }> {
+    try {
+        const data = await vscode.workspace.fs.readFile(fileUri);
+        const decoded = decodeLocaleText(data);
+        if (decoded === null) {
+            return { root: {}, ok: false };
+        }
+        const trimmed = decoded.trim();
+        if (!trimmed) {
+            return { root: {}, ok: true };
+        }
+        const parsed = JSON.parse(decoded);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return { root: {}, ok: false };
+        }
+        return { root: parsed, ok: true };
+    } catch (err) {
+        const anyErr: any = err;
+        if (anyErr && typeof anyErr.code === 'string' && anyErr.code === 'FileNotFound') {
+            return { root: {}, ok: true };
+        }
+        return { root: {}, ok: false };
+    }
+}
+
 async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: string): Promise<vscode.Uri> {
     // Check cache first
     const cacheKey = `${folder.uri.fsPath}::${locale}`;
@@ -552,8 +636,28 @@ export async function upsertTranslationKey(
     value: string,
     options?: { rootName?: string },
 ): Promise<void> {
-    const localeDir = await findOrCreateLocaleDir(folder, locale);
+    const target = await resolveLocaleWriteTarget(folder, locale);
     const segments = fullKey.split('.').filter(Boolean);
+
+    if (target.mode === 'file') {
+        await withFileMutex(target.fileUri, async () => {
+            const { root, ok } = await readLocaleJsonObject(target.fileUri);
+            if (!ok) {
+                throw new Error(`Failed to parse locale JSON: ${target.fileUri.fsPath}`);
+            }
+            const existing = getDeepValue(root, segments);
+            if (typeof existing === 'string') {
+                return;
+            }
+            const container = ensureDeepContainer(root, segments.slice(0, -1));
+            const last = segments[segments.length - 1];
+            container[last] = value;
+            const payload = `${JSON.stringify(root, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(target.fileUri, sharedEncoder.encode(payload));
+        });
+        return;
+    }
+
     const first = segments[0] || 'Common';
     let fileName: string;
     if (first === 'Commons') {
@@ -564,29 +668,24 @@ export async function upsertTranslationKey(
         const group = first || 'Common';
         fileName = `${group.toLowerCase()}.json`;
     }
-    const fileUri = vscode.Uri.joinPath(localeDir, fileName);
-    let root: any = {};
-    try {
-        const data = await vscode.workspace.fs.readFile(fileUri);
-        const raw = sharedDecoder.decode(data);
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-            root = parsed;
+
+    const fileUri = vscode.Uri.joinPath(target.localeDir, fileName);
+
+    await withFileMutex(fileUri, async () => {
+        const { root, ok } = await readLocaleJsonObject(fileUri);
+        if (!ok) {
+            throw new Error(`Failed to parse locale JSON: ${fileUri.fsPath}`);
         }
-    } catch {
-    }
-    if (!root || typeof root !== 'object' || Array.isArray(root)) {
-        root = {};
-    }
-    const existing = getDeepValue(root, segments);
-    if (typeof existing === 'string') {
-        return;
-    }
-    const container = ensureDeepContainer(root, segments.slice(0, -1));
-    const last = segments[segments.length - 1];
-    container[last] = value;
-    const payload = `${JSON.stringify(root, null, 2)}\n`;
-    await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+        const existing = getDeepValue(root, segments);
+        if (typeof existing === 'string') {
+            return;
+        }
+        const container = ensureDeepContainer(root, segments.slice(0, -1));
+        const last = segments[segments.length - 1];
+        container[last] = value;
+        const payload = `${JSON.stringify(root, null, 2)}\n`;
+        await vscode.workspace.fs.writeFile(fileUri, sharedEncoder.encode(payload));
+    });
 }
 
 export async function setTranslationValueInFile(
@@ -595,18 +694,9 @@ export async function setTranslationValueInFile(
     value: string,
 ): Promise<void> {
     await withFileMutex(fileUri, async () => {
-        let root: any = {};
-        try {
-            const data = await vscode.workspace.fs.readFile(fileUri);
-            const raw = sharedDecoder.decode(data);
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object') {
-                root = parsed;
-            }
-        } catch {
-        }
-        if (!root || typeof root !== 'object' || Array.isArray(root)) {
-            root = {};
+        const { root, ok } = await readLocaleJsonObject(fileUri);
+        if (!ok) {
+            throw new Error(`Failed to parse locale JSON: ${fileUri.fsPath}`);
         }
         const segments = fullKey.split('.').filter(Boolean);
         const container = ensureDeepContainer(root, segments.slice(0, -1));
@@ -672,7 +762,12 @@ export async function setTranslationValue(
     value: string,
     options?: { rootName?: string },
 ): Promise<void> {
-    const localeDir = await findOrCreateLocaleDir(folder, locale);
+    const target = await resolveLocaleWriteTarget(folder, locale);
+    if (target.mode === 'file') {
+        await setTranslationValueInFile(target.fileUri, fullKey, value);
+        return;
+    }
+
     const segments = fullKey.split('.').filter(Boolean);
     const first = segments[0] || 'Common';
     let fileName: string;
@@ -684,21 +779,12 @@ export async function setTranslationValue(
         const group = first || 'Common';
         fileName = `${group.toLowerCase()}.json`;
     }
-    const fileUri = vscode.Uri.joinPath(localeDir, fileName);
-    
+    const fileUri = vscode.Uri.joinPath(target.localeDir, fileName);
+
     await withFileMutex(fileUri, async () => {
-        let root: any = {};
-        try {
-            const data = await vscode.workspace.fs.readFile(fileUri);
-            const raw = sharedDecoder.decode(data);
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object') {
-                root = parsed;
-            }
-        } catch {
-        }
-        if (!root || typeof root !== 'object' || Array.isArray(root)) {
-            root = {};
+        const { root, ok } = await readLocaleJsonObject(fileUri);
+        if (!ok) {
+            throw new Error(`Failed to parse locale JSON: ${fileUri.fsPath}`);
         }
         const container = ensureDeepContainer(root, segments.slice(0, -1));
         const last = segments[segments.length - 1];
@@ -728,7 +814,35 @@ export async function setTranslationValuesBatch(
         return result;
     }
 
-    const localeDir = await findOrCreateLocaleDir(folder, locale);
+    const target = await resolveLocaleWriteTarget(folder, locale);
+
+    if (target.mode === 'file') {
+        try {
+            await withFileMutex(target.fileUri, async () => {
+                const { root, ok } = await readLocaleJsonObject(target.fileUri);
+                if (!ok) {
+                    throw new Error(`Failed to parse locale JSON: ${target.fileUri.fsPath}`);
+                }
+
+                for (const [fullKey, { value }] of updates.entries()) {
+                    const segments = fullKey.split('.').filter(Boolean);
+                    const container = ensureDeepContainer(root, segments.slice(0, -1));
+                    const last = segments[segments.length - 1];
+                    container[last] = value;
+                    result.written += 1;
+                }
+
+                const payload = `${JSON.stringify(root, null, 2)}\n`;
+                await vscode.workspace.fs.writeFile(target.fileUri, sharedEncoder.encode(payload));
+            });
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            result.errors.push(`Failed to write ${target.fileUri.fsPath}: ${msg}`);
+        }
+        return result;
+    }
+
+    const localeDir = target.localeDir;
 
     // Group updates by target file
     const fileUpdates = new Map<string, Map<string, string>>();
@@ -762,19 +876,9 @@ export async function setTranslationValuesBatch(
             // Use file mutex to prevent concurrent writes to the same file
             await withFileMutex(fileUri, async () => {
                 // Read existing content (fresh read while holding lock)
-                let root: any = {};
-                try {
-                    const data = await vscode.workspace.fs.readFile(fileUri);
-                    const raw = sharedDecoder.decode(data);
-                    const parsed = JSON.parse(raw);
-                    if (parsed && typeof parsed === 'object') {
-                        root = parsed;
-                    }
-                } catch {
-                    // File doesn't exist yet, start with empty object
-                }
-                if (!root || typeof root !== 'object' || Array.isArray(root)) {
-                    root = {};
+                const { root, ok } = await readLocaleJsonObject(fileUri);
+                if (!ok) {
+                    throw new Error(`Failed to parse locale JSON: ${fileUri.fsPath}`);
                 }
 
                 // Apply all updates for this file

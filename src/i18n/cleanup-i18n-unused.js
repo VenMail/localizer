@@ -87,7 +87,7 @@ async function collectSourceFiles(dir, out) {
       }
       await collectSourceFiles(entryPath, out);
     } else if (entry.isFile()) {
-      if (/\.(tsx|ts|jsx|js)$/i.test(entry.name)) {
+      if (/\.(tsx|ts|jsx|js|vue|svelte|mjs|cjs|mts|cts)$/i.test(entry.name)) {
         out.push(entryPath);
       }
     }

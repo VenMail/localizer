@@ -850,10 +850,22 @@ export class ProjectFixCommand {
                     return { filesChanged: 0, keysRemoved: processedKeys.size };
                 }
 
-                const fileRel = baseFileRel.startsWith(report.baseLocale)
-                    ? path.join(locale, path.relative(report.baseLocale, baseFileRel))
-                    : baseFileRel;
-                const fileUri = vscode.Uri.joinPath(autoDirUri, fileRel);
+                let fileRel: string;
+                if (baseFileRel === `${report.baseLocale}.json`) {
+                    // Single-file locale structure: en.json -> fr.json
+                    fileRel = `${locale}.json`;
+                } else if (baseFileRel.startsWith(`${report.baseLocale}/`)) {
+                    // Grouped locale structure: en/<path> -> fr/<path>
+                    const relTail = baseFileRel.slice(`${report.baseLocale}/`.length);
+                    fileRel = `${locale}/${relTail}`;
+                } else {
+                    fileRel = baseFileRel;
+                }
+
+                const fileUri = vscode.Uri.joinPath(
+                    autoDirUri,
+                    ...fileRel.split(/[\\/]+/).filter(Boolean),
+                );
                 const mapKey = fileUri.toString();
 
                 let bucket = byFile.get(mapKey);
