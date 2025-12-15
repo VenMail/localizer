@@ -1,9 +1,7 @@
 # Localizer – AI i18n for React, Vue & Laravel
 
 Localizer is a VS Code extension that helps you build and maintain
-JSON-based i18n for modern web apps. It supports React/Next.js, Vue/Nuxt, and
-Laravel/Blade projects, with automatic string extraction, safe rewrites, and
-AI-assisted translations.
+JSON-based i18n for modern web apps. It supports React/Next.js, Vue/Nuxt, and Laravel/Blade projects, with automatic string extraction, safe rewrites, and AI-assisted translations.
 
 ## Features
 

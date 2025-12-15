@@ -3,7 +3,6 @@ import { I18nIndex } from '../../../core/i18nIndex';
 import { pickWorkspaceFolder, runI18nScript } from '../../../core/workspace';
 import {
     sharedDecoder,
-    sharedEncoder,
     readJsonFile,
     writeJsonFile,
     hasKeyPathInObject,
@@ -660,9 +659,15 @@ export class CleanupHandler {
 
         for (const uri of uris) {
             try {
+                // Safety: only scan files that belong to this workspace folder.
+                // vscode.workspace.findFiles can still return matches from other folders
+                // in a multi-root workspace depending on patterns.
+                if (vscode.workspace.getWorkspaceFolder(uri)?.uri.toString() !== folder.uri.toString()) {
+                    continue;
+                }
                 const data = await vscode.workspace.fs.readFile(uri);
-                const content = new TextDecoder().decode(data);
-
+                const content = sharedDecoder.decode(data);
+ 
                 for (const searchPattern of searchPatterns) {
                     if (searchPattern.test(content)) return true;
                 }

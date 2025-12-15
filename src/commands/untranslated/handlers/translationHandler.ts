@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { I18nIndex } from '../../../core/i18nIndex';
+import { inferJsonLocaleFromUri } from '../../../core/i18nPath';
 import { TranslationService } from '../../../services/translationService';
 import { setLaravelTranslationValue, setTranslationValuesBatch } from '../../../core/i18nFs';
 import { getGranularSyncService } from '../../../services/granularSyncService';
@@ -248,16 +249,7 @@ export class TranslationHandler {
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
         const globalDefaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
 
-        let fileLocale: string | null = fileInfo?.locale || null;
-        if (!fileLocale) {
-            const fsPath = targetUri.fsPath;
-            const parts = fsPath.split(/[\\/]/).filter(Boolean);
-            const fileName = parts[parts.length - 1];
-            const match = fileName.match(/^([A-Za-z0-9_-]+)\.json$/);
-            if (match) {
-                fileLocale = match[1];
-            }
-        }
+        const fileLocale: string | null = fileInfo?.locale || inferJsonLocaleFromUri(targetUri);
 
         if (!fileLocale) {
             vscode.window.showInformationMessage(

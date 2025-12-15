@@ -379,10 +379,25 @@ export class ProjectFixCommand {
         filesWithMissingRefs: vscode.Uri[];
     }> {
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
-        const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
-        const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
-            '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
-            '**/.next/**', '**/.nuxt/**', '**/.vite/**', '**/coverage/**', '**/out/**', '**/.turbo/**',
+        const configuredGlobs = cfg.get<string[]>('i18n.sourceGlobs') || [];
+        const fallbackGlobs = [
+            '**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,vue,svelte,php,py,cs,cshtml,razor}',
+            '**/*.blade.php',
+        ];
+        const sourceGlobs = configuredGlobs.length > 0
+            ? Array.from(new Set<string>([...configuredGlobs, ...fallbackGlobs]))
+            : fallbackGlobs;
+        const excludeGlobs = [
+            '**/node_modules/**',
+            '**/.git/**',
+            '**/dist/**',
+            '**/build/**',
+            '**/.next/**',
+            '**/.nuxt/**',
+            '**/.vite/**',
+            '**/coverage/**',
+            '**/out/**',
+            '**/.turbo/**',
             '**/vendor/**',
         ];
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
@@ -411,7 +426,7 @@ export class ProjectFixCommand {
         const allKeysSet = new Set(this.i18nIndex.getAllKeys());
         
         // Regex to match t('key'), $t('key'), t("key"), etc.
-        const tCallRegex = /\b(\$?)t\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\2\s*([,)])/g;
+        const tCallRegex = /(^|[^a-zA-Z0-9_$])(\$?)t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_\.\-:]+)\3\s*([,)])/gm;
 
         let missingReferences = 0;
         const filesWithMissingRefs: vscode.Uri[] = [];
@@ -428,14 +443,13 @@ export class ProjectFixCommand {
                 tCallRegex.lastIndex = 0;
 
                 while ((match = tCallRegex.exec(text)) !== null) {
-                    const dollarSignLength = match[1] ? 1 : 0;
-                    const tCallStart = match.index + dollarSignLength;
+                    const tCallStart = match.index + match[1].length;
 
                     if (isPositionInComment(tCallStart, commentRanges)) {
                         continue;
                     }
 
-                    const key = match[3];
+                    const key = match[4];
                     if (!allKeysSet.has(key)) {
                         missingReferences++;
                         hasMissing = true;
@@ -458,55 +472,8 @@ export class ProjectFixCommand {
      * Used as a safety check before deleting keys from locale files.
      */
     private async countKeyUsageInSource(folder: vscode.WorkspaceFolder, key: string): Promise<number> {
-        const cfg = vscode.workspace.getConfiguration('ai-localizer');
-        const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
-        const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
-            '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
-            '**/.next/**', '**/.nuxt/**', '**/.vite/**', '**/coverage/**', '**/out/**', '**/.turbo/**',
-            '**/vendor/**',
-        ];
-        const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
-
-        const seen = new Set<string>();
-        const uris: vscode.Uri[] = [];
-        const includes = sourceGlobs.length > 0 ? sourceGlobs : [];
-
-        for (const include of includes) {
-            try {
-                const pattern = new vscode.RelativePattern(folder, include);
-                const found = await vscode.workspace.findFiles(pattern, exclude);
-                for (const uri of found) {
-                    const keyStr = uri.toString();
-                    if (!seen.has(keyStr)) {
-                        seen.add(keyStr);
-                        uris.push(uri);
-                    }
-                }
-            } catch {
-                // Skip invalid glob patterns
-            }
-        }
-
-        const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tCallRegex = new RegExp(`\\b\\$?t\\s*\\(\\s*['"\`]?${escapedKey}['"\`]?\\s*(?:,|\\))`, 'g');
-
-        let count = 0;
-        for (const uri of uris) {
-            try {
-                const data = await vscode.workspace.fs.readFile(uri);
-                const text = sharedDecoder.decode(data);
-                tCallRegex.lastIndex = 0;
-                while (tCallRegex.exec(text) !== null) {
-                    count += 1;
-                }
-                // Early exit if already found enough references
-                if (count > 0) break;
-            } catch {
-                // Ignore unreadable files
-            }
-        }
-
-        return count;
+        const usedKeys = await this.buildSourceUsageSet(folder, new Set<string>([key]));
+        return usedKeys.has(key) ? 1 : 0;
     }
 
     private async buildSourceUsageSet(
@@ -519,10 +486,25 @@ export class ProjectFixCommand {
         }
 
         const cfg = vscode.workspace.getConfiguration('ai-localizer');
-        const sourceGlobs = cfg.get<string[]>('i18n.sourceGlobs') || ['**/*.{ts,tsx,js,jsx,vue}'];
-        const excludeGlobs = cfg.get<string[]>('i18n.sourceExcludeGlobs') || [
-            '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
-            '**/.next/**', '**/.nuxt/**', '**/.vite/**', '**/coverage/**', '**/out/**', '**/.turbo/**',
+        const configuredGlobs = cfg.get<string[]>('i18n.sourceGlobs') || [];
+        const fallbackGlobs = [
+            '**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,vue,svelte,php,py,cs,cshtml,razor}',
+            '**/*.blade.php',
+        ];
+        const sourceGlobs = configuredGlobs.length > 0
+            ? Array.from(new Set<string>([...configuredGlobs, ...fallbackGlobs]))
+            : fallbackGlobs;
+        const excludeGlobs = [
+            '**/node_modules/**',
+            '**/.git/**',
+            '**/dist/**',
+            '**/build/**',
+            '**/.next/**',
+            '**/.nuxt/**',
+            '**/.vite/**',
+            '**/coverage/**',
+            '**/out/**',
+            '**/.turbo/**',
             '**/vendor/**',
         ];
         const exclude = excludeGlobs.length > 0 ? `{${excludeGlobs.join(',')}}` : undefined;
@@ -531,11 +513,16 @@ export class ProjectFixCommand {
         const uris: vscode.Uri[] = [];
         const includes = sourceGlobs.length > 0 ? sourceGlobs : [];
 
+        const folderPrefix = folder.uri.fsPath.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '') + '/';
+
         for (const include of includes) {
             try {
-                const pattern = new vscode.RelativePattern(folder, include);
-                const found = await vscode.workspace.findFiles(pattern, exclude);
+                const found = await vscode.workspace.findFiles(include, exclude);
                 for (const uri of found) {
+                    const normalizedPath = uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                    if (!normalizedPath.startsWith(folderPrefix)) {
+                        continue;
+                    }
                     const key = uri.toString();
                     if (!seen.has(key)) {
                         seen.add(key);
@@ -547,7 +534,15 @@ export class ProjectFixCommand {
             }
         }
 
-        const tCallRegex = /\b(\$?)t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_\.\-:]+)\2\s*([,)])/g;
+        const tCallRegex = /(^|[^a-zA-Z0-9_$])(\$?)t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_\.\-:]+)\3\s*([,)])/gm;
+        const laravelCallRegexes: Array<{ regex: RegExp; keyGroup: number }> = [
+            { regex: /\b__\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\1\s*(?:,|\))/g, keyGroup: 2 },
+            { regex: /\btrans\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\1\s*(?:,|\))/g, keyGroup: 2 },
+            { regex: /@lang\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\1\s*(?:,|\))/g, keyGroup: 2 },
+        ];
+        const pythonCallRegexes: Array<{ regex: RegExp; keyGroup: number }> = [
+            { regex: /\b(_|gettext)\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\2\s*(?:,|\))/g, keyGroup: 3 },
+        ];
         const keyLiteralRegex = /(['"`])([A-Za-z0-9_\-]+(?:[\.:][A-Za-z0-9_\-]+)+)\1/g;
 
         for (const uri of uris) {
@@ -561,18 +556,49 @@ export class ProjectFixCommand {
                 tCallRegex.lastIndex = 0;
 
                 while ((match = tCallRegex.exec(text)) !== null) {
-                    const dollarSignLength = match[1] ? 1 : 0;
-                    const tCallStart = match.index + dollarSignLength;
+                    const tCallStart = match.index + match[1].length;
 
                     if (isPositionInComment(tCallStart, commentRanges)) {
                         continue;
                     }
 
-                    const key = match[3];
+                    const key = match[4];
                     if (candidateKeys.has(key)) {
                         usedKeys.add(key);
                         if (usedKeys.size === candidateKeys.size) {
                             return usedKeys;
+                        }
+                    }
+                }
+
+                for (const { regex, keyGroup } of laravelCallRegexes) {
+                    regex.lastIndex = 0;
+                    while ((match = regex.exec(text)) !== null) {
+                        if (isPositionInComment(match.index, commentRanges)) {
+                            continue;
+                        }
+                        const key = match[keyGroup];
+                        if (candidateKeys.has(key)) {
+                            usedKeys.add(key);
+                            if (usedKeys.size === candidateKeys.size) {
+                                return usedKeys;
+                            }
+                        }
+                    }
+                }
+
+                for (const { regex, keyGroup } of pythonCallRegexes) {
+                    regex.lastIndex = 0;
+                    while ((match = regex.exec(text)) !== null) {
+                        if (isPositionInComment(match.index, commentRanges)) {
+                            continue;
+                        }
+                        const key = match[keyGroup];
+                        if (candidateKeys.has(key)) {
+                            usedKeys.add(key);
+                            if (usedKeys.size === candidateKeys.size) {
+                                return usedKeys;
+                            }
                         }
                     }
                 }
@@ -612,6 +638,30 @@ export class ProjectFixCommand {
         const maxPasses = 3;
         let totalFixed = 0;
 
+        const runWithConcurrency = async <T>(
+            items: T[],
+            concurrency: number,
+            fn: (item: T) => Promise<void>,
+        ): Promise<void> => {
+            const queue = [...items];
+            const workers: Promise<void>[] = [];
+
+            const worker = async (): Promise<void> => {
+                while (queue.length > 0) {
+                    if (token.isCancellationRequested) return;
+                    const next = queue.shift();
+                    if (!next) return;
+                    await fn(next);
+                }
+            };
+
+            const count = Math.max(1, Math.min(concurrency, items.length || 1));
+            for (let i = 0; i < count; i++) {
+                workers.push(worker());
+            }
+            await Promise.all(workers);
+        };
+
         for (let pass = 1; pass <= maxPasses; pass++) {
             if (token.isCancellationRequested) return totalFixed;
 
@@ -626,9 +676,10 @@ export class ProjectFixCommand {
             });
 
             let fixedThisPass = 0;
-            for (const uri of issues.filesWithMissingRefs) {
-                if (token.isCancellationRequested) return totalFixed;
-
+            const cfg = vscode.workspace.getConfiguration('ai-localizer');
+            const concurrency = Number(cfg.get<number>('i18n.bulkFixConcurrency') ?? 4);
+            await runWithConcurrency(issues.filesWithMissingRefs, concurrency, async (uri) => {
+                if (token.isCancellationRequested) return;
                 try {
                     await vscode.commands.executeCommand('ai-localizer.i18n.bulkFixMissingKeyReferences', uri);
                     fixedThisPass += 1;
@@ -636,12 +687,17 @@ export class ProjectFixCommand {
                     const msg = err instanceof Error ? err.message : String(err);
                     console.warn(`AI Localizer: Bulk fix failed for ${uri.fsPath}. ${msg}`);
                 }
-            }
+            });
 
             totalFixed += fixedThisPass;
 
             // Rebuild index after fixes to pick up newly created keys
             await this.i18nIndex.ensureInitialized(true);
+
+            // If we didn't manage to process any file, there's no point continuing.
+            if (fixedThisPass === 0) {
+                break;
+            }
 
             // Check if we made progress
             const afterIssues = await this.scanSourceFilesForMissingRefs(folder);
@@ -783,17 +839,14 @@ export class ProjectFixCommand {
             return { filesChanged: 0, keysRemoved: 0 };
         }
 
-        let usedKeys = new Set<string>();
-        if (reportType === 'unused') {
-            const candidateKeys = new Set<string>();
-            for (const entry of entries) {
-                const keyPath = (entry as any).keyPath;
-                if (typeof keyPath === 'string' && keyPath) {
-                    candidateKeys.add(keyPath);
-                }
+        const candidateKeys = new Set<string>();
+        for (const entry of entries) {
+            const keyPath = (entry as any).keyPath;
+            if (typeof keyPath === 'string' && keyPath) {
+                candidateKeys.add(keyPath);
             }
-            usedKeys = await this.buildSourceUsageSet(folder, candidateKeys);
         }
+        const usedKeys = await this.buildSourceUsageSet(folder, candidateKeys);
 
         // CRITICAL: For invalid keys, restore inline strings in code BEFORE deleting from locale files
         // This prevents creating missing translation key diagnostics
@@ -805,6 +858,12 @@ export class ProjectFixCommand {
                 }
                 
                 const invalidEntry = entry as { keyPath: string; baseValue?: string; usages?: Array<{ file: string; line: number }> };
+                if (usedKeys.has(invalidEntry.keyPath)) {
+                    console.log(
+                        `[ProjectFixCommand] Skipping restore of "${invalidEntry.keyPath}" because it is still referenced in source.`
+                    );
+                    continue;
+                }
                 const usages = invalidEntry.usages || [];
                 const baseValue = invalidEntry.baseValue || '';
                 
@@ -854,15 +913,13 @@ export class ProjectFixCommand {
                 continue;
             }
 
-            // Safety guard: if the key is still referenced in source, skip deletion
-            if (reportType === 'unused') {
-                if (usedKeys.has(keyPath)) {
-                    console.log(
-                        `[ProjectFixCommand] Skipping deletion of "${keyPath}" because it is still referenced in source.`,
-                    );
-                    processedKeys.add(keyPath);
-                    continue;
-                }
+            // Safety guard: never delete keys that are still referenced in source.
+            if (usedKeys.has(keyPath)) {
+                console.log(
+                    `[ProjectFixCommand] Skipping deletion of "${keyPath}" because it is still referenced in source.`,
+                );
+                processedKeys.add(keyPath);
+                continue;
             }
 
             for (const locale of locales) {

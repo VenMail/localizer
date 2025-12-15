@@ -3,8 +3,8 @@ import * as path from 'path';
 import { TextDecoder, TextEncoder } from 'util';
 
 // Shared encoder/decoder instances to avoid repeated allocations
-const sharedDecoder = new TextDecoder('utf-8');
-const sharedEncoder = new TextEncoder();
+export const sharedDecoder = new TextDecoder('utf-8');
+export const sharedEncoder = new TextEncoder();
 
 // Cache for locale directory lookups (cleared on workspace change)
 const localeDirCache = new Map<string, vscode.Uri>();
@@ -17,7 +17,7 @@ const mutexTimeout = 30000; // 30 second max wait
  * Acquire a file-level lock for writing operations.
  * Ensures only one write operation can occur at a time for a given file.
  */
-async function withFileMutex<T>(fileUri: vscode.Uri, operation: () => Promise<T>): Promise<T> {
+export async function withFileMutex<T>(fileUri: vscode.Uri, operation: () => Promise<T>): Promise<T> {
     const key = fileUri.toString();
     
     // Wait for any existing operation on this file

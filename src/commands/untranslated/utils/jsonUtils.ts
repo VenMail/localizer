@@ -1,48 +1,13 @@
 import * as vscode from 'vscode';
-import { TextDecoder, TextEncoder } from 'util';
+import { sharedDecoder, sharedEncoder, withFileMutex as withFileMutexCore } from '../../../core/i18nFs';
 
-export const sharedDecoder = new TextDecoder('utf-8');
-export const sharedEncoder = new TextEncoder();
-
-// Simple file-level mutex for preventing concurrent writes to the same file
-const fileMutex = new Map<string, Promise<void>>();
-const mutexTimeout = 30000; // 30 second max wait
+export { sharedDecoder, sharedEncoder };
 
 /**
  * Execute an operation with file-level locking to prevent race conditions
  */
 export async function withFileMutex<T>(fileUri: vscode.Uri, operation: () => Promise<T>): Promise<T> {
-    const key = fileUri.toString();
-    
-    // Wait for any existing operation on this file
-    let existing = fileMutex.get(key);
-    if (existing) {
-        const timeoutPromise = new Promise<void>((_, reject) => {
-            setTimeout(() => reject(new Error(`File lock timeout: ${fileUri.fsPath}`)), mutexTimeout);
-        });
-        try {
-            await Promise.race([existing, timeoutPromise]);
-        } catch {
-            // Previous operation timed out or failed, proceed anyway
-        }
-    }
-    
-    // Create our lock
-    let resolver: () => void;
-    const ourLock = new Promise<void>((resolve) => {
-        resolver = resolve;
-    });
-    fileMutex.set(key, ourLock);
-    
-    try {
-        return await operation();
-    } finally {
-        resolver!();
-        // Only delete if it's still our lock (prevent race with next operation)
-        if (fileMutex.get(key) === ourLock) {
-            fileMutex.delete(key);
-        }
-    }
+    return withFileMutexCore(fileUri, operation);
 }
 
 /**

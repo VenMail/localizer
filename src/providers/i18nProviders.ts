@@ -1,10 +1,17 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { TextDecoder } from 'util';
 import { I18nIndex, extractKeyAtPosition, escapeMarkdown } from '../core/i18nIndex';
-import { readLaravelKeyValueFromFile } from '../core/i18nFs';
+import { readLaravelKeyValueFromFile, sharedDecoder } from '../core/i18nFs';
+import { inferJsonLocaleFromUri } from '../core/i18nPath';
 import { detectFrameworkProfile } from '../frameworks/detection';
 import { ProjectConfigService } from '../services/projectConfigService';
+import {
+    parseInvalidDiagnostic,
+    parseMissingReferenceDiagnostic,
+    parsePlaceholderDiagnostic,
+    parseStyleDiagnostic,
+    parseUntranslatedDiagnostic,
+} from '../commands/untranslated/utils/diagnosticParser';
 
 /**
  * Language selector for source files using i18n keys
@@ -725,20 +732,7 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
             return [];
         }
 
-        // Infer locale from path (similar to I18nIndex.inferLocaleFromPath)
-        const parts = normalized.split('/').filter(Boolean);
-        let locale: string | null = null;
-        const autoIndex = parts.lastIndexOf('auto');
-        if (autoIndex >= 0 && autoIndex + 1 < parts.length) {
-            const raw = parts[autoIndex + 1];
-            locale = raw.replace(/\.json$/i, '');
-        } else {
-            const fileName = parts[parts.length - 1];
-            const match = fileName.match(/^([A-Za-z0-9_-]+)\.json$/);
-            if (match) {
-                locale = match[1];
-            }
-        }
+        const locale = inferJsonLocaleFromUri(document.uri);
 
         if (!locale) {
             return [];
@@ -806,8 +800,6 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
 class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
     public static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
 
-    private decoder = new TextDecoder('utf-8');
-
     private isLaravelLocaleFile(document: vscode.TextDocument): boolean {
         const fsPath = document.uri.fsPath.replace(/\\/g, '/').toLowerCase();
         if (!fsPath.endsWith('.php')) {
@@ -843,7 +835,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
             }
 
             if (diagnostic.code === 'ai-i18n.untranslated') {
-                const parsed = this.parseDiagnosticMessage(String(diagnostic.message || ''));
+                const parsed = parseUntranslatedDiagnostic(String(diagnostic.message || ''));
                 if (!parsed) continue;
                 const { key, locales } = parsed;
                 if (!key || !locales || !locales.length) {
@@ -876,7 +868,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 }
             } else if (diagnostic.code === 'ai-i18n.placeholders') {
                 // Placeholder mismatch - offer to copy placeholders from default
-                const placeholderParsed = this.parsePlaceholderDiagnostic(String(diagnostic.message || ''));
+                const placeholderParsed = parsePlaceholderDiagnostic(String(diagnostic.message || ''));
                 if (placeholderParsed) {
                     const { key, locale } = placeholderParsed;
                     const title = `AI Localizer: Fix placeholder mismatch for ${key} in ${locale}`;
@@ -891,7 +883,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                     actions.push(action);
                 }
             } else if (diagnostic.code === 'ai-i18n.style') {
-                const styleParsed = this.parseStyleDiagnostic(String(diagnostic.message || ''));
+                const styleParsed = parseStyleDiagnostic(String(diagnostic.message || ''));
                 if (!styleParsed) continue;
                 const { key, locale, suggested } = styleParsed;
                 if (!key || !locale || !suggested) continue;
@@ -906,7 +898,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 actions.push(action);
             } else if (diagnostic.code === 'ai-i18n.invalid') {
                 // Parse the invalid diagnostic to extract the key
-                const invalidParsed = this.parseInvalidDiagnostic(String(diagnostic.message || ''));
+                const invalidParsed = parseInvalidDiagnostic(String(diagnostic.message || ''));
                 if (!invalidParsed) continue;
                 const { key } = invalidParsed;
 
@@ -936,7 +928,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 }
             } else if (diagnostic.code === 'ai-i18n.missing-reference') {
                 // Parse the missing reference diagnostic to extract the key
-                const missingRefParsed = this.parseMissingReferenceDiagnostic(String(diagnostic.message || ''));
+                const missingRefParsed = parseMissingReferenceDiagnostic(String(diagnostic.message || ''));
                 if (!missingRefParsed) continue;
                 const { key } = missingRefParsed;
 
@@ -1149,161 +1141,11 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         return unique;
     }
 
-    private parseDiagnosticMessage(message: string): { key: string; locales: string[] } | null {
-        if (!message) {
-            return null;
-        }
-
-        // New format: Missing translation for "key" [locale]
-        const missingNewMatch = message.match(/^Missing translation for "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
-        if (missingNewMatch) {
-            const key = missingNewMatch[1].trim();
-            const locale = missingNewMatch[2].trim();
-            return { key, locales: [locale] };
-        }
-
-        // New format: Untranslated (same as default) "key" [locale]
-        const untranslatedNewMatch = message.match(/^Untranslated \(same as default\) "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
-        if (untranslatedNewMatch) {
-            const key = untranslatedNewMatch[1].trim();
-            const locale = untranslatedNewMatch[2].trim();
-            return { key, locales: [locale] };
-        }
-
-        // Legacy format support
-        const clean = message.replace(/^AI i18n:\s*/, '');
-
-        const missingMatch = clean.match(
-            /^Missing translation for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/,
-        );
-        if (missingMatch) {
-            const key = missingMatch[1].trim();
-            const locale = missingMatch[2].trim();
-            return { key, locales: [locale] };
-        }
-
-        const untranslatedMatch = clean.match(
-            /^Untranslated \(same as default\) value for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/,
-        );
-        if (untranslatedMatch) {
-            const key = untranslatedMatch[1].trim();
-            const locale = untranslatedMatch[2].trim();
-            return { key, locales: [locale] };
-        }
-
-        const selectionMatch = clean.match(/^Missing translations for\s+(.+?)\s+in locales:\s+(.+)$/);
-        if (selectionMatch) {
-            const key = selectionMatch[1].trim();
-            const localesRaw = selectionMatch[2]
-                .split(',')
-                .map((p) => p.trim())
-                .filter(Boolean);
-            if (!key || !localesRaw.length) {
-                return null;
-            }
-            return { key, locales: localesRaw };
-        }
-
-        return null;
-    }
-
-    private parseStyleDiagnostic(message: string): { key: string; locale: string; suggested: string } | null {
-        if (!message) return null;
-        
-        // New format: Style suggestion "key" [locale] (current: X | suggested: Y)
-        const newMatch = message.match(/^Style suggestion "(.+?)"\s*\[([A-Za-z0-9_-]+)\]\s*\(([^)]*)\)/);
-        if (newMatch) {
-            const key = newMatch[1].trim();
-            const locale = newMatch[2].trim();
-            const details = newMatch[3] || '';
-            const sugMatch = details.match(/suggested:\s*([^|)]+)/i);
-            const suggested = sugMatch ? sugMatch[1].trim() : '';
-            if (!key || !locale || !suggested) return null;
-            return { key, locale, suggested };
-        }
-
-        // Legacy format
-        const clean = message.replace(/^AI i18n:\s*/, '');
-        const m = clean.match(/^Style suggestion for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)\s*\(([^)]*)\)/);
-        if (!m) return null;
-        const key = m[1].trim();
-        const locale = m[2].trim();
-        const details = m[3] || '';
-        const sugMatch = details.match(/suggested:\s*([^|)]+)/i);
-        const suggested = sugMatch ? sugMatch[1].trim() : '';
-        if (!key || !locale || !suggested) return null;
-        return { key, locale, suggested };
-    }
-
-    private parseInvalidDiagnostic(message: string): { key: string } | null {
-        if (!message) return null;
-        
-        // New format: Invalid/non-translatable value "key" [locale]
-        const newMatch = message.match(/^Invalid\/non-translatable value "(.+?)"\s*\[/);
-        if (newMatch) {
-            const key = newMatch[1].trim();
-            if (!key) return null;
-            return { key };
-        }
-
-        // Legacy format
-        const clean = message.replace(/^AI i18n:\s*/, '');
-        const m = clean.match(/^Invalid\/non-translatable default value for key\s+(.+?)\s+in locale\s+/);
-        if (!m) return null;
-        const key = m[1].trim();
-        if (!key) return null;
-        return { key };
-    }
-
-    private parsePlaceholderDiagnostic(message: string): { key: string; locale: string } | null {
-        if (!message) return null;
-        
-        // New format: Placeholder mismatch "key" [locale] (expected: ...)
-        const newMatch = message.match(/^Placeholder mismatch "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
-        if (newMatch) {
-            const key = newMatch[1].trim();
-            const locale = newMatch[2].trim();
-            if (!key || !locale) return null;
-            return { key, locale };
-        }
-
-        // Legacy format
-        const clean = message.replace(/^AI i18n:\s*/, '');
-        const m = clean.match(/^Placeholder mismatch for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/);
-        if (!m) return null;
-        const key = m[1].trim();
-        const locale = m[2].trim();
-        if (!key || !locale) return null;
-        return { key, locale };
-    }
-
-    private parseMissingReferenceDiagnostic(message: string): { key: string } | null {
-        if (!message) return null;
-        
-        // Format: Missing translation key "Namespace.kind.slug" not found in locale files
-        const match = message.match(/^Missing translation key "(.+?)"/);
-        if (match) {
-            const key = match[1].trim();
-            if (!key) return null;
-            return { key };
-        }
-
-        // Alternative format: Translation key "..." is not defined
-        const altMatch = message.match(/^Translation key "(.+?)"\s+is not defined/);
-        if (altMatch) {
-            const key = altMatch[1].trim();
-            if (!key) return null;
-            return { key };
-        }
-
-        return null;
-    }
-
     private async loadReport(scriptsDir: vscode.Uri, fileName: string): Promise<any | null> {
         const reportUri = vscode.Uri.joinPath(scriptsDir, fileName);
         try {
             const data = await vscode.workspace.fs.readFile(reportUri);
-            const raw = this.decoder.decode(data);
+            const raw = sharedDecoder.decode(data);
             return JSON.parse(raw);
         } catch {
             return null;

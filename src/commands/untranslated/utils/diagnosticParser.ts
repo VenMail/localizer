@@ -87,3 +87,70 @@ export function parseStyleDiagnostic(message: string): { key: string; locale: st
     return { key, locale, suggested };
 }
 
+/**
+ * Parse invalid/non-translatable diagnostic to extract key.
+ */
+export function parseInvalidDiagnostic(message: string): { key: string } | null {
+    if (!message) return null;
+
+    const newMatch = message.match(/^Invalid\/non-translatable value "(.+?)"\s*\[/);
+    if (newMatch) {
+        const key = newMatch[1].trim();
+        if (!key) return null;
+        return { key };
+    }
+
+    const clean = message.replace(/^AI i18n:\s*/, '');
+    const m = clean.match(/^Invalid\/non-translatable default value for key\s+(.+?)\s+in locale\s+/);
+    if (!m) return null;
+    const key = m[1].trim();
+    if (!key) return null;
+    return { key };
+}
+
+/**
+ * Parse placeholder mismatch diagnostic to extract key and locale.
+ */
+export function parsePlaceholderDiagnostic(message: string): { key: string; locale: string } | null {
+    if (!message) return null;
+
+    const newMatch = message.match(/^Placeholder mismatch "(.+?)"\s*\[([A-Za-z0-9_-]+)\]/);
+    if (newMatch) {
+        const key = newMatch[1].trim();
+        const locale = newMatch[2].trim();
+        if (!key || !locale) return null;
+        return { key, locale };
+    }
+
+    const clean = message.replace(/^AI i18n:\s*/, '');
+    const m = clean.match(/^Placeholder mismatch for key\s+(.+?)\s+in locale\s+([A-Za-z0-9_-]+)/);
+    if (!m) return null;
+    const key = m[1].trim();
+    const locale = m[2].trim();
+    if (!key || !locale) return null;
+    return { key, locale };
+}
+
+/**
+ * Parse missing translation key reference diagnostics to extract key.
+ */
+export function parseMissingReferenceDiagnostic(message: string): { key: string } | null {
+    if (!message) return null;
+
+    const match = message.match(/^Missing translation key "(.+?)"/);
+    if (match) {
+        const key = match[1].trim();
+        if (!key) return null;
+        return { key };
+    }
+
+    const altMatch = message.match(/^Translation key "(.+?)"\s+is not defined/);
+    if (altMatch) {
+        const key = altMatch[1].trim();
+        if (!key) return null;
+        return { key };
+    }
+
+    return null;
+}
+
