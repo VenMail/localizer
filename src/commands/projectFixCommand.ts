@@ -4,6 +4,7 @@ import { TextEncoder, TextDecoder } from 'util';
 import { I18nIndex } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
+import { DiagnosticAnalyzer, getDiagnosticConfig } from '../services/diagnosticAnalyzer';
 import { pickWorkspaceFolder, runI18nScript } from '../core/workspace';
 import { getGitStatus, createSnapshotCommit } from '../core/gitMonitor';
 import { findCommentRanges, isPositionInComment } from './untranslated/utils/commentParser';
@@ -42,6 +43,7 @@ export class ProjectFixCommand {
         private i18nIndex: I18nIndex,
         private translationService: TranslationService,
         private projectConfigService: ProjectConfigService,
+        private diagnosticAnalyzer: DiagnosticAnalyzer,
     ) {}
 
     async execute(): Promise<void> {
@@ -422,45 +424,28 @@ export class ProjectFixCommand {
             }
         }
 
-        await this.i18nIndex.ensureInitialized();
-        const allKeysSet = new Set(this.i18nIndex.getAllKeys());
-        
-        // Regex to match t('key'), $t('key'), t("key"), etc.
-        const tCallRegex = /(^|[^a-zA-Z0-9_$])(\$?)t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_\.\-:]+)\3\s*([,)])/gm;
+        // Use the same logic as "Rescan Translations" diagnostics to avoid false positives.
+        const config = getDiagnosticConfig();
+        if (!config.enabled || !config.missingReferenceEnabled) {
+            return { missingReferences: 0, filesWithMissingRefs: [] };
+        }
 
         let missingReferences = 0;
         const filesWithMissingRefs: vscode.Uri[] = [];
 
         for (const uri of uris) {
+            if (uri.scheme !== 'file') {
+                continue;
+            }
             try {
-                const data = await vscode.workspace.fs.readFile(uri);
-                const text = sharedDecoder.decode(data);
-
-                const commentRanges = findCommentRanges(text);
-
-                let hasMissing = false;
-                let match;
-                tCallRegex.lastIndex = 0;
-
-                while ((match = tCallRegex.exec(text)) !== null) {
-                    const tCallStart = match.index + match[1].length;
-
-                    if (isPositionInComment(tCallStart, commentRanges)) {
-                        continue;
-                    }
-
-                    const key = match[4];
-                    if (!allKeysSet.has(key)) {
-                        missingReferences++;
-                        hasMissing = true;
-                    }
-                }
-
-                if (hasMissing) {
+                const diags = await this.diagnosticAnalyzer.analyzeSourceFile(uri, config);
+                const missing = diags.filter((d) => d.code === 'ai-i18n.missing-reference');
+                if (missing.length > 0) {
+                    missingReferences += missing.length;
                     filesWithMissingRefs.push(uri);
                 }
             } catch {
-                // Skip files that can't be read
+                // Skip files that can't be analyzed
             }
         }
 

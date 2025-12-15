@@ -220,6 +220,7 @@ export class CommandRegistry {
             this.i18nIndex,
             this.translationService,
             this.projectConfigService,
+            this.diagnosticAnalyzer,
         );
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.fixAllIssuesInProject', () =>
