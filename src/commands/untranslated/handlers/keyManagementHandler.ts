@@ -25,6 +25,8 @@ import {
 import {
     computeEditDistance,
     buildLabelFromKeySegment,
+    escapeRegExp,
+    looksLikeUserText,
 } from '../utils/textAnalysis';
 import { findCommentRanges, isPositionInComment } from '../utils/commentParser';
 import { GitRecoveryHandler } from './gitRecoveryHandler';
@@ -71,6 +73,290 @@ export class KeyManagementHandler {
         return false;
     }
 
+    private decodeSimpleJsStringLiteral(content: string): string {
+        return String(content || '')
+            .replace(/\\n/g, ' ')
+            .replace(/\\r/g, ' ')
+            .replace(/\\t/g, ' ')
+            .replace(/\\'/g, "'")
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\');
+    }
+
+    private buildCollapsedTranslationExpressionEdit(
+        doc: vscode.TextDocument,
+        keyRange: vscode.Range,
+        originalKey: string,
+        targetKey: string,
+    ): { range: vscode.Range; newText: string } | null {
+        const text = doc.getText();
+        const keyStartOffset = doc.offsetAt(keyRange.start);
+        const keyEndOffset = doc.offsetAt(keyRange.end);
+        if (keyStartOffset < 0 || keyEndOffset <= keyStartOffset) return null;
+
+        const safeKey = escapeRegExp(originalKey);
+
+        const windowSize = 20000;
+        const windowStart = Math.max(0, keyStartOffset - windowSize);
+        const prefixText = text.slice(windowStart, keyStartOffset);
+        const callStartCandidateRegex = /\b(\$?)t\s*\(/g;
+
+        const candidates: Array<{ startIdx: number; hasDollar: boolean }> = [];
+        for (let m = callStartCandidateRegex.exec(prefixText); m; m = callStartCandidateRegex.exec(prefixText)) {
+            const absIdx = windowStart + (m.index ?? 0);
+            candidates.push({ startIdx: absIdx, hasDollar: (m[1] as string) === '$' });
+        }
+        if (!candidates.length) return null;
+
+        const findCloseParenFrom = (openParenIdx: number): number | null => {
+            let depth = 0;
+            let inString: string | null = null;
+            let escape = false;
+
+            for (let i = openParenIdx; i < text.length; i += 1) {
+                const ch = text[i] as string;
+
+                if (inString) {
+                    if (escape) {
+                        escape = false;
+                        continue;
+                    }
+                    if (ch === '\\') {
+                        escape = true;
+                        continue;
+                    }
+                    if (ch === inString) {
+                        inString = null;
+                    }
+                    continue;
+                }
+
+                if (ch === "'" || ch === '"' || ch === '`') {
+                    inString = ch;
+                    continue;
+                }
+
+                if (ch === '(') {
+                    depth += 1;
+                    continue;
+                }
+                if (ch === ')') {
+                    depth -= 1;
+                    if (depth === 0) return i;
+                    continue;
+                }
+            }
+            return null;
+        };
+
+        const findEnclosingCall = (): { startIdx: number; hasDollar: boolean; openParenIdx: number; closeParenIdx: number } | null => {
+            for (let i = candidates.length - 1; i >= 0; i -= 1) {
+                const c = candidates[i]!;
+                const openParenIdx = text.indexOf('(', c.startIdx);
+                if (openParenIdx === -1) continue;
+                const closeParenIdx = findCloseParenFrom(openParenIdx);
+                if (closeParenIdx == null) continue;
+                if (c.startIdx <= keyStartOffset && keyEndOffset <= closeParenIdx) {
+                    return { startIdx: c.startIdx, hasDollar: c.hasDollar, openParenIdx, closeParenIdx };
+                }
+            }
+            return null;
+        };
+
+        const call = findEnclosingCall();
+        if (!call) return null;
+
+        const findFirstArgEndIdx = (): number | null => {
+            const firstArgRegex = new RegExp(
+                "\\b\\$?t\\s*\\(\\s*(['\"`])" + safeKey + "\\1",
+                'g',
+            );
+            firstArgRegex.lastIndex = call.startIdx;
+            const m = firstArgRegex.exec(text);
+            if (!m || typeof m.index !== 'number') return null;
+            const matchText = m[0] as string;
+            return m.index + matchText.length;
+        };
+
+        const afterFirstArgIdx = findFirstArgEndIdx();
+        if (afterFirstArgIdx == null) return null;
+
+        const shouldCollapseCallArgs = (() => {
+            let i = afterFirstArgIdx;
+            while (i < text.length && /\s/.test(text[i] as string)) i += 1;
+            if ((text[i] as string) !== ',') {
+                return true;
+            }
+
+            i += 1;
+            while (i < text.length && /\s/.test(text[i] as string)) i += 1;
+            const quote = text[i] as string;
+            if (quote !== "'" && quote !== '"' && quote !== '`') return false;
+
+            i += 1;
+            let escape = false;
+            let sawTemplateExpr = false;
+            for (; i < text.length; i += 1) {
+                const ch = text[i] as string;
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
+                if (ch === '\\') {
+                    escape = true;
+                    continue;
+                }
+                if (quote === '`' && ch === '$' && (text[i + 1] as string) === '{') {
+                    sawTemplateExpr = true;
+                }
+                if (ch === quote) {
+                    i += 1;
+                    break;
+                }
+            }
+            if (quote === '`' && sawTemplateExpr) return false;
+
+            while (i < text.length && /\s/.test(text[i] as string)) i += 1;
+            return i === call.closeParenIdx;
+        })();
+
+        if (!shouldCollapseCallArgs) return null;
+
+        let endIdx = call.closeParenIdx;
+
+        const rest = text.slice(call.closeParenIdx + 1);
+        const fallbackMatch = rest.match(/^\s*(\|\||\?\?)\s*(['"`])((?:\\.|(?!\2)[\s\S])*)\2/);
+        if (fallbackMatch && typeof fallbackMatch[3] === 'string') {
+            const quote = fallbackMatch[2] as string;
+            const raw = fallbackMatch[3] as string;
+            if (!(quote === '`' && raw.includes('${'))) {
+                endIdx = call.closeParenIdx + fallbackMatch[0].length;
+            }
+        }
+
+        const startPos = doc.positionAt(call.startIdx);
+        const endPos = doc.positionAt(endIdx + 1);
+
+        const escapedTargetKey = String(targetKey).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const newText = `${call.hasDollar ? '$' : ''}t('${escapedTargetKey}')`;
+
+        return {
+            range: new vscode.Range(startPos, endPos),
+            newText,
+        };
+    }
+
+    private extractInlineDefaultForKeyFromLine(line: string, key: string): string | null {
+        const safeKey = escapeRegExp(key);
+
+        const quoteGroup = "(['\"`])";
+        const callWithDefaultFullRegex = new RegExp(
+            "\\b\\$?t\\s*\\(\\s*(['\"])" +
+                safeKey +
+                "\\1\\s*,\\s*" +
+                quoteGroup +
+                "((?:\\\\.|(?!\\2)[\\s\\S])*)\\2",
+        );
+        const m1 = line.match(callWithDefaultFullRegex);
+        if (m1 && typeof m1[3] === 'string') {
+            const quote = m1[2] as string;
+            const raw = m1[3];
+            if (quote === '`' && raw.includes('${')) {
+                return null;
+            }
+            const decoded = this.decodeSimpleJsStringLiteral(raw).replace(/\s+/g, ' ').trim();
+            if (!decoded) return null;
+            return looksLikeUserText(decoded) ? decoded : null;
+        }
+
+        const callThenFallbackRegex = new RegExp(
+            "\\b\\$?t\\s*\\(\\s*(['\"])" +
+                safeKey +
+                "\\1\\s*\\)\\s*(\\|\\||\\?\\?)\\s*" +
+                quoteGroup +
+                "((?:\\\\.|(?!\\3)[\\s\\S])*)\\3",
+        );
+        const m2 = line.match(callThenFallbackRegex);
+        if (m2 && typeof m2[4] === 'string') {
+            const quote = m2[3] as string;
+            const raw = m2[4];
+            if (quote === '`' && raw.includes('${')) {
+                return null;
+            }
+            const decoded = this.decodeSimpleJsStringLiteral(raw).replace(/\s+/g, ' ').trim();
+            if (!decoded) return null;
+            return looksLikeUserText(decoded) ? decoded : null;
+        }
+
+        return null;
+    }
+
+    private buildNormalizedMissingReferenceKey(
+        folder: vscode.WorkspaceFolder,
+        documentUri: vscode.Uri,
+        key: string,
+    ): string | null {
+        const rel = path
+            .relative(folder.uri.fsPath, documentUri.fsPath)
+            .replace(/\\/g, '/');
+        const parts = rel.split('/').filter(Boolean);
+
+        let componentName: string | null = null;
+        for (let i = 0; i < parts.length; i += 1) {
+            if (String(parts[i]).toLowerCase() === 'components' && i + 1 < parts.length) {
+                componentName = parts[i + 1];
+                break;
+            }
+        }
+
+        if (componentName) {
+            componentName = String(componentName).replace(/\.(tsx|ts|jsx|js|vue|svelte)$/i, '');
+        }
+
+        const keyParts = String(key).split('.').filter(Boolean);
+        if (keyParts.length === 0) return null;
+
+        const normalizedParts: string[] = [];
+
+        if (componentName) {
+            normalizedParts.push('components');
+            normalizedParts.push(String(componentName));
+        }
+
+        let remaining = [...keyParts];
+        if (componentName && remaining.length > 0) {
+            if (remaining[0] && remaining[0].toLowerCase() === String(componentName).toLowerCase()) {
+                remaining = remaining.slice(1);
+            }
+            if (remaining[0] && remaining[0].toLowerCase() === 'app') {
+                remaining = remaining.slice(1);
+            }
+        }
+
+        const cleaned = remaining.map((seg, idx) => {
+            let s = String(seg || '');
+            if (idx === remaining.length - 1) {
+                s = s.replace(/(_text|_label|_title|_message|_placeholder)$/i, '');
+            }
+            s = s
+                .replace(/[^A-Za-z0-9]+/g, '_')
+                .replace(/_+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .toLowerCase();
+            return s;
+        });
+
+        for (const seg of cleaned) {
+            if (seg) normalizedParts.push(seg);
+        }
+
+        if (normalizedParts.length < 2) {
+            return null;
+        }
+
+        return normalizedParts.join('.');
+    }
+
     /**
      * Fix missing key reference
      */
@@ -105,6 +391,82 @@ export class KeyManagementHandler {
 
         await this.i18nIndex.ensureInitialized();
         const allKeys = this.i18nIndex.getAllKeys();
+
+        const vsPosition = new vscode.Position(position.line, position.character);
+        const keyInfo = extractKeyAtPosition(doc, vsPosition);
+        const canReplaceReference = !!keyInfo && keyInfo.key === key;
+        const inlineDefault =
+            !isLaravelSource && canReplaceReference
+                ? this.extractInlineDefaultForKeyFromLine(doc.lineAt(keyInfo.range.start.line).text, key)
+                : null;
+        const normalizedKey =
+            !isLaravelSource && canReplaceReference
+                ? this.buildNormalizedMissingReferenceKey(folder, documentUri, key)
+                : null;
+        const targetKey = normalizedKey || key;
+
+        if (canReplaceReference && targetKey !== key) {
+            const record = this.i18nIndex.getRecord(targetKey);
+            if (record) {
+                const edit = new vscode.WorkspaceEdit();
+                const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                    doc,
+                    keyInfo.range,
+                    key,
+                    targetKey,
+                );
+                if (collapsed) {
+                    edit.replace(documentUri, collapsed.range, collapsed.newText);
+                } else {
+                    edit.replace(documentUri, keyInfo.range, targetKey);
+                }
+                const applied = await vscode.workspace.applyEdit(edit);
+                if (applied) {
+                    await doc.save();
+                    vscode.window.showInformationMessage(
+                        `AI Localizer: Auto-fixed "${key}" → "${targetKey}"`,
+                    );
+                    return;
+                }
+            }
+        }
+
+        if (inlineDefault && inlineDefault.trim()) {
+            const value = inlineDefault.trim();
+
+            if (isLaravelSource) {
+                await setLaravelTranslationValue(folder, defaultLocale, targetKey, value);
+            } else {
+                await setTranslationValue(folder, defaultLocale, targetKey, value, { rootName });
+            }
+
+            if (canReplaceReference) {
+                const edit = new vscode.WorkspaceEdit();
+                const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                    doc,
+                    keyInfo.range,
+                    key,
+                    targetKey,
+                );
+                if (collapsed) {
+                    edit.replace(documentUri, collapsed.range, collapsed.newText);
+                } else if (targetKey !== key) {
+                    edit.replace(documentUri, keyInfo.range, targetKey);
+                }
+                await vscode.workspace.applyEdit(edit);
+                await doc.save();
+            }
+
+            try {
+                await syncService.syncKeys(folder, [targetKey]);
+            } catch {
+            }
+
+            vscode.window.showInformationMessage(
+                `AI Localizer: Created "${targetKey}" = "${value.slice(0, 50)}${value.length > 50 ? '...' : ''}" in locale ${defaultLocale}.`,
+            );
+            return;
+        }
 
         // STEP 1: Try to find the best matching existing key (typo fix)
         let bestKey: string | null = null;
@@ -163,12 +525,32 @@ export class KeyManagementHandler {
         
         if (sourceFileRecovery) {
             if (isLaravelSource) {
-                await setLaravelTranslationValue(folder, defaultLocale, key, sourceFileRecovery.value);
+                await setLaravelTranslationValue(folder, defaultLocale, targetKey, sourceFileRecovery.value);
             } else {
-                await setTranslationValue(folder, defaultLocale, key, sourceFileRecovery.value, { rootName });
+                await setTranslationValue(folder, defaultLocale, targetKey, sourceFileRecovery.value, { rootName });
             }
+
+            if (canReplaceReference) {
+                const edit = new vscode.WorkspaceEdit();
+                const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                    doc,
+                    keyInfo!.range,
+                    key,
+                    targetKey,
+                );
+                if (collapsed) {
+                    edit.replace(documentUri, collapsed.range, collapsed.newText);
+                } else if (targetKey !== key) {
+                    edit.replace(documentUri, keyInfo!.range, targetKey);
+                }
+                const applied = await vscode.workspace.applyEdit(edit);
+                if (applied) {
+                    await doc.save();
+                }
+            }
+
             vscode.window.showInformationMessage(
-                `AI Localizer: Restored "${key}" = "${sourceFileRecovery.value.slice(0, 50)}${sourceFileRecovery.value.length > 50 ? '...' : ''}" from ${sourceFileRecovery.source}.`,
+                `AI Localizer: Restored "${targetKey}" = "${sourceFileRecovery.value.slice(0, 50)}${sourceFileRecovery.value.length > 50 ? '...' : ''}" from ${sourceFileRecovery.source}.`,
             );
             return;
         }
@@ -184,12 +566,31 @@ export class KeyManagementHandler {
 
         if (recovery) {
             if (isLaravelSource) {
-                await setLaravelTranslationValue(folder, defaultLocale, key, recovery.value);
+                await setLaravelTranslationValue(folder, defaultLocale, targetKey, recovery.value);
             } else {
-                await setTranslationValue(folder, defaultLocale, key, recovery.value, { rootName });
+                await setTranslationValue(folder, defaultLocale, targetKey, recovery.value, { rootName });
+            }
+
+            if (canReplaceReference) {
+                const edit = new vscode.WorkspaceEdit();
+                const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                    doc,
+                    keyInfo!.range,
+                    key,
+                    targetKey,
+                );
+                if (collapsed) {
+                    edit.replace(documentUri, collapsed.range, collapsed.newText);
+                } else if (targetKey !== key) {
+                    edit.replace(documentUri, keyInfo!.range, targetKey);
+                }
+                const applied = await vscode.workspace.applyEdit(edit);
+                if (applied) {
+                    await doc.save();
+                }
             }
             vscode.window.showInformationMessage(
-                `AI Localizer: Restored "${key}" from ${recovery.source}.`,
+                `AI Localizer: Restored "${targetKey}" from ${recovery.source}.`,
             );
             return;
         }
@@ -216,7 +617,7 @@ export class KeyManagementHandler {
         items.push({
             label: `$(add) Create new key with value: "${suggestedLabel}"`,
             description: 'Create a new locale entry using this key',
-            detail: `Key: ${key}`,
+            detail: `Key: ${targetKey}`,
         });
 
         items.push({
@@ -257,30 +658,68 @@ export class KeyManagementHandler {
 
         if (choice.label.includes('custom value')) {
             const customValue = await vscode.window.showInputBox({
-                prompt: `Enter translation value for "${key}"`,
+                prompt: `Enter translation value for "${targetKey}"`,
                 value: suggestedLabel,
                 placeHolder: 'Translation value...',
             });
             if (!customValue) return;
             if (isLaravelSource) {
-                await setLaravelTranslationValue(folder, defaultLocale, key, customValue);
+                await setLaravelTranslationValue(folder, defaultLocale, targetKey, customValue);
             } else {
-                await setTranslationValue(folder, defaultLocale, key, customValue, { rootName });
+                await setTranslationValue(folder, defaultLocale, targetKey, customValue, { rootName });
+            }
+
+            if (canReplaceReference) {
+                const edit = new vscode.WorkspaceEdit();
+                const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                    doc,
+                    keyInfo!.range,
+                    key,
+                    targetKey,
+                );
+                if (collapsed) {
+                    edit.replace(documentUri, collapsed.range, collapsed.newText);
+                } else if (targetKey !== key) {
+                    edit.replace(documentUri, keyInfo!.range, targetKey);
+                }
+                const applied = await vscode.workspace.applyEdit(edit);
+                if (applied) {
+                    await doc.save();
+                }
             }
             vscode.window.showInformationMessage(
-                `AI Localizer: Created "${key}" = "${customValue}" in locale ${defaultLocale}.`,
+                `AI Localizer: Created "${targetKey}" = "${customValue}" in locale ${defaultLocale}.`,
             );
             return;
         }
 
         // Default: create with suggested label
         if (isLaravelSource) {
-            await setLaravelTranslationValue(folder, defaultLocale, key, suggestedLabel);
+            await setLaravelTranslationValue(folder, defaultLocale, targetKey, suggestedLabel);
         } else {
-            await setTranslationValue(folder, defaultLocale, key, suggestedLabel, { rootName });
+            await setTranslationValue(folder, defaultLocale, targetKey, suggestedLabel, { rootName });
+        }
+
+        if (canReplaceReference) {
+            const edit = new vscode.WorkspaceEdit();
+            const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                doc,
+                keyInfo!.range,
+                key,
+                targetKey,
+            );
+            if (collapsed) {
+                edit.replace(documentUri, collapsed.range, collapsed.newText);
+            } else if (targetKey !== key) {
+                edit.replace(documentUri, keyInfo!.range, targetKey);
+            }
+            const applied = await vscode.workspace.applyEdit(edit);
+            if (applied) {
+                await doc.save();
+            }
         }
         vscode.window.showInformationMessage(
-            `AI Localizer: Created "${key}" = "${suggestedLabel}" in locale ${defaultLocale}.`,
+            `AI Localizer: Created "${targetKey}" = "${suggestedLabel}" in locale ${defaultLocale}.`,
         );
     }
 
@@ -555,7 +994,7 @@ export class KeyManagementHandler {
                         }
 
                         // PHASE 1: Try to fix typos first (fast, no git needed)
-                        const keysNeedingRecovery: Array<{ key: string; range: vscode.Range; hasVariables: boolean }> = [];
+                        const keysNeedingRecovery: Array<{ key: string; range: vscode.Range; hasVariables: boolean; targetKey: string }> = [];
                         
                         for (const { key, range, hasVariables } of missingKeys) {
                             const keyParts = key.split('.').filter(Boolean);
@@ -584,9 +1023,53 @@ export class KeyManagementHandler {
                                     continue;
                                 }
                             }
+
+                            const normalizedKey = !isLaravelSource
+                                ? this.buildNormalizedMissingReferenceKey(folder!, documentUri, key)
+                                : null;
+                            const targetKey = normalizedKey || key;
+
+                            if (targetKey !== key && validKeysSet.has(targetKey)) {
+                                const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                                    doc,
+                                    range,
+                                    key,
+                                    targetKey,
+                                );
+                                if (collapsed) {
+                                    edit.replace(documentUri, collapsed.range, collapsed.newText);
+                                } else {
+                                    edit.replace(documentUri, range, targetKey);
+                                }
+                                fixedCount++;
+                                continue;
+                            }
+
+                            const lineText = doc.lineAt(range.start.line).text;
+                            const inlineDefault = !isLaravelSource
+                                ? this.extractInlineDefaultForKeyFromLine(lineText, key)
+                                : null;
+
+                            if (inlineDefault && inlineDefault.trim()) {
+                                const value = inlineDefault.trim();
+                                const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                                    doc,
+                                    range,
+                                    key,
+                                    targetKey,
+                                );
+                                if (collapsed) {
+                                    edit.replace(documentUri, collapsed.range, collapsed.newText);
+                                } else if (targetKey !== key) {
+                                    edit.replace(documentUri, range, targetKey);
+                                }
+                                batchUpdates.set(targetKey, { value, rootName });
+                                createdCount++;
+                                continue;
+                            }
                             
                             // Key needs recovery from git
-                            keysNeedingRecovery.push({ key, range, hasVariables });
+                            keysNeedingRecovery.push({ key, range, hasVariables, targetKey });
                         }
 
                         const keysNeedingReview: Array<{ key: string; generatedValue: string }> = [];
@@ -614,11 +1097,22 @@ export class KeyManagementHandler {
 
                             const unresolvedKeys: string[] = [];
 
-                            for (const { key } of keysNeedingRecovery) {
+                            for (const { key, range, targetKey } of keysNeedingRecovery) {
                                 const result = recoveryResults.get(key);
 
                                 if (result && result.value) {
-                                    batchUpdates.set(key, { value: result.value, rootName });
+                                    const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                                        doc,
+                                        range,
+                                        key,
+                                        targetKey,
+                                    );
+                                    if (collapsed) {
+                                        edit.replace(documentUri, collapsed.range, collapsed.newText);
+                                    } else if (targetKey !== key) {
+                                        edit.replace(documentUri, range, targetKey);
+                                    }
+                                    batchUpdates.set(targetKey, { value: result.value, rootName });
                                     createdCount++;
                                     recoveredCount++;
                                     continue;
@@ -639,7 +1133,18 @@ export class KeyManagementHandler {
                                 }
 
                                 if (sourceRecovery && sourceRecovery.value) {
-                                    batchUpdates.set(key, { value: sourceRecovery.value, rootName });
+                                    const collapsed = this.buildCollapsedTranslationExpressionEdit(
+                                        doc,
+                                        range,
+                                        key,
+                                        targetKey,
+                                    );
+                                    if (collapsed) {
+                                        edit.replace(documentUri, collapsed.range, collapsed.newText);
+                                    } else if (targetKey !== key) {
+                                        edit.replace(documentUri, range, targetKey);
+                                    }
+                                    batchUpdates.set(targetKey, { value: sourceRecovery.value, rootName });
                                     createdCount++;
                                     recoveredCount++;
                                     continue;
@@ -663,7 +1168,12 @@ export class KeyManagementHandler {
                             for (const key of unresolvedKeys) {
                                 const aiValue = aiDefaults.get(key);
                                 if (aiValue && aiValue.trim()) {
-                                    batchUpdates.set(key, { value: aiValue.trim(), rootName });
+                                    const entry = keysNeedingRecovery.find((k) => k.key === key);
+                                    const targetKey = entry?.targetKey || key;
+                                    if (entry && entry.targetKey !== key) {
+                                        edit.replace(documentUri, entry.range, entry.targetKey);
+                                    }
+                                    batchUpdates.set(targetKey, { value: aiValue.trim(), rootName });
                                     createdCount++;
                                     continue;
                                 }
@@ -677,9 +1187,14 @@ export class KeyManagementHandler {
                                     label = replaced !== label ? replaced : `${label} days`;
                                 }
 
-                                batchUpdates.set(key, { value: label, rootName });
+                                const entry = keysNeedingRecovery.find((k) => k.key === key);
+                                const targetKey = entry?.targetKey || key;
+                                if (entry && entry.targetKey !== key) {
+                                    edit.replace(documentUri, entry.range, entry.targetKey);
+                                }
+                                batchUpdates.set(targetKey, { value: label, rootName });
                                 createdCount++;
-                                keysNeedingReview.push({ key, generatedValue: label });
+                                keysNeedingReview.push({ key: targetKey, generatedValue: label });
                             }
                         }
 

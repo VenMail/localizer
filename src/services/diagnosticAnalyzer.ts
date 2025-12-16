@@ -1299,9 +1299,17 @@ export class DiagnosticAnalyzer {
         }
 
         this.diagnosticsByFile.set(fileKey, diagnostics);
-        this.log.appendLine(
-            `[DiagnosticAnalyzer] Found ${diagnostics.length} missing reference(s) in source file: ${uri.fsPath}`,
-        );
+        // Avoid spamming the output channel for every scanned file.
+        // Only log per-file results when there are actual missing refs, or when verbose logging is enabled.
+        if (diagnostics.length > 0) {
+            this.log.appendLine(
+                `[DiagnosticAnalyzer] Found ${diagnostics.length} missing reference(s) in source file: ${uri.fsPath}`,
+            );
+        } else {
+            this.safeLog(
+                `[DiagnosticAnalyzer] Found ${diagnostics.length} missing reference(s) in source file: ${uri.fsPath}`,
+            );
+        }
         return diagnostics;
     }
     
