@@ -822,16 +822,22 @@ export class DiagnosticAnalyzer {
         const words = normalized.split(/\s+/).filter(Boolean);
         const wordCount = words.length;
 
-        // Only consider relatively short, token-like strings as candidates
+        // Expanded heuristics for constants:
+        // 1. Short token-like strings (brand names, technical terms)
+        // 2. Strings with numbers or special chars (version numbers, codes)
+        // 3. Single capitalized words (proper nouns)
+        // 4. Strings that are intentionally the same (OK, Cancel, etc.)
         const isTokenLike =
-            wordCount <= 3 &&
-            normalized.length <= 24 &&
-            !/[.!?]/.test(normalized);
+            (wordCount <= 3 && normalized.length <= 32) ||
+            /[0-9]/.test(normalized) ||
+            /^[A-Z][a-z]+$/.test(normalized) ||
+            /^[A-Z]+$/.test(normalized);
 
         if (!isTokenLike) {
             return false;
         }
 
+        // Check if value is the same across multiple locales
         let sameCount = 0;
         const nonDefaultLocales = Array.from(record.locales.keys()).filter(
             (l) => l !== defaultLocale,
@@ -846,6 +852,7 @@ export class DiagnosticAnalyzer {
             }
         }
 
+        // If at least one other locale has the same value, it's likely intentional
         const requiredSame = 1;
         return sameCount >= requiredSame;
     }

@@ -13,6 +13,12 @@ const baseLocale = 'en';
 const args = process.argv.slice(2);
 const mergeOnlyMode = args.includes('--merge-only') || args.includes('--preserve');
 
+// By default, run in merge-only mode to preserve existing translations.
+// Destructive sync (which can prune keys from non-default locales) is only
+// enabled when AI_I18N_ALLOW_DESTRUCTIVE=1 is set in the environment.
+const allowDestructive = String(process.env.AI_I18N_ALLOW_DESTRUCTIVE || '').trim() === '1';
+const useMergeMode = mergeOnlyMode || !allowDestructive;
+
 function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -202,8 +208,9 @@ async function writeJson(filePath, data) {
           const existingFileData = (existsSync(targetPath) ? await readJson(targetPath) : null) || {};
           const fromSingle = maskPick(singleLocaleData, baseObj) || {};
           const seededExisting = deepFillFromBase(fromSingle, existingFileData);
-          // Use merge mode to preserve existing translations, or sync mode to prune unused keys
-          const merged = mergeOnlyMode 
+          // Use merge mode to preserve existing translations by default.
+          // Only use destructive sync when explicitly allowed via env var.
+          const merged = useMergeMode
             ? deepMergeFromBase(baseObj, seededExisting)
             : deepSyncFromBase(baseObj, seededExisting);
           const sorted = sortObjectDeep(merged);
@@ -235,8 +242,8 @@ async function writeJson(filePath, data) {
         for (const localeName of configuredLocales) {
           const localePath = path.resolve(autoDir, `${localeName}.json`);
           const localeData = (await readJson(localePath)) || {};
-          // Use merge mode to preserve existing translations, or sync mode to prune unused keys
-          const merged = mergeOnlyMode
+          // Use merge mode to preserve existing translations by default.
+          const merged = useMergeMode
             ? deepMergeFromBase(baseData, localeData)
             : deepSyncFromBase(baseData, localeData);
           const sorted = sortObjectDeep(merged);
@@ -251,8 +258,8 @@ async function writeJson(filePath, data) {
           if (localeName === baseLocale) continue;
           const localePath = path.resolve(autoDir, entry.name);
           const localeData = (await readJson(localePath)) || {};
-          // Use merge mode to preserve existing translations, or sync mode to prune unused keys
-          const merged = mergeOnlyMode
+          // Use merge mode to preserve existing translations by default.
+          const merged = useMergeMode
             ? deepMergeFromBase(baseData, localeData)
             : deepSyncFromBase(baseData, localeData);
           const sorted = sortObjectDeep(merged);
@@ -263,7 +270,11 @@ async function writeJson(filePath, data) {
       }
     }
 
-    const mode = mergeOnlyMode ? 'merge-only (preserving existing translations)' : 'full sync (pruning unused keys)';
+    const mode = useMergeMode
+      ? (mergeOnlyMode
+          ? 'merge-only (preserving existing translations)'
+          : 'safe merge (preserving existing translations; destructive sync disabled by default)')
+      : 'full sync (pruning unused keys)';
     console.log(`[i18n-sync] Completed in ${mode} mode. Updated ${updatedCount} file(s).`);
   } catch (error) {
     console.error('[i18n-sync] Failed to sync locale files.');

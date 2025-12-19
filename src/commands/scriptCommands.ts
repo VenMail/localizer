@@ -31,7 +31,14 @@ export class ScriptCommands {
      * Use for project-wide operations.
      */
     async runSync(): Promise<void> {
-        await runI18nScript('i18n:sync', { context: this.context });
+        // Always run sync in merge-only mode from the extension to avoid
+        // accidentally pruning translations from non-default locales.
+        // Users who really want destructive sync can still run the script
+        // manually (e.g. `npm run i18n:sync`) with AI_I18N_ALLOW_DESTRUCTIVE=1.
+        await runI18nScript('i18n:sync', {
+            context: this.context,
+            extraArgs: ['--merge-only'],
+        });
     }
 
     /**
