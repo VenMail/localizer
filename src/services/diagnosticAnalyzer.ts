@@ -1033,6 +1033,58 @@ export class DiagnosticAnalyzer {
             return new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0));
         }
 
+        const lowerFsPath = uri.fsPath.replace(/\\/g, '/').toLowerCase();
+        const isPhpLocaleFile =
+            lowerFsPath.endsWith('.php') &&
+            (lowerFsPath.includes('/lang/') || lowerFsPath.includes('/resources/lang/'));
+
+        if (isPhpLocaleFile) {
+            const escapeRegex = (input: string): string =>
+                input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            const findKey = (segment: string, startAt: number): { start: number } | null => {
+                const escaped = escapeRegex(segment);
+                const re = new RegExp(`(['"])${escaped}\\1\\s*=>`, 'g');
+                re.lastIndex = Math.max(0, startAt);
+                const match = re.exec(text);
+                if (!match || typeof match.index !== 'number') {
+                    return null;
+                }
+                return { start: match.index + 1 };
+            };
+
+            let searchStart = 0;
+            if (parts.length > 1) {
+                for (let i = 0; i < parts.length - 1; i += 1) {
+                    const seg = parts[i];
+                    if (!seg) continue;
+                    const hit = findKey(seg, searchStart);
+                    if (!hit) {
+                        searchStart = 0;
+                        break;
+                    }
+                    searchStart = hit.start + seg.length;
+                }
+            }
+
+            const found = findKey(lastSegment, searchStart) || findKey(lastSegment, 0);
+            if (!found) {
+                return new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0));
+            }
+
+            const foundIndex = found.start;
+            let line = 0;
+            while (line + 1 < lineStarts.length && lineStarts[line + 1] <= foundIndex) {
+                line += 1;
+            }
+            const character = foundIndex - lineStarts[line];
+            const start = new vscode.Position(line, character);
+            const end = new vscode.Position(line, character + lastSegment.length);
+            const range = new vscode.Range(start, end);
+            keyRanges.set(fullKey, range);
+            return range;
+        }
+
         // Try to narrow the search using the full dotted key path so we place
         // diagnostics on the correct occurrence when the same slug appears
         // under multiple groups in a large locale file.
@@ -1188,6 +1240,14 @@ export class DiagnosticAnalyzer {
         // Never analyze files inside vendor/ directories for missing reference diagnostics.
         const normalizedPath = uri.fsPath.replace(/\\/g, '/');
         if (normalizedPath.includes('/vendor/')) {
+            return [];
+        }
+
+        const lowerPath = normalizedPath.toLowerCase();
+        if (
+            lowerPath.endsWith('.php') &&
+            (lowerPath.includes('/lang/') || lowerPath.includes('/resources/lang/'))
+        ) {
             return [];
         }
 

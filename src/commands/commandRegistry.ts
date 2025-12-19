@@ -16,6 +16,7 @@ import { ComponentCommands } from './componentCommands';
 import { ScaffoldMessagesCommand } from './scaffoldMessagesCommand';
 import { ProjectFixCommand } from './projectFixCommand';
 import { UninstallProjectI18nCommand } from './uninstallProjectI18nCommand';
+import { AskAICommand } from './askAICommand';
 import { operationLock } from './untranslated/utils/operationLock';
 import { ReviewGeneratedService } from '../services/reviewGeneratedService';
 import * as path from 'path';
@@ -88,6 +89,40 @@ export class CommandRegistry {
         try {
             this.log.appendLine('[CommandRegistry] Registering commands and diagnostics listeners...');
 
+            const updateAskAiContext = async (): Promise<void> => {
+                try {
+                    const cfg = vscode.workspace.getConfiguration('ai-localizer');
+                    const autoTranslate = cfg.get<boolean>('i18n.autoTranslate') ?? false;
+                    const secret = (await this.context.secrets.get('openaiApiKey'))?.trim() || '';
+                    const fromConfig = (cfg.get<string>('openaiApiKey') || '').trim();
+                    const hasKey = !!(secret || fromConfig);
+                    const askAiEnabled = !(autoTranslate && hasKey);
+                    await vscode.commands.executeCommand(
+                        'setContext',
+                        'aiLocalizer.askAIEnabled',
+                        askAiEnabled,
+                    );
+                } catch {
+                }
+            };
+
+            void updateAskAiContext();
+            disposables.push(
+                vscode.workspace.onDidChangeConfiguration((e) => {
+                    if (
+                        e.affectsConfiguration('ai-localizer.openaiApiKey') ||
+                        e.affectsConfiguration('ai-localizer.i18n.autoTranslate')
+                    ) {
+                        void updateAskAiContext();
+                    }
+                }),
+            );
+            disposables.push(
+                this.context.secrets.onDidChange(() => {
+                    void updateAskAiContext();
+                }),
+            );
+
             const untranslatedDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-untranslated');
             disposables.push(untranslatedDiagnostics);
             const sourceFileDiagnostics = vscode.languages.createDiagnosticCollection('ai-i18n-missing-refs');
@@ -106,6 +141,12 @@ export class CommandRegistry {
                     this.clearLocaleDebounceTimers();
                 },
             });
+
+        // Ask AI command (prompt injection)
+        const askAiCmd = new AskAICommand(this.context);
+        disposables.push(
+            vscode.commands.registerCommand('ai-localizer.askAI', () => askAiCmd.execute()),
+        );
 
         // Rescan command
         disposables.push(

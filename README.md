@@ -64,10 +64,14 @@ JSON-based i18n for modern web apps. It supports React/Next.js, Vue/Nuxt, and La
 
 ### Ask AI for help
 
-- Press `Ctrl+Shift+A` (or `Cmd+Shift+A` on macOS), or
-- Right-click and choose **Ask AI for Help**.
+- Run **AI Localizer: Ask AI for Help** from the Command Palette, or
+- Right-click in the editor and choose **AI Localizer: Ask AI for Help**.
 
-This opens a prompt where you can ask questions about your code.
+Localizer does not answer directly. Instead it generates a high-quality prompt based on your current file/selection and tries to inject it into your existing AI chat UI.
+
+If Localizer cannot inject into a chat UI, it will show a modal that lets you copy the generated prompt or open it in a document for manual copy/paste.
+
+> Ask AI is only shown when OpenAI translations are not enabled (i.e. `ai-localizer.i18n.autoTranslate` is off, or no OpenAI API key is configured).
 
 ### Enable i18n IntelliSense
 
@@ -171,6 +175,15 @@ The extension reads these settings under `ai-localizer`:
   to suggest translations for non-default locales when converting a selection
   to a key.
 
+### Ask AI Prompt Injection
+- `ai-localizer.askAI.forwardToCommand` – Optional VS Code command ID to forward Ask AI prompts to (for example, a chat command from Windsurf/Cursor/Copilot). When set, Localizer will execute this command with the generated prompt.
+
+If you’re using VS Code’s built-in chat UI (for example via GitHub Copilot Chat), you can try:
+
+- `workbench.action.chat.open`
+
+Third-party extension command IDs may change between versions and may not be publicly documented. If you don’t know the command ID, leave this setting empty and Localizer will try to auto-detect a suitable chat command; if that fails it will show the prompt for manual copy/paste.
+
 ### Auto-Monitoring Settings (NEW!)
 - `ai-localizer.i18n.autoMonitor` – Enable automatic monitoring of files for translatable content (default: `true`).
 - `ai-localizer.i18n.autoExtract` – Automatically run extraction when new content is detected and committed (default: `true`).
@@ -206,6 +219,10 @@ Example (user or workspace settings):
 - (Optional) OpenAI API key for AI-assisted translations
 
 ## Release Notes
+### 0.1.7
+
+- Fix PHP language file handling.
+
 ### 0.1.6
 
 - Fix incorrect key recovery strategy.

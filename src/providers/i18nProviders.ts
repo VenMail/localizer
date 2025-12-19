@@ -828,6 +828,8 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
 
         let addedBulkActions = false;
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+        const isJsonLocale = document.languageId === 'json' || document.languageId === 'jsonc';
+        const isLaravelLocale = this.isLaravelLocaleFile(document);
 
         for (const diagnostic of relevant) {
             if (!diagnostic.range.intersection(range)) {
@@ -972,9 +974,6 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 }
             }
 
-            const isJsonLocale = document.languageId === 'json' || document.languageId === 'jsonc';
-            const isLaravelLocale = this.isLaravelLocaleFile(document);
-
             if (!addedBulkActions && (isJsonLocale || isLaravelLocale)) {
                 addedBulkActions = true;
 
@@ -1064,7 +1063,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
             }
         }
 
-        if (folder && document.languageId !== 'json' && document.languageId !== 'jsonc') {
+        if (folder && document.languageId !== 'json' && document.languageId !== 'jsonc' && !isLaravelLocale) {
             const keyInfo = extractKeyAtPosition(document, range.start) || extractKeyAtPosition(document, range.end);
             if (keyInfo) {
                 const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');

@@ -2,7 +2,7 @@
   "name": "ai-localizer",
   "displayName": "Localizer – AI i18n for React, Vue, Laravel & more",
   "description": "Fully automated localization + translations in minutes. Localizer is an AI-assisted localization tool for React/Next/React Native, Vue/Nuxt, Svelte/SvelteKit, and Laravel (Blade + Inertia). Uses AST-aware parsers and smart validators to extract strings, manage locale JSON, run extract/rewrite/sync scripts, and scaffold drop-in LanguageSwitcher components with a guided first-time setup.",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "publisher": "venmail",
   "repository": {
     "type": "git",
@@ -18,6 +18,7 @@
   "icon": "resources/icons/ai-localizer-128.png",
   "activationEvents": [
     "onCommand:ai-localizer.setOpenAiApiKeySecret",
+    "onCommand:ai-localizer.askAI",
     "onCommand:ai-localizer.i18n.rescan",
     "onCommand:ai-localizer.i18n.configureProject",
     "onCommand:ai-localizer.i18n.firstTimeSetup",
@@ -71,6 +72,10 @@
       {
         "command": "ai-localizer.setOpenAiApiKeySecret",
         "title": "AI Localizer: Set OpenAI API Key (Secure)"
+      },
+      {
+        "command": "ai-localizer.askAI",
+        "title": "AI Localizer: Ask AI for Help"
       },
       {
         "command": "ai-localizer.i18n.scaffoldMessagesLoader",
@@ -195,7 +200,18 @@
     ],
     "keybindings": [],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "ai-localizer.askAI",
+          "when": "aiLocalizer.askAIEnabled"
+        }
+      ],
       "editor/context": [
+        {
+          "command": "ai-localizer.askAI",
+          "group": "ai@0",
+          "when": "aiLocalizer.askAIEnabled && editorTextFocus"
+        },
         {
           "command": "ai-localizer.i18n.convertSelectionToKey",
           "group": "ai@1",
@@ -304,6 +320,12 @@
           ],
           "default": "auto",
           "description": "Preferred output format for bulk OpenAI translation batches. Choose 'json' to request structured JSON, 'lines' to request one TSV-style line per translation, or 'auto' to let the extension adapt its preferred mode."
+        },
+
+        "ai-localizer.askAI.forwardToCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional VS Code command ID to forward Ask AI prompts to (for example, a Windsurf/Cursor chat command). When set, Localizer will execute this command with a payload containing the generated prompt."
         },
         
         "ai-localizer.i18n.autoMonitor": {
