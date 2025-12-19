@@ -212,6 +212,17 @@ export class AutoMonitor {
             return;
         }
 
+        // Check if user has disabled auto-monitoring for this workspace
+        const config = vscode.workspace.getConfiguration('ai-localizer');
+        const autoExtract = config.get<boolean>('i18n.autoExtract', true);
+        const autoRewrite = config.get<boolean>('i18n.autoRewrite', true);
+        
+        if (!autoExtract && !autoRewrite) {
+            // User has disabled both, don't show any prompts
+            state.pendingFiles.clear();
+            return;
+        }
+
         // Check if enough time has passed since last prompt
         const now = Date.now();
         const timeSinceLastPrompt = now - state.lastPromptTime;
@@ -253,6 +264,7 @@ export class AutoMonitor {
             
             if (!hasRunBefore) {
                 // First time setup - don't auto-run, just notify
+                // But only if user hasn't explicitly disabled auto-extract/rewrite
                 vscode.window.showInformationMessage(
                     `AI Localizer: Detected ${cleanFiles.length} file(s) with translatable content. Run "AI Localizer: Configure Project i18n" to set up auto-extraction.`,
                     'Configure Now'
@@ -266,14 +278,14 @@ export class AutoMonitor {
             }
 
             // Auto-run extraction and rewrite
-            const config = vscode.workspace.getConfiguration('ai-localizer');
-            const autoExtract = config.get<boolean>('i18n.autoExtract', true);
-            const autoRewrite = config.get<boolean>('i18n.autoRewrite', true);
+            // Re-check config here in case it was updated during initial setup
+            const autoExtractCurrent = config.get<boolean>('i18n.autoExtract', true);
+            const autoRewriteCurrent = config.get<boolean>('i18n.autoRewrite', true);
 
-            if (autoExtract || autoRewrite) {
-                const scriptsLabel = autoExtract && autoRewrite
+            if (autoExtractCurrent || autoRewriteCurrent) {
+                const scriptsLabel = autoExtractCurrent && autoRewriteCurrent
                     ? 'i18n:extract and i18n:rewrite'
-                    : autoExtract
+                    : autoExtractCurrent
                         ? 'i18n:extract'
                         : 'i18n:rewrite';
 
@@ -286,8 +298,8 @@ export class AutoMonitor {
                 }
 
                 const scriptsToRun: string[] = [];
-                if (autoExtract) scriptsToRun.push('i18n:extract');
-                if (autoRewrite) scriptsToRun.push('i18n:rewrite');
+                if (autoExtractCurrent) scriptsToRun.push('i18n:extract');
+                if (autoRewriteCurrent) scriptsToRun.push('i18n:rewrite');
                 const scriptsDetail =
                     scriptsToRun.length > 1
                         ? `"${scriptsToRun[0]}" and "${scriptsToRun[1]}"`
@@ -358,7 +370,7 @@ export class AutoMonitor {
             // Convert file paths to relative paths for passing to scripts
             const relativeFilePaths = cleanFiles.map(f => path.relative(folder.uri.fsPath, f));
 
-            if (autoExtract) {
+            if (autoExtractCurrent) {
                 await runI18nScript('i18n:extract', { 
                     folder,
                     extraArgs: relativeFilePaths 
@@ -366,7 +378,7 @@ export class AutoMonitor {
                 state.lastExtractTime = Date.now();
             }
 
-            if (autoRewrite) {
+            if (autoRewriteCurrent) {
                 await runI18nScript('i18n:rewrite', { 
                     folder,
                     extraArgs: relativeFilePaths 
