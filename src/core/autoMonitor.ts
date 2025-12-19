@@ -2,16 +2,20 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { isFileClean } from './gitMonitor';
 import { runI18nScript } from './workspace';
+import { getGranularSyncService } from '../services/granularSyncService';
 
 interface MonitorState {
     lastExtractTime: number;
     lastRewriteTime: number;
+    lastPromptTime: number;
     pendingFiles: Set<string>;
     isProcessing: boolean;
+    promptDismissedThisSession: boolean;
 }
 
-const DEBOUNCE_DELAY = 3000; // 3 seconds
-const MIN_INTERVAL_BETWEEN_RUNS = 30000; // 30 seconds
+const DEBOUNCE_DELAY = 5000; // 5 seconds - increased to reduce prompt frequency
+const MIN_INTERVAL_BETWEEN_PROMPTS = 300000; // 5 minutes - minimum time between showing prompts
+const MIN_INTERVAL_BETWEEN_RUNS = 30000; // 30 seconds - minimum time between actual runs
 
 export class AutoMonitor {
     private states = new Map<string, MonitorState>();
@@ -208,13 +212,20 @@ export class AutoMonitor {
             return;
         }
 
-        // Check if enough time has passed since last run
+        // Check if enough time has passed since last prompt
         const now = Date.now();
-        const timeSinceLastExtract = now - state.lastExtractTime;
+        const timeSinceLastPrompt = now - state.lastPromptTime;
         
-        if (timeSinceLastExtract < MIN_INTERVAL_BETWEEN_RUNS) {
-            // Too soon, reschedule
-            setTimeout(() => this.processPendingFiles(folder), MIN_INTERVAL_BETWEEN_RUNS - timeSinceLastExtract);
+        // If user dismissed prompt this session, don't show again until next session
+        if (state.promptDismissedThisSession) {
+            state.pendingFiles.clear();
+            return;
+        }
+        
+        // Don't show prompts too frequently
+        if (timeSinceLastPrompt < MIN_INTERVAL_BETWEEN_PROMPTS) {
+            // Too soon, reschedule for later
+            setTimeout(() => this.processPendingFiles(folder), MIN_INTERVAL_BETWEEN_PROMPTS - timeSinceLastPrompt);
             return;
         }
 
@@ -290,11 +301,15 @@ export class AutoMonitor {
                                 cleanFiles.length === 1
                                     ? `Run for 1 clean file: ${relativeFiles[0]}`
                                     : `Run for ${cleanFiles.length} clean files (e.g. ${filesPreview})`,
-                            detail: `Will run package.json script(s) ${scriptsDetail} and may update locale JSON files and rewrite translation usages in code.`,
+                            detail: `Will run package.json script(s) ${scriptsDetail} for the changed files only and update locale JSON files.`,
                         },
                         {
                             label: 'Skip this time',
                             description: 'Do not run i18n scripts automatically right now',
+                        },
+                        {
+                            label: 'Skip for this session',
+                            description: 'Do not show this prompt again until next VS Code restart',
                         },
                         {
                             label: 'Disable auto extract/rewrite',
@@ -307,7 +322,16 @@ export class AutoMonitor {
                     },
                 );
 
+                // Update last prompt time
+                state.lastPromptTime = Date.now();
+
                 if (!choice || choice.label === 'Skip this time') {
+                    state.pendingFiles.clear();
+                    return;
+                }
+
+                if (choice.label === 'Skip for this session') {
+                    state.promptDismissedThisSession = true;
                     state.pendingFiles.clear();
                     return;
                 }
@@ -331,14 +355,39 @@ export class AutoMonitor {
                 }
             }
 
+            // Convert file paths to relative paths for passing to scripts
+            const relativeFilePaths = cleanFiles.map(f => path.relative(folder.uri.fsPath, f));
+
             if (autoExtract) {
-                await runI18nScript('i18n:extract');
+                await runI18nScript('i18n:extract', { 
+                    folder,
+                    extraArgs: relativeFilePaths 
+                });
                 state.lastExtractTime = Date.now();
             }
 
             if (autoRewrite) {
-                await runI18nScript('i18n:rewrite');
+                await runI18nScript('i18n:rewrite', { 
+                    folder,
+                    extraArgs: relativeFilePaths 
+                });
                 state.lastRewriteTime = Date.now();
+            }
+
+            // Use granular sync for specific files to preserve existing translations
+            // This syncs only the keys from the processed files without deleting other translations
+            try {
+                const syncService = getGranularSyncService();
+                const config = vscode.workspace.getConfiguration('ai-localizer');
+                const baseLocale = config.get<string>('i18n.defaultLocale') ?? 'en';
+                
+                for (const filePath of cleanFiles) {
+                    const fileUri = vscode.Uri.file(filePath);
+                    await syncService.syncFile(folder, fileUri, { baseLocale });
+                }
+            } catch (syncErr) {
+                console.error('Failed to sync translations for processed files:', syncErr);
+                // Don't fail the whole operation if sync fails
             }
 
             // Clear processed files
@@ -396,8 +445,10 @@ export class AutoMonitor {
             state = {
                 lastExtractTime: 0,
                 lastRewriteTime: 0,
+                lastPromptTime: 0,
                 pendingFiles: new Set(),
                 isProcessing: false,
+                promptDismissedThisSession: false,
             };
             this.states.set(folderKey, state);
         }

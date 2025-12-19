@@ -193,10 +193,12 @@ export class ProjectFixCommand {
 
                     // ═══════════════════════════════════════════════════════════════
                     // PHASE 2: Initial sync to populate all locales (ONLY sync needed)
+                    // CRITICAL: Use merge-only mode to preserve existing translations
                     // ═══════════════════════════════════════════════════════════════
-                    progress.report({ message: 'Syncing locales (i18n:sync)...' });
-                    // Use runSyncScriptOnly to avoid triggering fix-untranslated cascade
-                    await vscode.commands.executeCommand('ai-localizer.i18n.runSyncScriptOnly');
+                    progress.report({ message: 'Syncing locales (i18n:sync --merge-only)...' });
+                    // Use merge-only mode to preserve existing translations in other locales
+                    // This prevents deletion of translations when keys are renamed or removed
+                    await runI18nScript('i18n:sync', { folder, extraArgs: ['--merge-only'] });
                     if (token.isCancellationRequested) return;
 
                     // ═══════════════════════════════════════════════════════════════

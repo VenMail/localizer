@@ -34,6 +34,10 @@ const outputDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
 
 const ignorePatterns = loadIgnorePatterns(projectRoot);
 
+// Parse command-line arguments for specific files
+const args = process.argv.slice(2);
+const specificFiles = args.filter(arg => !arg.startsWith('--')).map(f => path.resolve(projectRoot, f));
+
 // Statistics
 const stats = {
   filesProcessed: 0,
@@ -247,9 +251,27 @@ async function processFile(filePath, keyMap) {
       process.exit(1);
     }
 
-    // Collect files
-    const files = [];
-    await collectFiles(srcRoot, files);
+    // Collect files to process
+    let files = [];
+    
+    if (specificFiles.length > 0) {
+      // Process only specified files
+      console.log(`[i18n-replace] Processing ${specificFiles.length} specific file(s)`);
+      for (const filePath of specificFiles) {
+        if (existsSync(filePath) && isSupported(filePath)) {
+          files.push(filePath);
+        } else if (existsSync(filePath)) {
+          console.warn(`[i18n-replace] Skipping unsupported file: ${filePath}`);
+        } else {
+          console.warn(`[i18n-replace] File not found: ${filePath}`);
+        }
+      }
+    } else {
+      // Process all supported files (full project scan)
+      console.log('[i18n-replace] Processing entire project (no specific files provided)');
+      await collectFiles(srcRoot, files);
+    }
+    
     console.log(`[i18n-replace] Found ${files.length} files to process`);
 
     // Process files

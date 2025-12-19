@@ -42,6 +42,10 @@ const CONCURRENCY = Number(process.env.AI_I18N_CONCURRENCY || 8);
 const srcRoot = detectSrcRoot(projectRoot);
 const outputDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
 
+// Parse command-line arguments for specific files
+const args = process.argv.slice(2);
+const specificFiles = args.filter(arg => !arg.startsWith('--')).map(f => path.resolve(projectRoot, f));
+
 // Load ignore patterns
 const ignorePatterns = loadIgnorePatterns(projectRoot);
 
@@ -484,14 +488,31 @@ function countLeavesByTopKey(obj) {
       process.exit(1);
     }
 
-    // Collect all supported files
-    const files = [];
-    await collectFiles(srcRoot, files);
+    // Collect files to process
+    let files = [];
     
-    // Also check Laravel views directory
-    const viewsRoot = path.resolve(projectRoot, 'resources', 'views');
-    if (existsSync(viewsRoot)) {
-      await collectFiles(viewsRoot, files);
+    if (specificFiles.length > 0) {
+      // Process only specified files
+      console.log(`[i18n-extract] Processing ${specificFiles.length} specific file(s)`);
+      for (const filePath of specificFiles) {
+        if (existsSync(filePath) && isSupported(filePath)) {
+          files.push(filePath);
+        } else if (existsSync(filePath)) {
+          console.warn(`[i18n-extract] Skipping unsupported file: ${filePath}`);
+        } else {
+          console.warn(`[i18n-extract] File not found: ${filePath}`);
+        }
+      }
+    } else {
+      // Process all supported files (full project scan)
+      console.log('[i18n-extract] Processing entire project (no specific files provided)');
+      await collectFiles(srcRoot, files);
+      
+      // Also check Laravel views directory
+      const viewsRoot = path.resolve(projectRoot, 'resources', 'views');
+      if (existsSync(viewsRoot)) {
+        await collectFiles(viewsRoot, files);
+      }
     }
 
     console.log(`[i18n-extract] Found ${files.length} files to process`);

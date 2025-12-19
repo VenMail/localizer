@@ -219,6 +219,10 @@ Example (user or workspace settings):
 - (Optional) OpenAI API key for AI-assisted translations
 
 ## Release Notes
+### 0.1.8
+
+- Enable auto ai prompting.
+
 ### 0.1.7
 
 - Fix PHP language file handling.

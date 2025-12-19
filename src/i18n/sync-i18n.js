@@ -9,6 +9,10 @@ const projectRoot = path.resolve(__dirname, '..');
 const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
 const baseLocale = 'en';
 
+// Parse command-line arguments
+const args = process.argv.slice(2);
+const mergeOnlyMode = args.includes('--merge-only') || args.includes('--preserve');
+
 function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -59,6 +63,34 @@ function deepSyncFromBase(base, target) {
     }
   }
   // Note: keys in target that don't exist in base are intentionally NOT copied
+  return result;
+}
+
+/**
+ * Merge mode: add missing keys from base to target, preserve ALL existing translations.
+ * Does NOT remove keys from target that don't exist in base.
+ * Use this when you want to preserve existing translations during partial updates.
+ */
+function deepMergeFromBase(base, target) {
+  if (!isPlainObject(base)) {
+    return isPlainObject(target) ? { ...target } : {};
+  }
+  const result = isPlainObject(target) ? { ...target } : {};
+  for (const key of Object.keys(base)) {
+    const baseVal = base[key];
+    const hasTargetKey = Object.prototype.hasOwnProperty.call(result, key);
+    
+    if (isPlainObject(baseVal)) {
+      // Recursively merge nested objects
+      const targetVal = hasTargetKey && isPlainObject(result[key]) ? result[key] : {};
+      result[key] = deepMergeFromBase(baseVal, targetVal);
+    } else if (!hasTargetKey) {
+      // Only add key if it doesn't exist in target
+      result[key] = baseVal;
+    }
+    // If key exists in target, preserve it (don't overwrite)
+  }
+  // Preserve all keys in target that don't exist in base
   return result;
 }
 
@@ -170,8 +202,10 @@ async function writeJson(filePath, data) {
           const existingFileData = (existsSync(targetPath) ? await readJson(targetPath) : null) || {};
           const fromSingle = maskPick(singleLocaleData, baseObj) || {};
           const seededExisting = deepFillFromBase(fromSingle, existingFileData);
-          // Use deepSyncFromBase to both fill missing keys AND prune keys not in base
-          const merged = deepSyncFromBase(baseObj, seededExisting);
+          // Use merge mode to preserve existing translations, or sync mode to prune unused keys
+          const merged = mergeOnlyMode 
+            ? deepMergeFromBase(baseObj, seededExisting)
+            : deepSyncFromBase(baseObj, seededExisting);
           const sorted = sortObjectDeep(merged);
           await mkdir(path.dirname(targetPath), { recursive: true });
           await writeJson(targetPath, sorted);
@@ -201,8 +235,10 @@ async function writeJson(filePath, data) {
         for (const localeName of configuredLocales) {
           const localePath = path.resolve(autoDir, `${localeName}.json`);
           const localeData = (await readJson(localePath)) || {};
-          // Use deepSyncFromBase to both fill missing keys AND prune keys not in base
-          const merged = deepSyncFromBase(baseData, localeData);
+          // Use merge mode to preserve existing translations, or sync mode to prune unused keys
+          const merged = mergeOnlyMode
+            ? deepMergeFromBase(baseData, localeData)
+            : deepSyncFromBase(baseData, localeData);
           const sorted = sortObjectDeep(merged);
           await writeJson(localePath, sorted);
           updatedCount += 1;
@@ -215,8 +251,10 @@ async function writeJson(filePath, data) {
           if (localeName === baseLocale) continue;
           const localePath = path.resolve(autoDir, entry.name);
           const localeData = (await readJson(localePath)) || {};
-          // Use deepSyncFromBase to both fill missing keys AND prune keys not in base
-          const merged = deepSyncFromBase(baseData, localeData);
+          // Use merge mode to preserve existing translations, or sync mode to prune unused keys
+          const merged = mergeOnlyMode
+            ? deepMergeFromBase(baseData, localeData)
+            : deepSyncFromBase(baseData, localeData);
           const sorted = sortObjectDeep(merged);
           await writeJson(localePath, sorted);
           updatedCount += 1;
@@ -225,7 +263,8 @@ async function writeJson(filePath, data) {
       }
     }
 
-    console.log(`[i18n-sync] Completed. Updated ${updatedCount} file(s).`);
+    const mode = mergeOnlyMode ? 'merge-only (preserving existing translations)' : 'full sync (pruning unused keys)';
+    console.log(`[i18n-sync] Completed in ${mode} mode. Updated ${updatedCount} file(s).`);
   } catch (error) {
     console.error('[i18n-sync] Failed to sync locale files.');
     console.error(error instanceof Error ? error.message : error);
