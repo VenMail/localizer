@@ -11,6 +11,7 @@ interface MonitorState {
     pendingFiles: Set<string>;
     isProcessing: boolean;
     promptDismissedThisSession: boolean;
+    outdatedScriptsChecked: boolean;
 }
 
 const DEBOUNCE_DELAY = 5000; // 5 seconds - increased to reduce prompt frequency
@@ -25,6 +26,7 @@ export class AutoMonitor {
     constructor() {
         this.setupFileWatcher();
         this.setupGitWatcher();
+        this.setupWorkspaceOpenHandler();
     }
 
     private setupFileWatcher(): void {
@@ -36,8 +38,153 @@ export class AutoMonitor {
         this.disposables.push(saveWatcher);
     }
 
+    private setupWorkspaceOpenHandler(): void {
+        // Check for outdated scripts when workspace is opened
+        const openHandler = vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
+            for (const folder of event.added) {
+                await this.checkForOutdatedScripts(folder);
+            }
+        });
+        
+        // Also check existing workspaces on startup
+        setTimeout(() => {
+            const folders = vscode.workspace.workspaceFolders || [];
+            for (const folder of folders) {
+                this.checkForOutdatedScripts(folder);
+            }
+        }, 2000); // Delay to allow VS Code to fully load
+        
+        this.disposables.push(openHandler);
+    }
+
+    private async checkForOutdatedScripts(folder: vscode.WorkspaceFolder): Promise<void> {
+        const folderKey = folder.uri.fsPath;
+        const state = this.getOrCreateState(folderKey);
+        
+        if (state.outdatedScriptsChecked) {
+            return; // Already checked for this folder in this session
+        }
+        
+        state.outdatedScriptsChecked = true;
+        
+        try {
+            const outdatedScripts = await this.detectOutdatedScripts(folder);
+            if (outdatedScripts.length > 0) {
+                await this.promptToUpdateScripts(folder, outdatedScripts);
+            }
+        } catch (err) {
+            console.error('Failed to check for outdated scripts:', err);
+        }
+    }
+
+    private async detectOutdatedScripts(folder: vscode.WorkspaceFolder): Promise<string[]> {
+        const outdatedScripts: string[] = [];
+        
+        // Check package.json for old script patterns
+        const pkgUri = vscode.Uri.joinPath(folder.uri, 'package.json');
+        try {
+            const data = await vscode.workspace.fs.readFile(pkgUri);
+            const text = new TextDecoder('utf-8').decode(data);
+            const pkg = JSON.parse(text);
+            
+            if (!pkg.scripts) {
+                return outdatedScripts;
+            }
+
+            // Check for known outdated script patterns
+            const outdatedPatterns = [
+                { name: 'extract-i18n.js', pattern: /extract-i18n\.js/ },
+                { name: 'replace-i18n.js', pattern: /replace-i18n\.js/ },
+                { name: 'cleanup-i18n-unused.js', pattern: /cleanup-i18n-unused\.js/ },
+                { name: 'babel-extract-i18n.js', pattern: /babel-extract-i18n\.js/ },
+                { name: 'oxc-extract-i18n.js', pattern: /oxc-extract-i18n\.js/ },
+                { name: 'babel-replace-i18n.js', pattern: /babel-replace-i18n\.js/ },
+                { name: 'oxc-replace-i18n.js', pattern: /oxc-replace-i18n\.js/ },
+                { name: 'fix-i18n-parens-in-code.js', pattern: /fix-i18n-parens-in-code\.js/ },
+                { name: 'restore-i18n-invalid.js', pattern: /restore-i18n-invalid\.js/ },
+                { name: 'rewrite-i18n-blade.js', pattern: /rewrite-i18n-blade\.js/ },
+                { name: 'fix-untranslated.js', pattern: /fix-untranslated\.js/ }
+            ];
+
+            for (const scriptName in pkg.scripts) {
+                const scriptContent = pkg.scripts[scriptName];
+                if (typeof scriptContent === 'string') {
+                    for (const pattern of outdatedPatterns) {
+                        if (pattern.pattern.test(scriptContent)) {
+                            outdatedScripts.push(`${scriptName}: ${pattern.name}`);
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch {
+            // No package.json or invalid JSON
+            return outdatedScripts;
+        }
+
+        // Also check for actual script files in /scripts directory
+        const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+        try {
+            const entries = await vscode.workspace.fs.readDirectory(scriptsDir);
+            for (const [name, type] of entries) {
+                if (type === vscode.FileType.File) {
+                    // Check if it's an outdated script file
+                    const outdatedFilePatterns = [
+                        'extract-i18n.js',
+                        'replace-i18n.js', 
+                        'cleanup-i18n-unused.js',
+                        'babel-extract-i18n.js',
+                        'oxc-extract-i18n.js',
+                        'babel-replace-i18n.js',
+                        'oxc-replace-i18n.js',
+                        'fix-i18n-parens-in-code.js',
+                        'restore-i18n-invalid.js',
+                        'rewrite-i18n-blade.js',
+                        'fix-untranslated.js'
+                    ];
+                    
+                    if (outdatedFilePatterns.some(pattern => name.includes(pattern))) {
+                        outdatedScripts.push(`scripts/${name}`);
+                    }
+                }
+            }
+        } catch {
+            // No scripts directory or can't read it
+        }
+
+        return outdatedScripts;
+    }
+
+    private async promptToUpdateScripts(folder: vscode.WorkspaceFolder, outdatedScripts: string[]): Promise<void> {
+        const choice = await vscode.window.showInformationMessage(
+            `AI Localizer: Detected ${outdatedScripts.length} outdated i18n script(s) in your project: ${outdatedScripts.slice(0, 3).join(', ')}${outdatedScripts.length > 3 ? '...' : ''}`,
+            {
+                title: 'Update Scripts',
+                description: 'Update to the latest i18n scripts and fix package.json',
+                action: 'update'
+            },
+            {
+                title: 'Ignore',
+                description: 'Skip updating for now',
+                action: 'ignore'
+            }
+        );
+
+        if (choice?.action === 'update') {
+            try {
+                await vscode.commands.executeCommand('ai-localizer.i18n.configureProject');
+                vscode.window.showInformationMessage(
+                    'AI Localizer: Project configuration opened. Please update your scripts to use the latest version.'
+                );
+            } catch (err) {
+                vscode.window.showErrorMessage(
+                    `Failed to open project configuration: ${err}`
+                );
+            }
+        }
+    }
+
     private setupGitWatcher(): void {
-        // Watch for git status changes using VS Code's git extension
         const gitExtension = vscode.extensions.getExtension('vscode.git');
         if (!gitExtension) {
             return;
@@ -461,6 +608,7 @@ export class AutoMonitor {
                 pendingFiles: new Set(),
                 isProcessing: false,
                 promptDismissedThisSession: false,
+                outdatedScriptsChecked: false,
             };
             this.states.set(folderKey, state);
         }
