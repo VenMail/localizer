@@ -105,7 +105,7 @@ function getFileNameForKey(keyPath: string): string {
     if (segments.length < 1) {
         return 'common.json';
     }
-    return `${segments[0].toLowerCase()}.json`;
+    return `${segments[0]}.json`;
 }
 
 export class GranularSyncService {
