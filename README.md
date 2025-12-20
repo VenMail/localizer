@@ -222,6 +222,8 @@ Example (user or workspace settings):
 ### 0.1.8
 
 - Enable auto ai prompting.
+- Stale script update.
+- Improved selection commands.
 
 ### 0.1.7
 

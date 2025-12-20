@@ -65,6 +65,15 @@ export class AutoMonitor {
             return; // Already checked for this folder in this session
         }
         
+        // Check if prompts are disabled for this project
+        const config = vscode.workspace.getConfiguration('i18nAI', folder.uri);
+        const promptsDisabled = config.get<boolean>('disablePrompts') || false;
+        
+        if (promptsDisabled) {
+            state.outdatedScriptsChecked = true;
+            return; // Prompts are disabled for this project
+        }
+        
         state.outdatedScriptsChecked = true;
         
         try {
@@ -236,6 +245,14 @@ export class AutoMonitor {
             return;
         }
 
+        // Check if prompts are disabled for this project
+        const i18nConfig = vscode.workspace.getConfiguration('i18nAI', document.uri);
+        const promptsDisabled = i18nConfig.get<boolean>('disablePrompts') || false;
+        
+        if (promptsDisabled) {
+            return; // Prompts are disabled for this project
+        }
+
         // Only monitor relevant file types
         const langId = document.languageId;
         const isRelevant = [
@@ -278,6 +295,14 @@ export class AutoMonitor {
         
         if (!autoMonitorEnabled) {
             return;
+        }
+
+        // Check if prompts are disabled for this project
+        const i18nConfig = vscode.workspace.getConfiguration('i18nAI', repo.rootUri);
+        const promptsDisabled = i18nConfig.get<boolean>('disablePrompts') || false;
+        
+        if (promptsDisabled) {
+            return; // Prompts are disabled for this project
         }
 
         // Find workspace folder for this repo
@@ -364,8 +389,12 @@ export class AutoMonitor {
         const autoExtract = config.get<boolean>('i18n.autoExtract', true);
         const autoRewrite = config.get<boolean>('i18n.autoRewrite', true);
         
-        if (!autoExtract && !autoRewrite) {
-            // User has disabled both, don't show any prompts
+        // Check if prompts are disabled for this project
+        const i18nConfig = vscode.workspace.getConfiguration('i18nAI', folder.uri);
+        const promptsDisabled = i18nConfig.get<boolean>('disablePrompts') || false;
+        
+        if (promptsDisabled || (!autoExtract && !autoRewrite)) {
+            // User has disabled prompts or both auto features, don't show any prompts
             state.pendingFiles.clear();
             return;
         }

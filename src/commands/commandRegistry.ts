@@ -9,6 +9,7 @@ import { DiagnosticAnalyzer, getDiagnosticConfig } from '../services/diagnosticA
 // Static imports for command handlers (avoids runtime require() overhead)
 import { ConfigureProjectCommand } from './configureProjectCommand';
 import { ConvertSelectionCommand } from './convertSelectionCommand';
+import { ExtractSelectionCommand } from './extractSelectionCommand';
 import { StatusCommand } from './statusCommand';
 import { ScriptCommands } from './scriptCommands';
 import { UntranslatedCommands } from './untranslatedCommands';
@@ -245,6 +246,14 @@ export class CommandRegistry {
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.i18n.convertSelectionToKey', () =>
                 convertCmd.execute(),
+            ),
+        );
+
+        // Extract selection command
+        const extractCmd = new ExtractSelectionCommand();
+        disposables.push(
+            vscode.commands.registerCommand('ai-localizer.i18n.extractSelection', () =>
+                extractCmd.execute(),
             ),
         );
 

@@ -107,6 +107,10 @@
       },
       {
         "command": "ai-localizer.i18n.runExtractScript",
+        "title": "AI Localizer: Extract Translatable Strings (Project)"
+      },
+      {
+        "command": "ai-localizer.i18n.extractSelection",
         "title": "AI Localizer: Extract Translatable Strings"
       },
       {
