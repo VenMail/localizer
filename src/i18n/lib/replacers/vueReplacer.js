@@ -30,7 +30,16 @@ class VueReplacer extends BaseReplacer {
       const cleaned = this.normalizeText(text);
       if (!cleaned) return false;
       if (!/[A-Za-z]/.test(cleaned)) return false;
-      return shouldTranslate(cleaned, { ignorePatterns });
+      
+      // For text with mustache expressions, create a validation version with placeholders
+      let validationText = cleaned;
+      const mustacheMatches = cleaned.match(/\{\{[^}]+\}\}/g);
+      if (mustacheMatches) {
+        validationText = cleaned.replace(/\{\{[^}]+\}\}/g, '{placeholder}');
+        validationText = validationText.replace(/\s+/g, ' ').trim();
+      }
+      
+      return shouldTranslate(validationText, { ignorePatterns });
     };
 
     // Process <template> section
@@ -68,10 +77,10 @@ class VueReplacer extends BaseReplacer {
   replaceInTemplate(template, keyMap, namespace, canTranslate) {
     let modified = template;
 
-    // 1. Plain text content between tags (not inside {{ }})
-    // Matches: >text content<
+    // 1. Plain text content between tags (including those with {{ }})
+    // Matches text content within HTML elements, handling indentation and whitespace
     // Skip content that already has {{ $t(...) }} or {{ t(...) }} wrapper
-    const textBetweenTagsRegex = /(>)([^<>{}\n]+)(<)/g;
+    const textBetweenTagsRegex = /(>)([^<]*)(<)/g;
 
     modified = modified.replace(textBetweenTagsRegex, (match, open, text, close) => {
       const trimmed = text.trim();
@@ -79,12 +88,23 @@ class VueReplacer extends BaseReplacer {
       if (/\{\{\s*\$?t\s*\(/.test(text)) return match;
       if (!trimmed || !canTranslate(trimmed)) return match;
 
+      // For text with mustache expressions, create a normalized version for key lookup
+      let lookupText = trimmed;
+      const mustacheMatches = trimmed.match(/\{\{[^}]+\}\}/g);
+      if (mustacheMatches) {
+        // Replace mustache expressions with placeholders for key lookup
+        lookupText = trimmed.replace(/\{\{[^}]+\}\}/g, '{placeholder}');
+        lookupText = lookupText.replace(/\s+/g, ' ').trim();
+      }
+
       const fullKey = this.lookupKey(keyMap, namespace, 'text', trimmed);
       if (!fullKey) return match;
 
       const leadingSpace = text.match(/^\s*/)[0];
       const trailingSpace = text.match(/\s*$/)[0];
-      return `${open}${leadingSpace}{{ $t('${fullKey}') }}${trailingSpace}${close}`;
+      
+      // Preserve the original text with mustache expressions in the replacement
+      return `${open}${leadingSpace}{{ $t('${fullKey}', {${mustacheMatches ? this.extractVariables(trimmed) : ''}}) }}${trailingSpace}${close}`;
     });
 
     // 2. Attribute values (non-bound)
@@ -171,6 +191,46 @@ class VueReplacer extends BaseReplacer {
     });
 
     return modified;
+  }
+
+  /**
+   * Extract variable names from mustache expressions for translation parameters
+   * Example: "Allow external applications to submit data to this {{ type }}" -> "type: type"
+   */
+  extractVariables(text) {
+    const mustacheMatches = text.match(/\{\{([^}]+)\}\}/g);
+    if (!mustacheMatches) return '';
+    
+    const variables = [];
+    for (const match of mustacheMatches) {
+      // Extract the content inside {{ }}
+      const content = match.slice(2, -2).trim();
+      
+      // Handle simple variable names (e.g., "type", "user.name")
+      if (/^[a-zA-Z_$][a-zA-Z0-9_$.]*$/.test(content)) {
+        variables.push(`${content}: ${content}`);
+      }
+      // Handle expressions (e.g., "user.type", "item.name")
+      else if (content.includes('.')) {
+        const parts = content.split('.');
+        if (parts.length === 2) {
+          variables.push(`${parts[1]}: ${content}`);
+        }
+      }
+      // For complex expressions, create a generic parameter
+      else {
+        // Sanitize the expression to create a valid parameter name
+        const paramName = content
+          .replace(/[^a-zA-Z0-9]/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .toLowerCase();
+        if (paramName) {
+          variables.push(`${paramName}: ${content}`);
+        }
+      }
+    }
+    
+    return variables.join(', ');
   }
 
   /**
