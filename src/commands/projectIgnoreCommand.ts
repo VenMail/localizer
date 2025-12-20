@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import { createIgnoreFile, removeIgnoreFile, isProjectDisabled } from '../utils/projectIgnore';
+import { disableProject, enableProject, isProjectDisabled } from '../utils/projectIgnore';
 
 /**
- * Command to disable the extension for the current project
+ * Command to disable the extension for the current project using VS Code workspace settings
  */
 export class DisableProjectCommand {
     constructor(private context: vscode.ExtensionContext) {}
@@ -22,19 +22,19 @@ export class DisableProjectCommand {
         }
 
         const choice = await vscode.window.showWarningMessage(
-            'Disable AI Localizer for this project? This will create a .i18n.ignore file.',
+            'Disable AI Localizer for this project? This will update your workspace settings.',
             'Disable',
             'Cancel'
         );
 
         if (choice === 'Disable') {
-            await createIgnoreFile(workspaceFolder);
+            await disableProject(workspaceFolder);
         }
     }
 }
 
 /**
- * Command to re-enable the extension for the current project
+ * Command to re-enable the extension for the current project using VS Code workspace settings
  */
 export class EnableProjectCommand {
     constructor(private context: vscode.ExtensionContext) {}
@@ -53,6 +53,6 @@ export class EnableProjectCommand {
             return;
         }
 
-        await removeIgnoreFile(workspaceFolder);
+        await enableProject(workspaceFolder);
     }
 }

@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
 
+// Legacy support for .i18n.ignore files (will be checked if workspace setting is not set)
 export const I18N_IGNORE_FILE = '.i18n.ignore';
 
 /**
- * Check if the extension is disabled for a project via .i18n.ignore file
+ * Check if the extension is disabled for a project via VS Code workspace settings
+ * Falls back to checking .i18n.ignore file for backward compatibility
  */
 export function isProjectDisabled(workspaceFolder?: vscode.WorkspaceFolder): boolean {
     if (!workspaceFolder) {
@@ -17,47 +17,52 @@ export function isProjectDisabled(workspaceFolder?: vscode.WorkspaceFolder): boo
         return workspaceFolders.some(folder => isProjectDisabled(folder));
     }
 
-    const ignoreFilePath = path.join(workspaceFolder.uri.fsPath, I18N_IGNORE_FILE);
-    return fs.existsSync(ignoreFilePath);
+    // First check the new workspace setting
+    const config = vscode.workspace.getConfiguration('ai-localizer', workspaceFolder.uri);
+    const disabledViaConfig = config.get<boolean>('disabled', false);
+    if (disabledViaConfig) {
+        return true;
+    }
+
+    // Fall back to legacy .i18n.ignore file check for backward compatibility
+    const ignoreFilePath = require('path').join(workspaceFolder.uri.fsPath, I18N_IGNORE_FILE);
+    return require('fs').existsSync(ignoreFilePath);
 }
 
 /**
- * Create .i18n.ignore file in the project root
+ * Disable the extension for a project using VS Code workspace settings
+ * This is the preferred method over creating .i18n.ignore files
  */
-export async function createIgnoreFile(workspaceFolder: vscode.WorkspaceFolder): Promise<void> {
-    const ignoreFilePath = path.join(workspaceFolder.uri.fsPath, I18N_IGNORE_FILE);
-    
+export async function disableProject(workspaceFolder: vscode.WorkspaceFolder): Promise<void> {
     try {
-        await fs.promises.writeFile(ignoreFilePath, '# AI Localizer is disabled for this project\n');
+        const config = vscode.workspace.getConfiguration('ai-localizer', workspaceFolder.uri);
+        await config.update('disabled', true, vscode.ConfigurationTarget.Workspace);
         vscode.window.showInformationMessage(
-            `AI Localizer: Extension disabled for project. Created ${I18N_IGNORE_FILE} file.`
+            `AI Localizer: Extension disabled for project. Updated workspace settings.`
         );
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(
-            `Failed to create ${I18N_IGNORE_FILE}: ${message}`
+            `Failed to disable AI Localizer: ${message}`
         );
         throw error;
     }
 }
 
 /**
- * Remove .i18n.ignore file from the project root
+ * Enable the extension for a project using VS Code workspace settings
  */
-export async function removeIgnoreFile(workspaceFolder: vscode.WorkspaceFolder): Promise<void> {
-    const ignoreFilePath = path.join(workspaceFolder.uri.fsPath, I18N_IGNORE_FILE);
-    
+export async function enableProject(workspaceFolder: vscode.WorkspaceFolder): Promise<void> {
     try {
-        if (fs.existsSync(ignoreFilePath)) {
-            await fs.promises.unlink(ignoreFilePath);
-            vscode.window.showInformationMessage(
-                `AI Localizer: Extension re-enabled for project. Removed ${I18N_IGNORE_FILE} file.`
-            );
-        }
+        const config = vscode.workspace.getConfiguration('ai-localizer', workspaceFolder.uri);
+        await config.update('disabled', false, vscode.ConfigurationTarget.Workspace);
+        vscode.window.showInformationMessage(
+            `AI Localizer: Extension enabled for project. Updated workspace settings.`
+        );
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(
-            `Failed to remove ${I18N_IGNORE_FILE}: ${message}`
+            `Failed to enable AI Localizer: ${message}`
         );
         throw error;
     }

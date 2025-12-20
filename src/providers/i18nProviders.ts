@@ -48,6 +48,12 @@ export class I18nHoverProvider implements vscode.HoverProvider {
         token: vscode.CancellationToken,
     ): Promise<vscode.Hover | undefined> {
         try {
+            // Check if project is disabled
+            const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+            if (folder && isProjectDisabled(folder)) {
+                return undefined; // Project is disabled
+            }
+
             const config = vscode.workspace.getConfiguration('ai-localizer');
             const delayMs = config.get<number>('i18n.hoverDelayMs') ?? 1900;
 
@@ -425,14 +431,20 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
         position: vscode.Position,
     ): Promise<vscode.Definition | undefined> {
         try {
+            // Check if project is disabled
+            const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+            if (folder && isProjectDisabled(folder)) {
+                return undefined; // Project is disabled
+            }
+
             await this.i18nIndex.ensureInitialized();
             
             // If nothing is indexed yet, offer to initialize i18n for the project
             const allKeys = this.i18nIndex.getAllKeys();
             if (!allKeys.length) {
-                const folder = vscode.workspace.getWorkspaceFolder(document.uri);
-                const isConfigured = folder
-                    ? await this.projectConfigService.hasI18nScripts(folder)
+                const configFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+                const isConfigured = configFolder
+                    ? await this.projectConfigService.hasI18nScripts(configFolder)
                     : false;
 
                 const buttons = isConfigured
@@ -598,6 +610,12 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
         position: vscode.Position,
     ): Promise<vscode.CompletionItem[]> {
         try {
+            // Check if project is disabled
+            const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+            if (folder && isProjectDisabled(folder)) {
+                return []; // Project is disabled
+            }
+
             await this.i18nIndex.ensureInitialized();
             const langId = document.languageId;
             const isLaravelSource = langId === 'php' || langId === 'blade';
@@ -803,6 +821,12 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         range: vscode.Range,
         context: vscode.CodeActionContext,
     ): Promise<(vscode.CodeAction | vscode.Command)[]> {
+        // Check if project is disabled
+        const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+        if (folder && isProjectDisabled(folder)) {
+            return []; // Project is disabled
+        }
+
         const actions: vscode.CodeAction[] = [];
 
         const relevant = context.diagnostics.filter(
@@ -815,7 +839,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
         );
 
         let addedBulkActions = false;
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+        const actionWorkspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
         const isJsonLocale = document.languageId === 'json' || document.languageId === 'jsonc';
         const isLaravelLocale = this.isLaravelLocaleFile(document);
 
@@ -845,14 +869,14 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 actions.push(action);
 
                 // Add "ignore this key" option for keys that shouldn't be translated
-                if (workspaceFolder) {
+                if (actionWorkspaceFolder) {
                     const ignoreTitle = `AI Localizer: Add "${key}" to ignore list`;
                     const ignoreAction = new vscode.CodeAction(ignoreTitle, vscode.CodeActionKind.QuickFix);
                     ignoreAction.diagnostics = [diagnostic];
                     ignoreAction.command = {
                         title: ignoreTitle,
                         command: 'ai-localizer.i18n.addKeyToIgnoreList',
-                        arguments: [workspaceFolder.uri, key],
+                        arguments: [actionWorkspaceFolder.uri, key],
                     };
                     actions.push(ignoreAction);
                 }
@@ -905,7 +929,7 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 actions.push(action);
 
                 // Also offer bulk restore if we have a folder
-                if (workspaceFolder) {
+                if (actionWorkspaceFolder) {
                     const bulkTitle = `AI Localizer: Restore all invalid keys in code and remove from locales`;
                     const bulkAction = new vscode.CodeAction(bulkTitle, vscode.CodeActionKind.QuickFix);
                     bulkAction.diagnostics = [diagnostic];
@@ -1007,12 +1031,12 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
             }
         }
 
-        const folder = vscode.workspace.getWorkspaceFolder(document.uri) || undefined;
+        const reportWorkspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri) || undefined;
 
-        if (folder && (document.languageId === 'json' || document.languageId === 'jsonc')) {
+        if (reportWorkspaceFolder && (document.languageId === 'json' || document.languageId === 'jsonc')) {
             const keyPath = await this.getKeyPathForJsonRange(document, range);
             if (keyPath) {
-                const scriptsDir = vscode.Uri.joinPath(folder.uri, 'scripts');
+                const scriptsDir = vscode.Uri.joinPath(reportWorkspaceFolder.uri, 'scripts');
                 const unusedReport = await this.loadReport(scriptsDir, '.i18n-unused-report.json');
                 const invalidReport = await this.loadReport(scriptsDir, '.i18n-invalid-report.json');
 

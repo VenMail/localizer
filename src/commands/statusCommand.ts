@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { I18nStatusBar } from '../core/statusBar';
 import { ProjectConfigService } from '../services/projectConfigService';
+import { isProjectDisabled } from '../utils/projectIgnore';
 
 /**
  * Command to show i18n status and settings
@@ -20,6 +21,26 @@ export class StatusCommand {
     }
 
     async execute(): Promise<void> {
+        // Check if extension is disabled for the current workspace
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder && isProjectDisabled(workspaceFolder)) {
+            // Extension is disabled, only show enable option
+            const choice = await vscode.window.showQuickPick([
+                {
+                    label: '$(check) Enable AI Localizer for this Workspace',
+                    description: 'Re-enable AI Localizer for this project',
+                    action: 'enable'
+                }
+            ], {
+                placeHolder: 'AI Localizer is disabled'
+            });
+
+            if (choice?.action === 'enable') {
+                await vscode.commands.executeCommand('ai-localizer.project.enable');
+            }
+            return;
+        }
+
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoMonitor = config.get<boolean>('i18n.autoMonitor', true);
         const autoExtract = config.get<boolean>('i18n.autoExtract', true);

@@ -3,6 +3,7 @@ import { TextDecoder } from 'util';
 import { I18nIndex, TranslationRecord } from '../core/i18nIndex';
 import { ProjectConfigService } from './projectConfigService';
 import { operationLock } from '../commands/untranslated/utils/operationLock';
+import { isProjectDisabled } from '../utils/projectIgnore';
 
 // Shared decoder instance to avoid repeated allocations
 const sharedDecoder = new TextDecoder('utf-8');
@@ -179,6 +180,11 @@ export class DiagnosticAnalyzer {
         const folder = vscode.workspace.getWorkspaceFolder(uri);
         if (!folder) {
             return [];
+        }
+
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            return []; // Project is disabled
         }
 
         const projectConfig = await this.projectConfigService.readConfig(folder);

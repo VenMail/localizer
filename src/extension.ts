@@ -19,7 +19,7 @@ export function activate(context: vscode.ExtensionContext) {
                 .map(folder => folder.name);
             
             vscode.window.showWarningMessage(
-                `AI Localizer is disabled for: ${disabledFolders.join(', ')}. Remove .i18n.ignore files to re-enable.`
+                `AI Localizer is disabled for: ${disabledFolders.join(', ')}. Enable via workspace settings or remove .i18n.ignore files.`
             );
             return;
         }

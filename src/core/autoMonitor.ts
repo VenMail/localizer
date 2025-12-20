@@ -3,6 +3,7 @@ import * as path from 'path';
 import { isFileClean } from './gitMonitor';
 import { runI18nScript } from './workspace';
 import { getGranularSyncService } from '../services/granularSyncService';
+import { isProjectDisabled } from '../utils/projectIgnore';
 
 interface MonitorState {
     lastExtractTime: number;
@@ -62,6 +63,12 @@ export class AutoMonitor {
         
         if (state.outdatedScriptsChecked) {
             return; // Already checked for this folder in this session
+        }
+        
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            state.outdatedScriptsChecked = true;
+            return; // Project is disabled
         }
         
         // Check if prompts are disabled for this project
@@ -181,9 +188,9 @@ export class AutoMonitor {
         if (choice?.action === 'update') {
             try {
                 await vscode.commands.executeCommand('ai-localizer.i18n.configureProject');
-                vscode.window.showInformationMessage(
-                    'AI Localizer: Project configuration opened. Please update your scripts to use the latest version.'
-                );
+                // vscode.window.showInformationMessage(
+                //     'AI Localizer: Project configuration opened. Please update your scripts to use the latest version.'
+                // );
             } catch (err) {
                 vscode.window.showErrorMessage(
                     `Failed to open project configuration: ${err}`
@@ -244,6 +251,16 @@ export class AutoMonitor {
             return;
         }
 
+        const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+        if (!folder) {
+            return;
+        }
+
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            return; // Project is disabled
+        }
+
         // Check if prompts are disabled for this project
         const i18nConfig = vscode.workspace.getConfiguration('i18nAI', document.uri);
         const promptsDisabled = i18nConfig.get<boolean>('disablePrompts') || false;
@@ -265,11 +282,6 @@ export class AutoMonitor {
         ].includes(langId);
 
         if (!isRelevant) {
-            return;
-        }
-
-        const folder = vscode.workspace.getWorkspaceFolder(document.uri);
-        if (!folder) {
             return;
         }
 
@@ -296,6 +308,16 @@ export class AutoMonitor {
             return;
         }
 
+        const folder = vscode.workspace.getWorkspaceFolder(repo.rootUri);
+        if (!folder) {
+            return;
+        }
+
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            return; // Project is disabled
+        }
+
         // Check if prompts are disabled for this project
         const i18nConfig = vscode.workspace.getConfiguration('i18nAI', repo.rootUri);
         const promptsDisabled = i18nConfig.get<boolean>('disablePrompts') || false;
@@ -306,9 +328,9 @@ export class AutoMonitor {
 
         // Find workspace folder for this repo
         const folders = vscode.workspace.workspaceFolders || [];
-        const folder = folders.find(f => f.uri.fsPath === repo.rootUri.fsPath);
+        const repoFolder = folders.find(f => f.uri.fsPath === repo.rootUri.fsPath);
         
-        if (!folder) {
+        if (!repoFolder) {
             return;
         }
 
@@ -320,7 +342,7 @@ export class AutoMonitor {
 
         if (isClean) {
             // Working tree is clean, check if we should run extraction/rewrite
-            await this.processCleanState(folder);
+            await this.processCleanState(repoFolder);
         }
     }
 
@@ -387,6 +409,12 @@ export class AutoMonitor {
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const autoExtract = config.get<boolean>('i18n.autoExtract', true);
         const autoRewrite = config.get<boolean>('i18n.autoRewrite', true);
+        
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            state.pendingFiles.clear();
+            return; // Project is disabled
+        }
         
         // Check if prompts are disabled for this project
         const i18nConfig = vscode.workspace.getConfiguration('i18nAI', folder.uri);

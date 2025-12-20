@@ -406,6 +406,12 @@
           "type": "string",
           "default": "webdav, imap, smtp, pop3, ftp, sftp",
           "description": "Comma-separated list of well-known protocol or technical abbreviations that should be considered non-translatable when matching exact tokens (used to filter 'untranslated (same as default)' warnings)."
+        },
+        "ai-localizer.disabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "workspace",
+          "description": "Disable AI Localizer for this workspace. When enabled, no prompts, diagnostics, or IntelliSense will be shown."
         }
       }
     }

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isProjectDisabled } from '../utils/projectIgnore';
 
 export class I18nStatusBar {
     private statusBarItem: vscode.StatusBarItem;
@@ -34,6 +35,15 @@ export class I18nStatusBar {
     }
 
     private updateDisplay(): void {
+        // Check if extension is disabled for the workspace
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder && isProjectDisabled(workspaceFolder)) {
+            this.statusBarItem.text = '$(x) AI i18n (Disabled)';
+            this.statusBarItem.tooltip = 'AI Localizer is disabled for this workspace. Click to enable.';
+            this.statusBarItem.show();
+            return;
+        }
+
         if (!this.isMonitoring) {
             this.statusBarItem.text = '$(globe) AI i18n';
             this.statusBarItem.tooltip = 'Auto-monitoring disabled. Click to configure.';

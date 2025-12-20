@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
 import { I18nIndex } from '../core/i18nIndex';
+import { DiagnosticAnalyzer, getDiagnosticConfig } from '../services/diagnosticAnalyzer';
 import { TranslationService } from '../services/translationService';
 import { ProjectConfigService } from '../services/projectConfigService';
 import { FileSystemService } from '../services/fileSystemService';
 import { I18nStatusBar } from '../core/statusBar';
-import { DiagnosticAnalyzer, getDiagnosticConfig } from '../services/diagnosticAnalyzer';
+import { AskAICommand } from './askAICommand';
+import { DisableProjectCommand, EnableProjectCommand } from './projectIgnoreCommand';
+import { isProjectDisabled } from '../utils/projectIgnore';
 
 // Static imports for command handlers (avoids runtime require() overhead)
 import { ConfigureProjectCommand } from './configureProjectCommand';
@@ -17,13 +20,12 @@ import { ComponentCommands } from './componentCommands';
 import { ScaffoldMessagesCommand } from './scaffoldMessagesCommand';
 import { ProjectFixCommand } from './projectFixCommand';
 import { UninstallProjectI18nCommand } from './uninstallProjectI18nCommand';
-import { AskAICommand } from './askAICommand';
-import { DisableProjectCommand, EnableProjectCommand } from './projectIgnoreCommand';
 import { operationLock } from './untranslated/utils/operationLock';
 import { ReviewGeneratedService } from '../services/reviewGeneratedService';
 import * as path from 'path';
 
 type TimeoutHandle = ReturnType<typeof setTimeout>;
+const SOURCE_FILE_DEBOUNCE_MS = 800;
 
 /**
  * Registry for all extension commands
@@ -846,15 +848,17 @@ export class CommandRegistry {
 
         // Debounce map for source file analysis
         const sourceFileDebounceTimers = new Map<string, TimeoutHandle>();
-        const SOURCE_FILE_DEBOUNCE_MS = 500;
-
+        
         const refreshSourceFileDiagnostics = async (document: vscode.TextDocument, immediate = false) => {
-            const currentOp = operationLock.getCurrentOperation();
-            if (currentOp?.type === 'key-management') {
-                // Skip source diagnostics refresh while bulk key management is running
+            if (!isSourceFile(document.languageId)) {
+                sourceFileDiagnostics.delete(document.uri);
                 return;
             }
-            if (!isSourceFile(document.languageId)) {
+
+            // Check if extension is disabled for the document's workspace folder
+            const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+            if (folder && isProjectDisabled(folder)) {
+                sourceFileDiagnostics.delete(document.uri);
                 return;
             }
 
@@ -900,13 +904,23 @@ export class CommandRegistry {
             }
         };
 
-        const refreshAllSourceDiagnostics = async (): Promise<void> => {
+        const refreshAllSourceDiagnostics = async () => {
             if (refreshAllSourceDiagnosticsPromise) {
                 await refreshAllSourceDiagnosticsPromise;
                 return;
             }
 
             refreshAllSourceDiagnosticsPromise = (async () => {
+                await this.i18nIndex.ensureInitialized();
+
+                // Check if extension is disabled for any workspace folder
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders && workspaceFolders.some(folder => isProjectDisabled(folder))) {
+                    sourceFileDiagnostics.clear();
+                    this.log.appendLine('[Source Diagnostics] Extension disabled for workspace; clearing diagnostics.');
+                    return;
+                }
+
                 const config = getDiagnosticConfig();
                 if (!config.enabled || !config.missingReferenceEnabled) {
                     sourceFileDiagnostics.clear();
@@ -1159,6 +1173,14 @@ export class CommandRegistry {
         this.refreshAllDiagnosticsPromise = (async () => {
         this.diagnosticAnalyzer.resetCaches();
         await this.i18nIndex.ensureInitialized();
+
+        // Check if extension is disabled for any workspace folder
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.some(folder => isProjectDisabled(folder))) {
+            collection.clear();
+            this.log.appendLine('[Diagnostics] Extension disabled for workspace; clearing diagnostics.');
+            return;
+        }
 
         const config = getDiagnosticConfig();
         if (!config.enabled) {
