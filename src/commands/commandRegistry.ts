@@ -149,7 +149,7 @@ export class CommandRegistry {
             });
 
         // Ask AI command (prompt injection)
-        const askAiCmd = new AskAICommand(this.context);
+        const askAiCmd = new AskAICommand(this.context, this.i18nIndex, this.diagnosticAnalyzer);
         const disableProjectCmd = new DisableProjectCommand(this.context);
         const enableProjectCmd = new EnableProjectCommand(this.context);
         disposables.push(

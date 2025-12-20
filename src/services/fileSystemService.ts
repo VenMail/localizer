@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as _crypto from 'crypto';
 import { TextDecoder, TextEncoder } from 'util';
 import { isPackageInstalled, installPackages } from '../core/workspace';
 
@@ -20,6 +21,92 @@ export class FileSystemService {
 
     // oxc-based dependencies for i18n scripts
     private static readonly OXC_DEPS = ['oxc-parser', 'magic-string'];
+
+    /**
+     * Calculate checksum for a file
+     */
+    async getFileChecksum(uri: vscode.Uri): Promise<string | null> {
+        try {
+            const data = await vscode.workspace.fs.readFile(uri);
+            const hash = _crypto.createHash('sha256').update(data).digest('hex');
+            return hash;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Get checksum for extension's bundled script
+     */
+    async getBundledScriptChecksum(context: vscode.ExtensionContext, scriptName: string): Promise<string | null> {
+        try {
+            const scriptUri = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n', scriptName);
+            return await this.getFileChecksum(scriptUri);
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Compare project script with bundled version
+     */
+    async isScriptOutdated(
+        context: vscode.ExtensionContext, 
+        projectRoot: string, 
+        scriptName: string
+    ): Promise<boolean> {
+        const projectScriptUri = vscode.Uri.file(path.join(projectRoot, 'scripts', scriptName));
+        const bundledChecksum = await this.getBundledScriptChecksum(context, scriptName);
+        const projectChecksum = await this.getFileChecksum(projectScriptUri);
+        
+        // If project script doesn't exist, it's "outdated" (needs to be created)
+        if (!projectChecksum) {
+            return true;
+        }
+        
+        // If we can't get bundled checksum, assume it's not outdated
+        if (!bundledChecksum) {
+            return false;
+        }
+        
+        // Compare checksums
+        return bundledChecksum !== projectChecksum;
+    }
+
+    /**
+     * Get all outdated scripts in a project
+     */
+    async getOutdatedScripts(context: vscode.ExtensionContext, projectRoot: string): Promise<string[]> {
+        const outdatedScripts: string[] = [];
+        
+        // Define all scripts that should be checked
+        const scriptsToCheck = [
+            'extract-i18n.js',
+            'replace-i18n.js', 
+            'sync-i18n.js',
+            'fix-untranslated.js',
+            'rewrite-i18n-blade.js',
+            'cleanup-i18n-unused.js',
+            'restore-i18n-invalid.js',
+            'babel-extract-i18n.js',
+            'babel-replace-i18n.js',
+            'oxc-extract-i18n.js',
+            'oxc-replace-i18n.js',
+            'fix-i18n-parens-in-code.js',
+            'cleanup-i18n-unused.js',
+            'restore-i18n-invalid.js',
+            'rewrite-i18n-blade.js'
+        ];
+        
+        for (const scriptName of scriptsToCheck) {
+            const isOutdated = await this.isScriptOutdated(context, projectRoot, scriptName);
+            if (isOutdated) {
+                outdatedScripts.push(scriptName);
+            }
+        }
+        
+        return outdatedScripts;
+    }
 
     /**
      * Copy i18n scripts to project and install required dependencies

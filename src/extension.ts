@@ -39,7 +39,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(statusBar, output);
 
         // Initialize auto-monitor for detecting new translatable content
-        const autoMonitor = new AutoMonitor();
+        const autoMonitor = new AutoMonitor(context);
         context.subscriptions.push(autoMonitor);
 
         // Update status bar based on configuration

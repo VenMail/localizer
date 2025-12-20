@@ -1,10 +1,20 @@
 import * as vscode from 'vscode';
+import { I18nIndex } from '../core/i18nIndex';
+import { DiagnosticAnalyzer } from '../services/diagnosticAnalyzer';
 
 /**
- * Command to ask AI for help
+ * Command to ask AI for help with ai18n issues only
+ * Focuses on:
+ * 1. Fixing missing or untranslated strings in other locales
+ * 2. Improving translations for the selection
+ * 3. Analyzing for invalid translations (edge cases)
  */
 export class AskAICommand {
-    constructor(private context: vscode.ExtensionContext) {}
+    constructor(
+        private context: vscode.ExtensionContext,
+        private i18nIndex?: I18nIndex,
+        private diagnosticAnalyzer?: DiagnosticAnalyzer,
+    ) {}
 
     private async isEnabled(): Promise<boolean> {
         try {
@@ -19,109 +29,145 @@ export class AskAICommand {
         }
     }
 
-    private async pickRequest(hasSelection: boolean): Promise<string | null> {
+    private async detectAi18nIssues(): Promise<{
+        hasMissingTranslations: boolean;
+        hasInvalidTranslations: boolean;
+        hasStyleIssues: boolean;
+        selectedKey?: string;
+        selectedLocale?: string;
+    }> {
+        const result = {
+            hasMissingTranslations: false,
+            hasInvalidTranslations: false,
+            hasStyleIssues: false,
+        } as any;
+
+        const active = vscode.window.activeTextEditor;
+        if (!active || !this.i18nIndex || !this.diagnosticAnalyzer) {
+            return result;
+        }
+
+        const document = active.document;
+        const uri = document.uri;
+        
+        // Check for diagnostics in the current file
+        const diagnostics = vscode.languages.getDiagnostics(uri);
+        
+        for (const diagnostic of diagnostics) {
+            if (diagnostic.source === 'ai-i18n-untranslated') {
+                result.hasMissingTranslations = true;
+                // Try to extract key and locale from diagnostic message
+                const message = diagnostic.message;
+                const keyMatch = message.match(/key["'`](.+?)["'`]/i);
+                const localeMatch = message.match(/locale["'`](.+?)["'`]/i);
+                if (keyMatch) result.selectedKey = keyMatch[1];
+                if (localeMatch) result.selectedLocale = localeMatch[1];
+            }
+            if (diagnostic.source === 'ai-i18n-missing-refs') {
+                result.hasInvalidTranslations = true;
+            }
+            if (diagnostic.source === 'ai-i18n-review') {
+                result.hasStyleIssues = true;
+            }
+        }
+
+        // If no diagnostics in current file, check if there are any i18n issues in the project
+        if (!result.hasMissingTranslations && !result.hasInvalidTranslations && !result.hasStyleIssues) {
+            // Simple check - if we have an i18n index with keys and multiple locales, there might be issues
+            try {
+                const allKeys = this.i18nIndex.getAllKeys();
+                const allLocales = this.i18nIndex.getAllLocales();
+                
+                // If we have keys and more than one locale, assume there might be missing translations
+                if (allKeys.length > 0 && allLocales.length > 1) {
+                    result.hasMissingTranslations = true; // We'll let the AI investigate
+                }
+            } catch (error) {
+                // Ignore errors in index access
+            }
+        }
+
+        return result;
+    }
+
+    private async pickAi18nTask(): Promise<string | null> {
         const templates: Array<{ label: string; description: string; value: string }> = [
             {
-                label: hasSelection ? 'Explain this selection' : 'Explain this file',
-                description: 'High-level explanation + key details',
-                value: hasSelection
-                    ? 'Explain what this selected code does. Summarize behavior, data flow, and key risks.'
-                    : 'Explain what this file does. Summarize responsibilities, data flow, and key risks.',
+                label: 'Fix missing or untranslated strings in other locales',
+                description: 'Identify and fill missing translations across all locales',
+                value: 'Fix missing or untranslated strings in other locales',
             },
             {
-                label: hasSelection ? 'Find bugs in selection' : 'Find bugs in file',
-                description: 'Potential bugs + edge cases',
-                value: hasSelection
-                    ? 'Review this selected code for bugs, edge cases, and incorrect assumptions. Propose minimal fixes.'
-                    : 'Review this file for bugs, edge cases, and incorrect assumptions. Propose minimal fixes.',
+                label: 'Improve translations for the selection',
+                description: 'Enhance translation quality, style, and clarity',
+                value: 'Improve translations for better style and clarity',
             },
             {
-                label: hasSelection ? 'Refactor selection' : 'Refactor file',
-                description: 'Make it clearer/simpler without changing behavior',
-                value: hasSelection
-                    ? 'Refactor this selected code to be simpler and clearer without changing behavior. Provide a minimal diff.'
-                    : 'Refactor this file to be simpler and clearer without changing behavior. Provide a minimal diff.',
-            },
-            {
-                label: hasSelection ? 'Write tests for selection' : 'Write tests for file',
-                description: 'Suggested test cases + example tests',
-                value: hasSelection
-                    ? 'Write tests for this selected behavior. Suggest test cases and provide example test code.'
-                    : 'Write tests for this file. Suggest test cases and provide example test code.',
-            },
-            {
-                label: 'Custom request…',
-                description: 'Type your own question/request',
-                value: '__custom__',
+                label: 'Analyze for invalid translations (edge cases)',
+                description: 'Find and fix translation inconsistencies, placeholders, and edge cases',
+                value: 'Analyze and fix invalid translations and edge cases',
             },
         ];
 
         const picked = await vscode.window.showQuickPick(templates, {
-            placeHolder: 'Ask AI: choose what you want help with',
+            placeHolder: 'Ask AI: choose i18n task to help with',
         });
         if (!picked) {
             return null;
         }
 
-        if (picked.value !== '__custom__') {
-            return picked.value;
-        }
-
-        const userInput = await vscode.window.showInputBox({
-            placeHolder: 'Describe what you want the AI to do…',
-            prompt: 'Ask AI for code suggestions or explanations',
-        });
-        return userInput?.trim() ? userInput.trim() : null;
+        return picked.value;
     }
 
-    private buildPrompt(args: {
-        userInput: string;
-        selectionText: string;
-        contextSnippet: string;
-        uri?: string;
-        languageId?: string;
-    }): string {
+    private async generateAi18nPrompt(task: string, issues: Awaited<ReturnType<AskAICommand['detectAi18nIssues']>>): Promise<string> {
+        const active = vscode.window.activeTextEditor;
+        const selectionText = active && !active.selection.isEmpty
+            ? active.document.getText(active.selection).trim()
+            : '';
+
         const parts: string[] = [];
-        parts.push('You are a senior software engineer helping me in my IDE.');
+        parts.push('You are an internationalization (i18n) expert helping me fix ai18n issues in my project.');
         parts.push('');
         parts.push('## Task');
-        parts.push(args.userInput.trim());
+        parts.push(task);
         parts.push('');
 
-        if (args.uri) {
+        if (active) {
             parts.push('## File');
-            parts.push(args.uri);
+            parts.push(active.document.uri.toString());
             parts.push('');
-        }
-        if (args.languageId) {
             parts.push('## Language');
-            parts.push(args.languageId);
+            parts.push(active.document.languageId);
             parts.push('');
         }
 
-        if (args.selectionText) {
+        if (selectionText) {
             parts.push('## Selected code/text');
             parts.push('```');
-            parts.push(args.selectionText);
+            parts.push(selectionText);
             parts.push('```');
             parts.push('');
         }
 
-        if (args.contextSnippet && args.contextSnippet !== args.selectionText) {
-            parts.push('## Additional context (truncated)');
-            parts.push('```');
-            parts.push(args.contextSnippet);
-            parts.push('```');
+        if (issues.selectedKey) {
+            parts.push('## Target Key');
+            parts.push(issues.selectedKey);
+            if (issues.selectedLocale) {
+                parts.push(`Target Locale: ${issues.selectedLocale}`);
+            }
             parts.push('');
         }
 
         parts.push('## Constraints');
-        parts.push('- Be concise but complete.');
-        parts.push('- If you propose code changes, provide the minimal diff and explain why.');
-        parts.push('- If something is ambiguous, ask clarifying questions.');
+        parts.push('- Focus on i18n best practices and localization issues');
+        parts.push('- Provide specific, actionable suggestions for translation improvements');
+        parts.push('- If suggesting code changes, provide the minimal diff');
+        parts.push('- Consider cultural context and proper pluralization');
+        parts.push('- Ensure placeholder consistency across translations');
 
         return parts.join('\n');
     }
+
 
     private async openPromptDocument(prompt: string): Promise<void> {
         const doc = await vscode.workspace.openTextDocument({
@@ -129,6 +175,22 @@ export class AskAICommand {
             content: prompt,
         });
         await vscode.window.showTextDocument(doc, { preview: false });
+    }
+
+    private async tryWindsurfOpenNewChat(prompt: string): Promise<boolean> {
+        try {
+            // Copy the prompt to clipboard first
+            await vscode.env.clipboard.writeText(prompt);
+            // Try windsurf.openNewChat command first
+            await vscode.commands.executeCommand('windsurf.openNewChat');
+            // Wait a moment for the chat to open
+            await new Promise(resolve => setTimeout(resolve, 500));
+            // Try to paste the prompt
+            await vscode.commands.executeCommand('workbench.action.paste');
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     private async showFallbackModal(prompt: string): Promise<void> {
@@ -160,31 +222,27 @@ export class AskAICommand {
             return;
         }
 
-        const active = vscode.window.activeTextEditor;
-        const selectionText =
-            active && !active.selection.isEmpty
-                ? active.document.getText(active.selection).trim()
-                : '';
-
-        const userInput = await this.pickRequest(!!selectionText);
-        if (!userInput) return;
-
-        let contextSnippet = '';
-        if (selectionText) {
-            contextSnippet = selectionText.slice(0, 4000);
-        } else if (active) {
-            const document = active.document;
-            const totalText = document.getText();
-            contextSnippet = totalText.slice(0, 8000);
+        // Show the 3 specific ai18n task options
+        const selectedTask = await this.pickAi18nTask();
+        if (!selectedTask) {
+            return; // User cancelled
         }
 
-        // Try to forward to host AI chat
+        // Detect ai18n issues to provide context
+        const issues = await this.detectAi18nIssues();
+        
+        // Generate specialized ai18n prompt based on selected task
+        const prompt = await this.generateAi18nPrompt(selectedTask, issues);
+
+        // Try windsurf.openNewChat first, then fallback to other methods
+        if (await this.tryWindsurfOpenNewChat(prompt)) {
+            return;
+        }
+
+        // Try configured forward command
         const config = vscode.workspace.getConfiguration('ai-localizer');
         const forwardCommand = (config.get<string>('askAI.forwardToCommand') || '').trim();
-        const uri = active ? active.document.uri.toString() : undefined;
-        const languageId = active ? active.document.languageId : undefined;
-        const prompt = this.buildPrompt({ userInput, selectionText, contextSnippet, uri, languageId });
-
+        
         if (forwardCommand) {
             try {
                 await vscode.commands.executeCommand(forwardCommand, prompt);
@@ -193,17 +251,18 @@ export class AskAICommand {
                 try {
                     await vscode.commands.executeCommand(forwardCommand, {
                         prompt,
-                        question: userInput,
-                        selection: selectionText,
-                        context: contextSnippet,
-                        uri,
-                        languageId,
+                        question: selectedTask,
+                        selection: '',
+                        context: '',
+                        uri: vscode.window.activeTextEditor?.document.uri.toString(),
+                        languageId: vscode.window.activeTextEditor?.document.languageId,
                     });
                     return;
                 } catch {
                 }
             }
         } else {
+            // Try standard chat commands
             try {
                 await vscode.commands.executeCommand('workbench.action.chat.open', prompt);
                 return;
@@ -234,13 +293,11 @@ export class AskAICommand {
                 }
 
                 if (candidates.length > 1) {
-                    const picked = await vscode.window.showQuickPick(candidates, {
-                        placeHolder: 'Select a chat command to inject the generated prompt into',
-                    });
-                    if (picked) {
-                        await vscode.commands.executeCommand(picked, prompt);
-                        return;
-                    }
+                    // For ai18n, prioritize windsurf commands
+                    const windsurfCandidates = candidates.filter(c => c.toLowerCase().includes('windsurf'));
+                    const picked = windsurfCandidates.length > 0 ? windsurfCandidates[0] : candidates[0];
+                    await vscode.commands.executeCommand(picked, prompt);
+                    return;
                 }
             } catch {
             }

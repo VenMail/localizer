@@ -1,0 +1,7 @@
+node_modules
+out
+src/i18n/components
+src/i18n/lib
+src/providers
+IntegrationDialog.vue.txt
+src/i18n/components/vue/LanguageSwitcher.vue.txt
