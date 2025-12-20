@@ -935,7 +935,7 @@ export function extractKeyAtPosition(
         const ch = line[quoteIndex];
         if (ch === '\'' || ch === '"') {
             const nextCh = line[quoteIndex + 1];
-            if (nextCh && /[A-Za-z0-9_\.\-]/.test(nextCh)) {
+            if (nextCh && /[A-Za-z0-9_.-]/.test(nextCh)) {
                 quoteChar = ch;
                 break;
             }
@@ -954,7 +954,7 @@ export function extractKeyAtPosition(
     }
 
     const keyText = line.slice(start, right);
-    if (!keyText || !/^[A-Za-z0-9_\.\-]+$/.test(keyText)) {
+    if (!keyText || !/^[A-Za-z0-9_.-]+$/.test(keyText)) {
         return null;
     }
 
@@ -966,7 +966,7 @@ export function extractKeyAtPosition(
 }
 
 export function escapeMarkdown(text: string): string {
-    return text.replace(/([\\`*_{}\[\]()#+\-.!])/g, '\\$1');
+    return text.replace(/([\\`*_{}[\]()#+\-.!])/g, '\\$1');
 }
 
 export function slugifyForKey(text: string, maxWords = 4, maxLength = 48): string {

@@ -5,6 +5,7 @@ import { readLaravelKeyValueFromFile, sharedDecoder } from '../core/i18nFs';
 import { inferJsonLocaleFromUri } from '../core/i18nPath';
 import { detectFrameworkProfile } from '../frameworks/detection';
 import { ProjectConfigService } from '../services/projectConfigService';
+import { isProjectDisabled } from '../utils/projectIgnore';
 import {
     parseInvalidDiagnostic,
     parseMissingReferenceDiagnostic,
@@ -448,20 +449,7 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
                 } else if (choice === 'Configure i18n') {
                     await vscode.commands.executeCommand('ai-localizer.i18n.configureProject');
                 } else if (choice === 'Disable for this Project') {
-                    const configTarget = vscode.workspace.getConfiguration(
-                        'ai-localizer',
-                        folder?.uri,
-                    );
-                    await configTarget.update(
-                        'i18n.enabled',
-                        false,
-                        folder
-                            ? vscode.ConfigurationTarget.WorkspaceFolder
-                            : vscode.ConfigurationTarget.Workspace,
-                    );
-                    vscode.window.showInformationMessage(
-                        'AI Localizer: i18n has been disabled for this project.',
-                    );
+                    await vscode.commands.executeCommand('ai-localizer.project.disable');
                 }
                 return undefined;
             }

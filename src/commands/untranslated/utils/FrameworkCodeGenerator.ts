@@ -19,10 +19,9 @@ export class FrameworkCodeGenerator {
      * Generate framework-specific replacement code
      */
     static generateReplacement(options: CodeGenerationOptions): string {
-        const { document, range, key, templateInfo, isJsSource } = options;
+        const { document, key, templateInfo, isJsSource } = options;
         const langId = document.languageId;
 
-        const isJsLike = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'].includes(langId);
         const isVueLike = langId === 'vue';
         const isBladeLike = langId === 'blade' || langId === 'php';
 
@@ -129,7 +128,7 @@ export class FrameworkCodeGenerator {
     /**
      * Get framework-specific import path
      */
-    static getImportPath(document: vscode.TextDocument): string {
+    static getImportPath(_document: vscode.TextDocument): string {
         const config = vscode.workspace.getConfiguration('ai-localizer');
         return config.get<string>('i18n.tImportPath') || '@/i18n';
     }

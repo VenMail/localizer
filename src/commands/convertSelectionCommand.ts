@@ -8,7 +8,7 @@ import { pickWorkspaceFolder } from '../core/workspace';
 import { SelectionStringDetector } from './untranslated/utils/SelectionStringDetector';
 import { TranslationKeyGenerator } from './untranslated/utils/TranslationKeyGenerator';
 import { FrameworkCodeGenerator } from './untranslated/utils/FrameworkCodeGenerator';
-import { TemplateLiteralProcessor, TemplateInfo } from './untranslated/utils/TemplateLiteralProcessor';
+import { TemplateInfo } from './untranslated/utils/TemplateLiteralProcessor';
 
 /**
  * Command to convert selected text to translation key
@@ -400,7 +400,7 @@ export class ConvertSelectionCommand {
         const syncScript = config.get<string>('i18n.syncScript');
         if (syncScript) {
             try {
-                await new Promise<void>((resolve, reject) => {
+                await new Promise<void>((resolve, _reject) => {
                     exec(syncScript, { cwd: folder.uri.fsPath }, (error: any) => {
                         if (error) {
                             console.warn('Sync script failed:', error);

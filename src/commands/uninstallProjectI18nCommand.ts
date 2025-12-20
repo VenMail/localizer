@@ -310,7 +310,7 @@ export class UninstallProjectI18nCommand {
 
                 const callStart = match.index;
                 const key = match[2];
-                if (!key || !/^[A-Za-z0-9_\.\-]+$/.test(key)) {
+                if (!key || !/^[A-Za-z0-9_.-]+$/.test(key)) {
                     continue;
                 }
 
@@ -440,7 +440,7 @@ export class UninstallProjectI18nCommand {
         if (!trimmed) return true;
         if (trimmed === key) return true;
 
-        if (/^[A-Za-z0-9_]+(\.[A-Za-z0-9_\-]+)+$/.test(trimmed) && !/\s/.test(trimmed)) {
+        if (/^[A-Za-z0-9_]+(\.[A-Za-z0-9_-]+)+$/.test(trimmed) && !/\s/.test(trimmed)) {
             return true;
         }
 
@@ -846,14 +846,14 @@ export class UninstallProjectI18nCommand {
     private findTImportRanges(text: string, importPath: string): Array<{ start: number; end: number }> {
         const escaped = importPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const re = new RegExp(
-            `(^|\\r?\\n)([\\t ]*import\\s*\\{\\s*t\\s*\\}\\s*from\\s*['\"]${escaped}['\"]\\s*;?[\\t ]*)(?=\\r?\\n|$)`,
+            `(^|\\r?\\n)([\\t ]*import\\s*\\{\\s*t\\s*\\}\\s*from\\s*['"]${escaped}['"]\\s*;?[\\t ]*)(?=\\r?\\n|$)`,
             'g',
         );
 
         const ranges: Array<{ start: number; end: number }> = [];
         let m: RegExpExecArray | null;
         while ((m = re.exec(text))) {
-            const full = m[0];
+            const _full = m[0];
             const prefix = m[1] || '';
             const importStmt = m[2] || '';
             const stmtStart = m.index + prefix.length;

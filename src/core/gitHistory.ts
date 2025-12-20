@@ -1,9 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 /**
@@ -14,7 +13,7 @@ function isValidGitRef(ref: string): boolean {
     if (!ref || typeof ref !== 'string') return false;
     // Git refs: alphanumeric, hyphen, underscore, slash, dot, ^, ~, @, numbers after ^ or ~
     // Reject anything with shell metacharacters: $, `, ", ', \, |, ;, &, etc.
-    return /^[A-Za-z0-9_.\/\-^~@]+$/.test(ref) && ref.length < 256;
+    return /^[A-Za-z0-9_.^~@/-]+$/.test(ref) && ref.length < 256;
 }
 
 // Timeout for git operations (30 seconds for larger repos)

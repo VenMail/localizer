@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { TextEncoder, TextDecoder } from 'util';
 import { I18nIndex } from '../core/i18nIndex';
 import { TranslationService } from '../services/translationService';
@@ -521,16 +520,16 @@ export class ProjectFixCommand {
             }
         }
 
-        const tCallRegex = /(^|[^a-zA-Z0-9_$])(\$?)t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_\.\-:]+)\3\s*([,)])/gm;
+        const tCallRegex = /(^|[^a-zA-Z0-9_$])(\$?)t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.:-]+)\3\s*([,)])/gm;
         const laravelCallRegexes: Array<{ regex: RegExp; keyGroup: number }> = [
-            { regex: /\b__\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\1\s*(?:,|\))/g, keyGroup: 2 },
-            { regex: /\btrans\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\1\s*(?:,|\))/g, keyGroup: 2 },
-            { regex: /@lang\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\1\s*(?:,|\))/g, keyGroup: 2 },
+            { regex: /\b__\s*\(\s*(['"])([A-Za-z0-9_.:-]+)\1\s*(?:,|\))/g, keyGroup: 2 },
+            { regex: /\btrans\s*\(\s*(['"])([A-Za-z0-9_.:-]+)\1\s*(?:,|\))/g, keyGroup: 2 },
+            { regex: /@lang\s*\(\s*(['"])([A-Za-z0-9_.:-]+)\1\s*(?:,|\))/g, keyGroup: 2 },
         ];
         const pythonCallRegexes: Array<{ regex: RegExp; keyGroup: number }> = [
-            { regex: /\b(_|gettext)\s*\(\s*(['"])([A-Za-z0-9_\.\-:]+)\2\s*(?:,|\))/g, keyGroup: 3 },
+            { regex: /\b(_|gettext)\s*\(\s*(['"])([A-Za-z0-9_.:-]+)\2\s*(?:,|\))/g, keyGroup: 3 },
         ];
-        const keyLiteralRegex = /(['"`])([A-Za-z0-9_\-]+(?:[\.:][A-Za-z0-9_\-]+)+)\1/g;
+        const keyLiteralRegex = /(['"`])([A-Za-z0-9_-]+(?:[.:][A-Za-z0-9_-]+)+)\1/g;
 
         for (const uri of uris) {
             try {

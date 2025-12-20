@@ -14,7 +14,7 @@ async function fileExists(uri: vscode.Uri): Promise<boolean> {
 export async function ensureVueI18nRuntime(
     context: vscode.ExtensionContext,
     folder: vscode.WorkspaceFolder,
-    switcherRelativePath: string,
+    _switcherRelativePath: string,
 ): Promise<void> {
     const env = await getProjectEnv(folder);
     const looksTs = env.isTypeScript;

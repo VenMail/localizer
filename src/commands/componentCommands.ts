@@ -94,7 +94,6 @@ export class ComponentCommands {
         const profile = await detectFrameworkProfile(folder);
 
         let isVue = profile?.kind === 'vue' || profile?.kind === 'nuxt';
-        let isReact = profile?.kind === 'react' || (!isVue && profile?.kind !== 'laravel');
 
         if (profile?.kind === 'laravel') {
             const pick = await vscode.window.showQuickPick(
@@ -106,7 +105,6 @@ export class ComponentCommands {
             );
             if (!pick) return;
             isVue = pick.label === 'Vue';
-            isReact = pick.label === 'React';
         }
 
         const targetFileName = isVue ? 'LanguageSwitcher.vue' : `LanguageSwitcher.${looksTs ? 'tsx' : 'jsx'}`;

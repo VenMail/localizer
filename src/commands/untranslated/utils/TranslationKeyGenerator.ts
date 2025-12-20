@@ -47,7 +47,7 @@ export class TranslationKeyGenerator {
         if (cleaned.length > 24) {
             return false;
         }
-        if (/[\/_]/.test(cleaned)) {
+        if (/[/_]/.test(cleaned)) {
             return false;
         }
         return true;

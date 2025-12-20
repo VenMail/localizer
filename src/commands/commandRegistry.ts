@@ -18,9 +18,12 @@ import { ScaffoldMessagesCommand } from './scaffoldMessagesCommand';
 import { ProjectFixCommand } from './projectFixCommand';
 import { UninstallProjectI18nCommand } from './uninstallProjectI18nCommand';
 import { AskAICommand } from './askAICommand';
+import { DisableProjectCommand, EnableProjectCommand } from './projectIgnoreCommand';
 import { operationLock } from './untranslated/utils/operationLock';
 import { ReviewGeneratedService } from '../services/reviewGeneratedService';
 import * as path from 'path';
+
+type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 /**
  * Registry for all extension commands
@@ -28,7 +31,7 @@ import * as path from 'path';
 export class CommandRegistry {
     private diagnosticAnalyzer: DiagnosticAnalyzer;
     private refreshAllDiagnosticsPromise: Promise<void> | null = null;
-    private localeDiagnosticsDebounce = new Map<string, NodeJS.Timeout>();
+    private localeDiagnosticsDebounce = new Map<string, TimeoutHandle>();
     private static readonly LOCALE_DIAG_DEBOUNCE_MS = 1200;
 
     constructor(
@@ -145,8 +148,12 @@ export class CommandRegistry {
 
         // Ask AI command (prompt injection)
         const askAiCmd = new AskAICommand(this.context);
+        const disableProjectCmd = new DisableProjectCommand(this.context);
+        const enableProjectCmd = new EnableProjectCommand(this.context);
         disposables.push(
             vscode.commands.registerCommand('ai-localizer.askAI', () => askAiCmd.execute()),
+            vscode.commands.registerCommand('ai-localizer.project.disable', () => disableProjectCmd.execute()),
+            vscode.commands.registerCommand('ai-localizer.project.enable', () => enableProjectCmd.execute()),
         );
 
         // Rescan command
@@ -838,7 +845,7 @@ export class CommandRegistry {
         };
 
         // Debounce map for source file analysis
-        const sourceFileDebounceTimers = new Map<string, NodeJS.Timeout>();
+        const sourceFileDebounceTimers = new Map<string, TimeoutHandle>();
         const SOURCE_FILE_DEBOUNCE_MS = 500;
 
         const refreshSourceFileDiagnostics = async (document: vscode.TextDocument, immediate = false) => {

@@ -89,7 +89,7 @@ export class UntranslatedCommands {
         return this.reportHandler.generateAutoIgnore(folderArg);
     }
 
-    async reviewSelection(documentUri?: vscode.Uri): Promise<void> {
+    async reviewSelection(_documentUri?: vscode.Uri): Promise<void> {
         return this.reportHandler.reviewSelection(
             (uri, key, locales) => this.translationHandler.applyQuickFix(uri, key, locales),
         );

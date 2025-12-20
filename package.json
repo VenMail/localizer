@@ -47,6 +47,8 @@
     "onCommand:ai-localizer.i18n.showHealthReport",
     "onCommand:ai-localizer.i18n.fixAllIssuesInProject",
     "onCommand:ai-localizer.i18n.uninstallProjectI18n",
+    "onCommand:ai-localizer.project.disable",
+    "onCommand:ai-localizer.project.enable",
     "onLanguage:javascript",
     "onLanguage:typescript",
     "onLanguage:javascriptreact",
@@ -192,6 +194,14 @@
       {
         "command": "ai-localizer.i18n.uninstallProjectI18n",
         "title": "AI Localizer: Uninstall i18n from Project"
+      },
+      {
+        "command": "ai-localizer.project.disable",
+        "title": "AI Localizer: Disable for this Project"
+      },
+      {
+        "command": "ai-localizer.project.enable",
+        "title": "AI Localizer: Enable for this Project"
       },
       {
         "command": "ai-localizer.i18n.gotoTranslationFromHover",
@@ -406,6 +416,7 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
+    "package": "vsce package",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -441,6 +452,7 @@
     "@types/vscode": "^1.60.0",
     "@typescript-eslint/eslint-plugin": "^5.42.0",
     "@typescript-eslint/parser": "^5.42.0",
+    "@vscode/vsce": "^3.7.1",
     "eslint": "^8.26.0",
     "ts-node": "^10.9.2",
     "typescript": "^4.8.4",

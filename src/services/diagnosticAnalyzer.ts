@@ -163,7 +163,6 @@ export class DiagnosticAnalyzer {
         const keysToAnalyze = extraKeys && extraKeys.length
             ? Array.from(new Set<string>([...fileKeys, ...extraKeys]))
             : fileKeys;
-        const changedKeysSet = new Set<string>(extraKeys || []);
         
         if (!fileLocale) {
             this.safeLog(`[DiagnosticAnalyzer] Cannot determine locale for file: ${uri.fsPath}`);
@@ -631,7 +630,7 @@ export class DiagnosticAnalyzer {
         let stripped = trimmed
             .replace(/\{\{\s*[^}]+\s*\}\}/g, ' ')
             .replace(/\{[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\}/g, ' ');
-        stripped = stripped.replace(/[()\[\]{},.:;'"!?\-_]/g, ' ');
+        stripped = stripped.replace(/[-[\](){}.,:;'"!?_]/g, ' ');
         stripped = stripped.replace(/\s+/g, ' ').trim();
         if (!stripped) {
             return true;
@@ -708,7 +707,10 @@ export class DiagnosticAnalyzer {
         }
 
         // Complex CSS/utility token (single token with :, [], etc.)
-        if (!/\s/.test(normalized) && /[:\[\]]/.test(normalized) && /^[A-Za-z0-9:._\-\[\]]+$/.test(normalized)) {
+        const hasCssTokenDelimiters =
+            normalized.includes(':') || normalized.includes('[') || normalized.includes(']');
+        const cssTokenBody = normalized.replace(/\[/g, '').replace(/\]/g, '');
+        if (!/\s/.test(normalized) && hasCssTokenDelimiters && /^[A-Za-z0-9:._-]+$/.test(cssTokenBody)) {
             return true;
         }
 

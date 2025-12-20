@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { TextDecoder } from 'util';
 
 export type FrameworkKind = 'react' | 'vue' | 'nuxt' | 'laravel';

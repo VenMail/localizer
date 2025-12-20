@@ -7,9 +7,23 @@ import { CommandRegistry } from './commands/commandRegistry';
 import { TranslationService } from './services/translationService';
 import { ProjectConfigService } from './services/projectConfigService';
 import { FileSystemService } from './services/fileSystemService';
+import { isProjectDisabled } from './utils/projectIgnore';
 
 export function activate(context: vscode.ExtensionContext) {
     try {
+        // Check if extension is disabled for any workspace folder
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.some(folder => isProjectDisabled(folder))) {
+            const disabledFolders = workspaceFolders
+                .filter(folder => isProjectDisabled(folder))
+                .map(folder => folder.name);
+            
+            vscode.window.showWarningMessage(
+                `AI Localizer is disabled for: ${disabledFolders.join(', ')}. Remove .i18n.ignore files to re-enable.`
+            );
+            return;
+        }
+
         const output = vscode.window.createOutputChannel('AI i18n');
         output.appendLine('[activate] Activating AI i18n extension...');
 

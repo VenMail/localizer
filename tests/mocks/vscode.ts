@@ -11,7 +11,21 @@ export const workspace = {
     getWorkspaceFolder: () => ({ uri: Uri.file('/') }),
 };
 
+export enum ViewColumn {
+    Active = -1,
+    Beside = -2,
+    One = 1,
+    Two,
+    Three,
+}
+
+type OutputChannelShow = {
+    (preserveFocus?: boolean): void;
+    (column?: ViewColumn, preserveFocus?: boolean): void;
+};
+
 export class MockOutputChannel {
+    public readonly name = 'mock-output';
     public lines: string[] = [];
     appendLine(message: string): void {
         this.lines.push(message);
@@ -19,10 +33,17 @@ export class MockOutputChannel {
     append(message: string): void {
         this.lines.push(message);
     }
+    replace(message: string): void {
+        if (this.lines.length) {
+            this.lines[this.lines.length - 1] = message;
+        } else {
+            this.lines.push(message);
+        }
+    }
     clear(): void {
         this.lines = [];
     }
-    show(): void {}
+    show: OutputChannelShow = (_columnOrFocus?: boolean | ViewColumn, _preserveFocus?: boolean) => {};
     hide(): void {}
     dispose(): void {}
 }

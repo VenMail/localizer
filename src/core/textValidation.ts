@@ -49,14 +49,10 @@ export function hasEnglishPhoneticPattern(word: string): boolean {
 
     // Count vowels and consonants
     let vowelCount = 0;
-    let consonantCount = 0;
 
     for (const char of lower) {
         if (vowels.includes(char)) {
             vowelCount += 1;
-        }
-        else if (consonants.includes(char)) {
-            consonantCount += 1;
         }
     }
 
@@ -142,6 +138,7 @@ export function containsEnglishWords(text: string): boolean {
     const trimmed = text.trim();
 
     const words = trimmed
+        // eslint-disable-next-line no-useless-escape -- need bracket literals inside char class
         .split(/[\s,;.!?()\[\]{}]+/)
         .filter((w) => w.length > 0);
 

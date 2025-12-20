@@ -60,8 +60,6 @@ export class ExtractSelectionCommand {
                         .filter((item: ExtractedItem) => item.type === 'text' || item.type === 'string')
                         .map((item: ExtractedItem) => item.text);
 
-                    const message = `Found ${results.stats.extracted} translatable string(s) in selection:\n\n${extractedStrings.map((s: string, i: number) => `${i + 1}. "${s}"`).join('\n')}`;
-                    
                     const choice = await vscode.window.showInformationMessage(
                         `AI Localizer: Extracted ${results.stats.extracted} translatable string(s) from selection.`,
                         'View Results',

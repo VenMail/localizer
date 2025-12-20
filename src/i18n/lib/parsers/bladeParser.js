@@ -15,7 +15,7 @@
 
 const { BaseParser } = require('./baseParser');
 const { shouldTranslate, isTranslatableAttribute, isNonTranslatableAttribute } = require('../validators');
-const { STRING_PATTERNS } = require('../../commands/untranslated/utils/StringPatterns');
+const { STRING_PATTERNS } = require('../../../commands/untranslated/utils/StringPatterns');
 
 class BladeParser extends BaseParser {
   static getExtensions() {

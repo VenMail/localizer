@@ -125,7 +125,7 @@ export class TemplateLiteralProcessor {
      */
     static hasTranslatableContent(template: string): boolean {
         const combinedText = this.getCombinedStaticText(template);
-        return combinedText.length > 0 && !/^[.,;:!?'"()[\]{}<>\/\\|@#$%^&*+=~`-]+$/.test(combinedText);
+        return combinedText.length > 0 && !/^[.,;:!?'"()[\]{}<>/\\|@#$%^&*+=~`-]+$/.test(combinedText);
     }
 
     /**

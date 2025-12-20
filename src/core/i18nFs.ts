@@ -60,7 +60,7 @@ export function clearLocaleDirCache(): void {
 
 function toPascalCase(input: string): string {
     const words = String(input || '')
-        .replace(/[_\-]+/g, ' ')
+        .replace(/[-_]+/g, ' ')
         .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
         .split(/\s+/)
         .filter(Boolean);

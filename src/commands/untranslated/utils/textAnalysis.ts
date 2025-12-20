@@ -34,7 +34,7 @@ export function computeEditDistance(a: string, b: string): number {
  */
 export function buildLabelFromKeySegment(segment: string): string {
     if (!segment) return '';
-    const replaced = segment.replace(/[_\-]+/g, ' ');
+    const replaced = segment.replace(/[-_]+/g, ' ');
     const parts = replaced.split(/\s+/).filter(Boolean);
     if (!parts.length) return '';
     return parts
@@ -149,7 +149,6 @@ export function looksLikeUserText(str: string): boolean {
     if (looksLikeCodePattern(trimmed)) return false;
 
     // Positive indicators
-    const hasSpaces = trimmed.includes(' ');
     const startsWithCapital = /^[A-Z]/.test(trimmed);
     const hasSentencePunctuation = /[.!?:]$/.test(trimmed);
     const hasCommonWords = /\b(the|and|or|to|is|are|was|has|have|this|that|your|our|please|click|tap|select|add|save|cancel|delete|edit|view|open|close|enter|submit|confirm|error|success|warning|loading|welcome|hello|hi|thanks|sorry|oops|done|next|back|continue|finish|start|stop|pause|play|search|find|filter|sort|show|hide|enable|disable|on|off|yes|no|ok|failed|try|again)\b/i.test(trimmed);

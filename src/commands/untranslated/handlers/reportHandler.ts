@@ -4,7 +4,7 @@ import { I18nIndex } from '../../../core/i18nIndex';
 import { TranslationService } from '../../../services/translationService';
 import { setTranslationValuesBatch } from '../../../core/i18nFs';
 import { pickWorkspaceFolder } from '../../../core/workspace';
-import { sharedDecoder, sharedEncoder, readJsonFile, writeJsonFile } from '../utils/jsonUtils';
+import { sharedDecoder, sharedEncoder, writeJsonFile } from '../utils/jsonUtils';
 
 export class ReportHandler {
     constructor(
@@ -375,7 +375,7 @@ export class ReportHandler {
             await this.i18nIndex.ensureInitialized();
 
             const selectionText = document.getText(selection);
-            const keyRegex = /['"`]([A-Za-z0-9_\.\-]+)['"`]/g;
+            const keyRegex = /['"`]([A-Za-z0-9_.-]+)['"`]/g;
             const keysInSelection = new Set<string>();
 
             let match: RegExpExecArray | null;

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder, TextEncoder } from 'util';
-import { findPackageJson, pickWorkspaceFolder } from '../core/workspace';
+import { findPackageJson } from '../core/workspace';
 
 export interface ProjectConfig {
     locales: string[];

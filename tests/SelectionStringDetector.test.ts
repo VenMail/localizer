@@ -9,16 +9,6 @@ const fullSelection = (doc: MockTextDocument): Range => {
     return new Range(new Position(0, 0), new Position(lastLineIndex, lastLineLength));
 };
 
-const selectSubstring = (doc: MockTextDocument, fragment: string): Range => {
-    const text = doc.getText();
-    const start = text.indexOf(fragment);
-    if (start === -1) {
-        throw new Error(`Fragment "${fragment}" not found in mock document`);
-    }
-    const end = start + fragment.length;
-    return new Range(doc.positionAt(start), doc.positionAt(end));
-};
-
 describe('SelectionStringDetector', () => {
     it('detects JSX expression strings inside selections', () => {
         const doc = new MockTextDocument('const view = <button>{"Click me"}</button>;', 'typescriptreact');

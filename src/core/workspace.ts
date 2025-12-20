@@ -243,7 +243,7 @@ export async function runI18nScript(
 
     await new Promise<void>((resolve, reject) => {
         let settled = false;
-        let timeoutId: NodeJS.Timeout | undefined;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
         const child = spawn(command, {
             cwd: folder!.uri.fsPath,

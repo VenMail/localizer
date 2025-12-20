@@ -16,12 +16,11 @@ interface MonitorState {
 
 const DEBOUNCE_DELAY = 5000; // 5 seconds - increased to reduce prompt frequency
 const MIN_INTERVAL_BETWEEN_PROMPTS = 300000; // 5 minutes - minimum time between showing prompts
-const MIN_INTERVAL_BETWEEN_RUNS = 30000; // 30 seconds - minimum time between actual runs
 
 export class AutoMonitor {
     private states = new Map<string, MonitorState>();
     private disposables: vscode.Disposable[] = [];
-    private debounceTimers = new Map<string, NodeJS.Timeout>();
+    private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
     constructor() {
         this.setupFileWatcher();

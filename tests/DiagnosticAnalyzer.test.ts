@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { DiagnosticAnalyzer, DiagnosticConfig } from '../src/services/diagnosticAnalyzer';
-import { MockOutputChannel, workspace, Uri, DiagnosticSeverity } from 'vscode';
+import { workspace, Uri, DiagnosticSeverity } from 'vscode';
+import { MockOutputChannel } from './mocks/vscode';
 import type { I18nIndex, TranslationRecord } from '../src/core/i18nIndex';
 import type { ProjectConfigService } from '../src/services/projectConfigService';
 

@@ -20,7 +20,7 @@ export const STRING_PATTERNS = {
     bladeArray: /^\s*(['"])([^'"]+)\1\s*=>\s*(['"])([\s\S]+?)\3\s*,?\s*$/s,
     
     // Alpine.js x-text string literals
-    alpineText: /(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\1/g,
+    alpineText: /(['"`])([^'"`\\]*(?:\\.[^'"`\\]*)*)\1/g,
     
     // Alpine.js ternary expressions
     alpineTernary: /\?\s*(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\1\s*:\s*(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\3/g,
@@ -81,4 +81,4 @@ export const CODE_PATTERNS = [
 /**
  * Punctuation-only patterns to skip
  */
-export const PUNCTUATION_ONLY = /^[.,;:!?'"()[\]{}<>\/\\|@#$%^&*+=~`-]+$/;
+export const PUNCTUATION_ONLY = /^[.,;:!?'"()[\]{}<>/\\|@#$%^&*+=~`-]+$/;

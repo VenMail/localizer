@@ -6,8 +6,9 @@
     "lib": ["es2020"],
     "sourceMap": true,
     "rootDir": "src",
-    "strict": true
+    "strict": true,
+    "allowJs": true
   },
   "exclude": ["node_modules", ".vscode-test", "src/i18n/runtime", "src/i18n/components", "tests"],
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.js"]
 }

@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { I18nIndex, extractKeyAtPosition } from '../../../core/i18nIndex';
 import {
-    clearLocaleDirCache,
     setLaravelTranslationValue,
     setTranslationValue,
     setTranslationValuesBatch,
@@ -34,8 +33,10 @@ import { getBatchRecoveryHandler } from './batchRecoveryHandler';
 import { clearLocaleCaches } from '../utils/localeCache';
 import { operationLock, OperationType } from '../utils/operationLock';
 
+type TimeoutHandle = ReturnType<typeof setTimeout>;
+
 export class KeyManagementHandler {
-    private deletionGuardPending: Map<string, { key: string; value: string; timeout: NodeJS.Timeout }> = new Map();
+    private deletionGuardPending: Map<string, { key: string; value: string; timeout: TimeoutHandle }> = new Map();
 
     constructor(
         private i18nIndex: I18nIndex,
@@ -832,15 +833,15 @@ export class KeyManagementHandler {
         if (isLaravelSource) {
             const patterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [
                 {
-                    regex: /\b__\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g,
+                    regex: /\b__\s*\(\s*(['"])([A-Za-z0-9_.-]+)\1\s*(?:,|\))/g,
                     keyGroupIndex: 2,
                 },
                 {
-                    regex: /\btrans\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g,
+                    regex: /\btrans\s*\(\s*(['"])([A-Za-z0-9_.-]+)\1\s*(?:,|\))/g,
                     keyGroupIndex: 2,
                 },
                 {
-                    regex: /@lang\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\1\s*(?:,|\))/g,
+                    regex: /@lang\s*\(\s*(['"])([A-Za-z0-9_.-]+)\1\s*(?:,|\))/g,
                     keyGroupIndex: 2,
                 },
             ];
@@ -876,7 +877,7 @@ export class KeyManagementHandler {
                 }
             }
         } else {
-            const tCallRegex = /\b(\$?)t\s*\(\s*(['"])([A-Za-z0-9_\.\-]+)\2\s*([,)])/g;
+            const tCallRegex = /\b(\$?)t\s*\(\s*(['"])([A-Za-z0-9_.-]+)\2\s*([,)])/g;
             let match;
             // eslint-disable-next-line no-cond-assign
             while ((match = tCallRegex.exec(text)) !== null) {
@@ -1389,7 +1390,6 @@ export class KeyManagementHandler {
             }
 
             const relativePath = path.relative(folder.uri.fsPath, sourceUri.fsPath).replace(/\\/g, '/');
-            const timestamp = new Date().toISOString();
 
             // Find or create file entry
             let fileEntry = existingReport.files?.find((f: any) => f.file === relativePath);

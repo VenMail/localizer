@@ -859,7 +859,7 @@ export class CleanupHandler {
         }
 
         // Safety check for keys in use
-        const usages = Array.isArray(entry.usages) ? entry.usages : [];
+        const _usages = Array.isArray(entry.usages) ? entry.usages : [];
 
         const hasCurrentUsages = await this.checkKeyUsageInCode(folder, keyPath);
         if (hasCurrentUsages) {
