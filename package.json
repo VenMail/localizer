@@ -424,7 +424,14 @@
     "lint": "eslint src --ext ts",
     "package": "vsce package",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "i18n:extract": "node ./scripts/extract-i18n.js",
+    "i18n:rewrite": "node ./scripts/replace-i18n.js",
+    "i18n:sync": "node ./scripts/sync-i18n.js",
+    "i18n:fix-untranslated": "node ./scripts/fix-untranslated.js",
+    "i18n:rewrite-blade": "node ./scripts/rewrite-i18n-blade.js",
+    "i18n:cleanup-unused": "node ./scripts/cleanup-i18n-unused.js",
+    "i18n:restore-invalid": "node ./scripts/restore-i18n-invalid.js"
   },
   "build:icon": "npx --yes svgexport resources/icons/ai-localizer.svg resources/icons/ai-localizer-128.png 128:128",
   "build:icons": "npm run build:icon && npx --yes svgexport resources/icons/ai-localizer.svg resources/icons/ai-localizer-256.png 256:256",
@@ -469,5 +476,6 @@
     "node-fetch": "^2.7.0",
     "openai": "^4.0.0",
     "oxc-parser": "^0.89.0"
-  }
+  },
+  "aiI18n": {}
 }

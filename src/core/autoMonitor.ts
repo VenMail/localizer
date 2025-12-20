@@ -46,7 +46,9 @@ export class AutoMonitor {
         // Check for outdated scripts when workspace is opened
         const openHandler = vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
             for (const folder of event.added) {
-                await this.checkForOutdatedScripts(folder);
+                if (!isProjectDisabled(folder)) {
+                    await this.checkForOutdatedScripts(folder);
+                }
             }
         });
         
@@ -54,7 +56,9 @@ export class AutoMonitor {
         setTimeout(() => {
             const folders = vscode.workspace.workspaceFolders || [];
             for (const folder of folders) {
-                this.checkForOutdatedScripts(folder);
+                if (!isProjectDisabled(folder)) {
+                    this.checkForOutdatedScripts(folder);
+                }
             }
         }, 2000); // Delay to allow VS Code to fully load
         
@@ -74,6 +78,7 @@ export class AutoMonitor {
         // Check if project is disabled
         if (isProjectDisabled(folder)) {
             state.lastScriptCheckTime = now;
+            this.saveScriptCheckTime(folderKey, now);
             return; // Project is disabled
         }
         
@@ -83,10 +88,12 @@ export class AutoMonitor {
         
         if (promptsDisabled) {
             state.lastScriptCheckTime = now;
+            this.saveScriptCheckTime(folderKey, now);
             return; // Prompts are disabled for this project
         }
         
         state.lastScriptCheckTime = now;
+        this.saveScriptCheckTime(folderKey, now);
         
         try {
             const outdatedScripts = await this.detectOutdatedScripts(folder);
@@ -599,6 +606,9 @@ export class AutoMonitor {
     private getOrCreateState(folderKey: string): MonitorState {
         let state = this.states.get(folderKey);
         if (!state) {
+            // Load persisted script check time from workspace state
+            const persistedTime = this.context.workspaceState.get<number>(`ai-localizer.lastScriptCheckTime.${folderKey}`, 0);
+            
             state = {
                 lastExtractTime: 0,
                 lastRewriteTime: 0,
@@ -607,11 +617,15 @@ export class AutoMonitor {
                 isProcessing: false,
                 promptDismissedThisSession: false,
                 outdatedScriptsChecked: false,
-                lastScriptCheckTime: 0,
+                lastScriptCheckTime: persistedTime,
             };
             this.states.set(folderKey, state);
         }
         return state;
+    }
+
+    private saveScriptCheckTime(folderKey: string, time: number): void {
+        this.context.workspaceState.update(`ai-localizer.lastScriptCheckTime.${folderKey}`, time);
     }
 
     dispose(): void {
