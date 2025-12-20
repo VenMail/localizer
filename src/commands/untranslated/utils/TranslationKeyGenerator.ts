@@ -81,7 +81,7 @@ export class TranslationKeyGenerator {
             'title': 'heading',
             
             // Buttons and actions
-            'button': 'button', 'input': 'button',
+            'button': 'button',
             'a': 'button', 'link': 'button',
             
             // Labels and form elements

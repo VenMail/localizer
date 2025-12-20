@@ -1,0 +1,12 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "module": "esnext",
+        "types": ["vitest/globals"]
+    },
+    "include": [
+        "src/**/*.ts",
+        "tests/**/*.ts",
+        "vitest.config.ts"
+    ]
+}

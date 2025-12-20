@@ -8,5 +8,6 @@
     "rootDir": "src",
     "strict": true
   },
-  "exclude": ["node_modules", ".vscode-test", "src/i18n/runtime", "src/i18n/components"]
+  "exclude": ["node_modules", ".vscode-test", "src/i18n/runtime", "src/i18n/components", "tests"],
+  "include": ["src/**/*.ts"]
 }

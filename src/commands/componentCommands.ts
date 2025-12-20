@@ -181,7 +181,7 @@ export class ComponentCommands {
         }
 
         if (isVue) {
-            const templateFileName = 'LanguageSwitcher.vue';
+            const templateFileName = 'LanguageSwitcher.vue.txt';
             const src = vscode.Uri.joinPath(
                 this.context.extensionUri,
                 'src',
@@ -218,7 +218,7 @@ export class ComponentCommands {
             await ensureVueI18nRuntime(this.context, folder, relativePath);
         } else {
             const useTsx = relativePath.toLowerCase().endsWith('.tsx') || (!relativePath.toLowerCase().endsWith('.jsx') && looksTs);
-            const templateFileName = useTsx ? 'LanguageSwitcher.tsx' : 'LanguageSwitcher.jsx';
+            const templateFileName = useTsx ? 'LanguageSwitcher.tsx.txt' : 'LanguageSwitcher.jsx.txt';
             const src = vscode.Uri.joinPath(
                 this.context.extensionUri,
                 'src',

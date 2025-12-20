@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getParserForFile, getFrameworkInfo, ExtractedItem, ParseResult, Parser } from '../i18n/lib/parsers';
+import { getParserForFile, ExtractedItem } from '../i18n/lib/parsers';
 import { FRAMEWORK_PREPROCESSORS } from './untranslated/utils/StringPatterns';
 
 export class ExtractSelectionCommand {
@@ -44,10 +44,9 @@ export class ExtractSelectionCommand {
                     progress.report({ message: 'Extracting strings...' });
                     
                     // Parse the selected text with framework-aware preprocessing
-                    const frameworkInfo = getFrameworkInfo(document.fileName);
-                    const frameworkName = frameworkInfo?.name || 'generic';
-                    const preprocessor = FRAMEWORK_PREPROCESSORS[frameworkName as keyof typeof FRAMEWORK_PREPROCESSORS] || FRAMEWORK_PREPROCESSORS.generic;
-                    let parseText = preprocessor(selectedText);
+                    const frameworkKey = normalizeFrameworkName((parser as any).constructor?.getName?.());
+                    const preprocessor = FRAMEWORK_PREPROCESSORS[frameworkKey as keyof typeof FRAMEWORK_PREPROCESSORS] || FRAMEWORK_PREPROCESSORS.generic;
+                    const parseText = preprocessor(selectedText);
                     
                     const results = parser.parse(parseText);
                     
@@ -88,4 +87,14 @@ export class ExtractSelectionCommand {
             vscode.window.showErrorMessage(`AI Localizer: Failed to extract from selection. ${message}`);
         }
     }
+}
+
+function normalizeFrameworkName(rawName: string | undefined): string {
+    if (!rawName) return 'generic';
+    const name = rawName.toLowerCase();
+    if (name.includes('vue')) return 'vue';
+    if (name.includes('jsx') || name.includes('tsx') || name.includes('react')) return 'jsx';
+    if (name.includes('blade') || name.includes('laravel')) return 'blade';
+    if (name.includes('svelte')) return 'svelte';
+    return 'generic';
 }
