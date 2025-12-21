@@ -224,6 +224,8 @@ Example (user or workspace settings):
 - Enable auto ai prompting.
 - Stale script update.
 - Improved selection commands.
+- Add eslint.
+- Refactor code for easier maintenance.
 
 ### 0.1.7
 
