@@ -195,8 +195,15 @@ export class FileSystemService {
             try {
                 const data = await vscode.workspace.fs.readFile(src);
                 let content = this.decoder.decode(data);
+
+                // Preserve shebangs so Node can execute the script directly
+                const shebangMatch = content.match(/^#![^\r\n]*(?:\r?\n)?/);
+                const shebang = shebangMatch ? shebangMatch[0] : '';
+                if (shebang) {
+                    content = content.slice(shebang.length);
+                }
                 
-                // Add version comment at the top of the script if not already present
+                // Add or update version comment (always placed after the shebang)
                 if (!content.match(/\/\/\s*Version:/i) && !content.match(/\/\*\s*Version:/i)) {
                     const versionComment = `// Version: ${currentVersion}\n`;
                     content = versionComment + content;
@@ -205,8 +212,10 @@ export class FileSystemService {
                     content = content.replace(/\/\/\s*Version:\s*[0-9]+\.[0-9]+\.[0-9]+/i, `// Version: ${currentVersion}`);
                     content = content.replace(/\/\*\s*Version:\s*[0-9]+\.[0-9]+\.[0-9]+\s*\*\//i, `/* Version: ${currentVersion} */`);
                 }
+
+                const finalContent = shebang ? `${shebang.endsWith('\n') ? shebang : `${shebang}\n`}${content}` : content;
                 
-                await vscode.workspace.fs.writeFile(dest, this.encoder.encode(content));
+                await vscode.workspace.fs.writeFile(dest, this.encoder.encode(finalContent));
             } catch (err) {
                 console.error(`AI Localizer: Failed to copy i18n script ${name}:`, err);
                 vscode.window.showWarningMessage(
