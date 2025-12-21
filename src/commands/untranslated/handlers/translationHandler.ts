@@ -7,6 +7,7 @@ import { setLaravelTranslationValue, setTranslationValuesBatch } from '../../../
 import { getGranularSyncService } from '../../../services/granularSyncService';
 import { pickWorkspaceFolder } from '../../../core/workspace';
 import { operationLock, OperationType } from '../utils/operationLock';
+import { isProjectDisabled } from '../../../utils/projectIgnore';
 
 export interface TranslationItem {
     key: string;
@@ -237,6 +238,14 @@ export class TranslationHandler {
         }
         if (!folder) {
             vscode.window.showInformationMessage('AI Localizer: No workspace folder available.');
+            return;
+        }
+
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            vscode.window.showWarningMessage(
+                'AI Localizer: Project is disabled. Enable it via workspace settings before using translation features.'
+            );
             return;
         }
 
@@ -728,14 +737,29 @@ export class TranslationHandler {
             return;
         }
 
+        // Filter out disabled projects
+        const enabledFolders = folders.filter(folder => !isProjectDisabled(folder));
+        if (enabledFolders.length === 0) {
+            vscode.window.showWarningMessage(
+                'AI Localizer: All workspace folders are disabled. Enable them via workspace settings before using translation features.'
+            );
+            return;
+        }
+
+        if (enabledFolders.length < folders.length) {
+            vscode.window.showInformationMessage(
+                `AI Localizer: Skipping ${folders.length - enabledFolders.length} disabled workspace folder(s).`
+            );
+        }
+
         // Check if another operation is blocking
         if (!(await this.canProceed('translation-project', 'Fix All i18n Issues in Project'))) {
             return;
         }
 
         let folder: vscode.WorkspaceFolder | undefined;
-        if (folders.length === 1) {
-            folder = folders[0];
+        if (enabledFolders.length === 1) {
+            folder = enabledFolders[0];
         } else {
             folder = await pickWorkspaceFolder();
         }

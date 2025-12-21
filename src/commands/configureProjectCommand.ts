@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ProjectConfigService } from '../services/projectConfigService';
 import { FileSystemService } from '../services/fileSystemService';
 import { pickWorkspaceFolder } from '../core/workspace';
+import { isProjectDisabled } from '../utils/projectIgnore';
 
 /**
  * Command to configure project i18n settings
@@ -26,6 +27,14 @@ export class ConfigureProjectCommand {
 
         if (!folder) {
             vscode.window.showInformationMessage('AI Localizer: No workspace folder available to configure.');
+            return;
+        }
+
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            vscode.window.showWarningMessage(
+                'AI Localizer: Project is disabled. Enable it via workspace settings before configuring.'
+            );
             return;
         }
 

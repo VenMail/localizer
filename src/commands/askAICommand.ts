@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { I18nIndex } from '../core/i18nIndex';
 import { DiagnosticAnalyzer } from '../services/diagnosticAnalyzer';
+import { isProjectDisabled } from '../utils/projectIgnore';
 
 /**
  * Command to ask AI for help with ai18n issues only
@@ -214,6 +215,15 @@ export class AskAICommand {
     }
 
     async execute(): Promise<void> {
+        // Check if any workspace folders are disabled
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.some(folder => isProjectDisabled(folder))) {
+            vscode.window.showWarningMessage(
+                'AI Localizer: Ask AI is disabled for one or more workspace folders. Enable them via workspace settings before using AI features.'
+            );
+            return;
+        }
+
         const enabled = await this.isEnabled();
         if (!enabled) {
             vscode.window.showInformationMessage(

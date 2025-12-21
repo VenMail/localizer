@@ -5,6 +5,7 @@ export class I18nStatusBar {
     private statusBarItem: vscode.StatusBarItem;
     private isMonitoring = false;
     private pendingCount = 0;
+    private disposables: vscode.Disposable[] = [];
 
     constructor() {
         this.statusBarItem = vscode.window.createStatusBarItem(
@@ -12,6 +13,20 @@ export class I18nStatusBar {
             100
         );
         this.statusBarItem.command = 'ai-localizer.i18n.showStatus';
+        
+        // Listen for configuration changes to update status bar
+        const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration('ai-localizer')) {
+                this.updateDisplay();
+            }
+        });
+        
+        // Listen for workspace folder changes
+        const workspaceChangeDisposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            this.updateDisplay();
+        });
+        
+        this.disposables.push(configChangeDisposable, workspaceChangeDisposable);
         this.updateDisplay();
     }
 
@@ -35,28 +50,38 @@ export class I18nStatusBar {
     }
 
     private updateDisplay(): void {
-        // Check if extension is disabled for the workspace
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (workspaceFolder && isProjectDisabled(workspaceFolder)) {
-            this.statusBarItem.text = '$(x) AI i18n (Disabled)';
-            this.statusBarItem.tooltip = 'AI Localizer is disabled for this workspace. Click to enable.';
-            this.statusBarItem.show();
-            return;
-        }
-
-        if (!this.isMonitoring) {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        
+        // Handle no workspace folders
+        if (!workspaceFolders || workspaceFolders.length === 0) {
             this.statusBarItem.text = '$(globe) AI i18n';
-            this.statusBarItem.tooltip = 'Auto-monitoring disabled. Click to configure.';
+            this.statusBarItem.tooltip = 'No workspace folder open';
             this.statusBarItem.show();
             return;
         }
 
-        if (this.pendingCount > 0) {
+        // Check disabled state for all folders
+        const disabledFolders = workspaceFolders.filter(folder => isProjectDisabled(folder));
+        const disabledCount = disabledFolders.length;
+        const totalCount = workspaceFolders.length;
+
+        if (disabledCount === totalCount) {
+            // All folders disabled
+            this.statusBarItem.text = '$(x) AI i18n (Disabled)';
+            this.statusBarItem.tooltip = 'All workspace folders disabled - click to manage';
+        } else if (disabledCount > 0) {
+            // Some folders disabled - be more concise
+            this.statusBarItem.text = `$(warning) AI i18n (${disabledCount} disabled)`;
+            this.statusBarItem.tooltip = `${disabledCount} workspace folder(s) disabled - click to manage settings`;
+        } else if (!this.isMonitoring) {
+            this.statusBarItem.text = '$(globe) AI i18n';
+            this.statusBarItem.tooltip = 'Auto-monitoring disabled - click to configure';
+        } else if (this.pendingCount > 0) {
             this.statusBarItem.text = `$(eye) AI Localizer: ${this.pendingCount} pending`;
-            this.statusBarItem.tooltip = `Monitoring ${this.pendingCount} file(s) with translatable content. Will process when committed to git.`;
+            this.statusBarItem.tooltip = `Monitoring ${this.pendingCount} file(s) with translatable content`;
         } else {
             this.statusBarItem.text = '$(eye) AI i18n';
-            this.statusBarItem.tooltip = 'Auto-monitoring enabled. Watching for translatable content.';
+            this.statusBarItem.tooltip = 'Auto-monitoring enabled - watching for translatable content';
         }
         this.statusBarItem.show();
     }
@@ -70,6 +95,10 @@ export class I18nStatusBar {
     }
 
     dispose(): void {
+        for (const disposable of this.disposables) {
+            disposable.dispose();
+        }
+        this.disposables = [];
         this.statusBarItem.dispose();
     }
 }

@@ -48,6 +48,11 @@ export class StatusCommand {
 
         const items: Array<{ label: string; description?: string; action: string }> = [
             {
+                label: '$(x) Disable AI Localizer for this Workspace',
+                description: 'Disable AI Localizer for this project',
+                action: 'disable'
+            },
+            {
                 label: autoMonitor
                     ? '$(check) Auto-monitoring enabled'
                     : '$(x) Auto-monitoring disabled',
@@ -196,6 +201,9 @@ export class StatusCommand {
         }
 
         switch (selection.action) {
+            case 'disable':
+                await vscode.commands.executeCommand('ai-localizer.project.disable');
+                break;
             case 'toggleMonitor':
                 await config.update(
                     'i18n.autoMonitor',

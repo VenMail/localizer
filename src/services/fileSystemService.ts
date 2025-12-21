@@ -48,29 +48,63 @@ export class FileSystemService {
     }
 
     /**
-     * Compare project script with bundled version
+     * Get current extension version from package.json
+     */
+    getCurrentExtensionVersion(_context: vscode.ExtensionContext): string {
+        try {
+            const packageJson = require('../../package.json');
+            return packageJson.version || '0.1.8';
+        } catch {
+            return '0.1.8';
+        }
+    }
+
+    /**
+     * Get version from project script file (reads version comment)
+     */
+    async getProjectScriptVersion(projectRoot: string, scriptName: string): Promise<string> {
+        try {
+            const scriptUri = vscode.Uri.file(path.join(projectRoot, 'scripts', scriptName));
+            const data = await vscode.workspace.fs.readFile(scriptUri);
+            const content = this.decoder.decode(data);
+            
+            // Look for version comment in format: // Version: x.x.x or /* Version: x.x.x */
+            const versionMatch = content.match(/\/\/\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+)/i) ||
+                               content.match(/\/\*\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*\*\//i);
+            
+            if (versionMatch) {
+                return versionMatch[1];
+            }
+            
+            // If no version found, treat as 0.1.7 (legacy scripts)
+            return '0.1.7';
+        } catch {
+            // If script doesn't exist or can't be read, treat as 0.1.7
+            return '0.1.7';
+        }
+    }
+
+    /**
+     * Compare project script version with current extension version
      */
     async isScriptOutdated(
         context: vscode.ExtensionContext, 
         projectRoot: string, 
         scriptName: string
     ): Promise<boolean> {
-        const projectScriptUri = vscode.Uri.file(path.join(projectRoot, 'scripts', scriptName));
-        const bundledChecksum = await this.getBundledScriptChecksum(context, scriptName);
-        const projectChecksum = await this.getFileChecksum(projectScriptUri);
+        const currentVersion = this.getCurrentExtensionVersion(context);
+        const projectVersion = await this.getProjectScriptVersion(projectRoot, scriptName);
         
         // If project script doesn't exist, it's "outdated" (needs to be created)
-        if (!projectChecksum) {
+        try {
+            const scriptUri = vscode.Uri.file(path.join(projectRoot, 'scripts', scriptName));
+            await vscode.workspace.fs.stat(scriptUri);
+        } catch {
             return true;
         }
         
-        // If we can't get bundled checksum, assume it's not outdated
-        if (!bundledChecksum) {
-            return false;
-        }
-        
-        // Compare checksums
-        return bundledChecksum !== projectChecksum;
+        // Compare versions - if project version is less than current, it's outdated
+        return this.compareVersions(projectVersion, currentVersion) < 0;
     }
 
     /**
@@ -150,6 +184,8 @@ export class FileSystemService {
             'babel-replace-i18n.js': 'replace-i18n.js',
         };
 
+        const currentVersion = this.getCurrentExtensionVersion(context);
+
         for (const name of scriptNames) {
             const src = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n', name);
             // Use mapped name if available (internal scripts -> standard names)
@@ -158,7 +194,19 @@ export class FileSystemService {
             
             try {
                 const data = await vscode.workspace.fs.readFile(src);
-                await vscode.workspace.fs.writeFile(dest, data);
+                let content = this.decoder.decode(data);
+                
+                // Add version comment at the top of the script if not already present
+                if (!content.match(/\/\/\s*Version:/i) && !content.match(/\/\*\s*Version:/i)) {
+                    const versionComment = `// Version: ${currentVersion}\n`;
+                    content = versionComment + content;
+                } else {
+                    // Update existing version comment
+                    content = content.replace(/\/\/\s*Version:\s*[0-9]+\.[0-9]+\.[0-9]+/i, `// Version: ${currentVersion}`);
+                    content = content.replace(/\/\*\s*Version:\s*[0-9]+\.[0-9]+\.[0-9]+\s*\*\//i, `/* Version: ${currentVersion} */`);
+                }
+                
+                await vscode.workspace.fs.writeFile(dest, this.encoder.encode(content));
             } catch (err) {
                 console.error(`AI Localizer: Failed to copy i18n script ${name}:`, err);
                 vscode.window.showWarningMessage(

@@ -52,15 +52,14 @@ export class AutoMonitor {
             }
         });
         
-        // Also check existing workspaces on startup
-        setTimeout(() => {
-            const folders = vscode.workspace.workspaceFolders || [];
-            for (const folder of folders) {
-                if (!isProjectDisabled(folder)) {
-                    this.checkForOutdatedScripts(folder);
-                }
+        // Also check existing workspaces on startup immediately when i18n is enabled
+        const folders = vscode.workspace.workspaceFolders || [];
+        for (const folder of folders) {
+            if (!isProjectDisabled(folder)) {
+                // Check immediately on extension activation for enabled projects
+                this.checkForOutdatedScripts(folder);
             }
-        }, 2000); // Delay to allow VS Code to fully load
+        }
         
         this.disposables.push(openHandler);
     }
