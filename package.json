@@ -422,7 +422,7 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "package": "vsce package",
+    "package": "npm run test && vsce package",
     "test": "vitest run",
     "test:watch": "vitest",
     "i18n:extract": "node ./scripts/extract-i18n.js",

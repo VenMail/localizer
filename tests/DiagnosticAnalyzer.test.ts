@@ -174,8 +174,8 @@ describe('DiagnosticAnalyzer.analyzeFile', () => {
         
         const analyzer = createAnalyzer([
             createRecord('app.title', 'en', '/locales/en/app.json', ''), // Missing in default locale
-            createRecord('other.title', 'fr', '/locales/fr/app.json', 'Titre'), // Present in French  
-            createRecord('another.title', 'de', '/locales/de/app.json', 'Titel'), // Present in German
+            createRecord('app.title', 'fr', '/locales/fr/app.json', 'Titre'), // Present in French  
+            createRecord('app.title', 'de', '/locales/de/app.json', 'Titel'), // Present in German
         ]);
         
         const uri = Uri.file('/locales/en/app.json');
