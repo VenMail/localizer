@@ -1,6 +1,6 @@
 export * from './gitRecoveryHandler';
 export * from './translationHandler';
-export * from './keyManagementHandler';
+export * from './keyManagement';
 export * from './cleanupHandler';
 export * from './styleHandler';
 export * from './reportHandler';

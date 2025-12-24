@@ -1,17 +1,17 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { I18nIndex, extractKeyAtPosition } from '../../../core/i18nIndex';
+import { I18nIndex, extractKeyAtPosition } from '../../../../core/i18nIndex';
 import {
     setLaravelTranslationValue,
     setTranslationValue,
     setTranslationValuesBatch,
     deriveRootFromFile,
-} from '../../../core/i18nFs';
-import { getGranularSyncService } from '../../../services/granularSyncService';
-import { TranslationService } from '../../../services/translationService';
-import { pickWorkspaceFolder } from '../../../core/workspace';
-import { findKeyInHistory, getFileContentAtCommit } from '../../../core/gitHistory';
-import { CommitTracker } from '../../../core/commitTracker';
+} from '../../../../core/i18nFs';
+import { getGranularSyncService } from '../../../../services/granularSyncService';
+import { TranslationService } from '../../../../services/translationService';
+import { pickWorkspaceFolder } from '../../../../core/workspace';
+import { findKeyInHistory, getFileContentAtCommit } from '../../../../core/gitHistory';
+import { CommitTracker } from '../../../../core/commitTracker';
 import {
     sharedDecoder,
     sharedEncoder,
@@ -20,23 +20,31 @@ import {
     deleteKeyPathInObject,
     getNestedValue,
     setNestedValue,
-} from '../utils/jsonUtils';
+} from '../../utils/jsonUtils';
 import {
     computeEditDistance,
     buildLabelFromKeySegment,
     escapeRegExp,
     looksLikeUserText,
-} from '../utils/textAnalysis';
-import { findCommentRanges, isPositionInComment } from '../utils/commentParser';
-import { GitRecoveryHandler } from './gitRecoveryHandler';
-import { getBatchRecoveryHandler } from './batchRecoveryHandler';
-import { clearLocaleCaches } from '../utils/localeCache';
-import { operationLock, OperationType } from '../utils/operationLock';
+} from '../../utils/textAnalysis';
+import { findCommentRanges, isPositionInComment } from '../../utils/commentParser';
+import { GitRecoveryHandler } from '../gitRecoveryHandler';
+import { getBatchRecoveryHandler } from '../batchRecoveryHandler';
+import { clearLocaleCaches } from '../../utils/localeCache';
+import { operationLock, OperationType } from '../../utils/operationLock';
+import { TranslationOperations } from './translationOperations';
+import { BulkOperations } from './bulkOperations';
+import { ValidationModule } from './validationModule';
 
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 export class KeyManagementHandler {
     private deletionGuardPending: Map<string, { key: string; value: string; timeout: TimeoutHandle }> = new Map();
+
+    // Modular components
+    private translationOps: TranslationOperations;
+    private bulkOps: BulkOperations;
+    private validator: ValidationModule;
 
     constructor(
         private i18nIndex: I18nIndex,
@@ -44,7 +52,12 @@ export class KeyManagementHandler {
         private translationService: TranslationService,
         private context?: vscode.ExtensionContext,
         private log?: vscode.OutputChannel,
-    ) {}
+    ) {
+        // Initialize modular components
+        this.translationOps = new TranslationOperations(i18nIndex, log);
+        this.bulkOps = new BulkOperations(i18nIndex, this.translationOps, log);
+        this.validator = new ValidationModule(i18nIndex, log);
+    }
 
     /**
      * Cleanup all pending guard timeouts. Call on extension deactivation.
@@ -54,6 +67,87 @@ export class KeyManagementHandler {
             clearTimeout(pending.timeout);
         }
         this.deletionGuardPending.clear();
+    }
+
+    // ==================== Modular Interface Methods ====================
+    // These methods delegate to the modular components for better organization
+
+    /**
+     * Copy translation to default locale (delegates to TranslationOperations)
+     */
+    async copyTranslationToDefaultLocale(
+        documentUri: vscode.Uri,
+        key: string,
+        sourceLocale: string,
+        targetLocale: string,
+        _options: { skipDiagnosticsRefresh?: boolean } = {}
+    ): Promise<void> {
+        const folder = vscode.workspace.getWorkspaceFolder(documentUri);
+        if (!folder) {
+            vscode.window.showErrorMessage('AI Localizer: No workspace folder found');
+            return;
+        }
+
+        const validation = this.validator.validateCopyTranslation({
+            documentUri,
+            key,
+            sourceLocale,
+            targetLocale
+        });
+        if (!validation.isValid) {
+            this.validator.logValidationError('copyTranslationToDefaultLocale', validation.error!);
+            vscode.window.showErrorMessage(`AI Localizer: ${validation.error}`);
+            return;
+        }
+
+        await this.translationOps.copyTranslationToDefaultLocale(documentUri, key, sourceLocale, targetLocale);
+        vscode.window.showInformationMessage(`AI Localizer: Copied "${key}" from ${sourceLocale} to ${targetLocale}`);
+    }
+
+    /**
+     * Bulk fix missing default translations (delegates to BulkOperations)
+     */
+    async bulkFixMissingDefaultTranslations(documentUri: vscode.Uri): Promise<void> {
+        const validation = this.validator.validateBulkOperation({
+            documentUri
+        });
+        if (!validation.isValid) {
+            this.validator.logValidationError('bulkFixMissingDefaultTranslations', validation.error!);
+            vscode.window.showErrorMessage(`AI Localizer: ${validation.error}`);
+            return;
+        }
+
+        const result = await this.bulkOps.bulkFixMissingDefaultTranslations(documentUri);
+        if (result.fixed > 0) {
+            vscode.window.showInformationMessage(`AI Localizer: Fixed ${result.fixed} missing default translations`);
+        }
+        if (result.errors.length > 0) {
+            vscode.window.showErrorMessage(`AI Localizer: ${result.errors.join(', ')}`);
+        }
+    }
+
+    /**
+     * Set translation value (delegates to TranslationOperations)
+     */
+    async setTranslationValue(
+        folder: vscode.WorkspaceFolder,
+        locale: string,
+        key: string,
+        value: string,
+        options?: { rootName?: string }
+    ): Promise<void> {
+        await this.translationOps.setTranslationValue(folder, locale, key, value, options);
+    }
+
+    /**
+     * Set translation values batch (delegates to TranslationOperations)
+     */
+    async setTranslationValuesBatch(
+        folder: vscode.WorkspaceFolder,
+        locale: string,
+        updates: Map<string, { value: string; rootName?: string }>
+    ): Promise<{ written: number; errors: string[] }> {
+        return await this.translationOps.setTranslationValuesBatch(folder, locale, updates);
     }
 
     /**
@@ -1606,6 +1700,29 @@ export class KeyManagementHandler {
             console.error('AI Localizer: Failed to restore deleted key:', err);
             vscode.window.showErrorMessage('AI Localizer: Failed to restore deleted key.');
         }
+    }
+
+    // ==================== Component Access Methods ====================
+
+    /**
+     * Get access to translation operations component
+     */
+    getTranslationOperations(): TranslationOperations {
+        return this.translationOps;
+    }
+
+    /**
+     * Get access to bulk operations component
+     */
+    getBulkOperations(): BulkOperations {
+        return this.bulkOps;
+    }
+
+    /**
+     * Get access to validation module component
+     */
+    getValidator(): ValidationModule {
+        return this.validator;
     }
 }
 
