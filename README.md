@@ -221,6 +221,7 @@ Example (user or workspace settings):
 ## Release Notes
 ### 0.1.11
  - Fix diagnostics shortfalls.
+ - Add auto fix for missing default translations.
 
 ### 0.1.10
  - Fix stringPattern issue.

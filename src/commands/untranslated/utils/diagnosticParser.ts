@@ -154,3 +154,46 @@ export function parseMissingReferenceDiagnostic(message: string): { key: string 
     return null;
 }
 
+/**
+ * Parse missing default locale diagnostic to extract key and default locale.
+ */
+export function parseMissingDefaultDiagnostic(message: string): { key: string; defaultLocale: string; existingLocales: string[] } | null {
+    if (!message || typeof message !== 'string') return null;
+
+    // More robust regex that handles whitespace and edge cases
+    const match = message.match(/^Missing default locale translation for "([^"]+)"\s*\[([A-Za-z0-9_-]+)\]\s*\(exists in:\s*([^)]+)\)/);
+    if (!match) return null;
+
+    const [, key, defaultLocale, existingLocalesStr] = match;
+    
+    // Validate and clean the extracted values
+    const cleanKey = key.trim();
+    const cleanDefaultLocale = defaultLocale.trim();
+    const existingLocales = existingLocalesStr
+        .split(',')
+        .map(l => l.trim())
+        .filter(l => l.length > 0); // Filter out empty strings
+
+    // Additional validation
+    if (!cleanKey || !cleanDefaultLocale || existingLocales.length === 0) {
+        return null;
+    }
+
+    // Validate locale format (basic check)
+    if (!/^[A-Za-z0-9_-]+$/.test(cleanDefaultLocale)) {
+        return null;
+    }
+
+    // Validate existing locales format
+    const invalidLocales = existingLocales.filter(l => !/^[A-Za-z0-9_-]+$/.test(l));
+    if (invalidLocales.length > 0) {
+        return null;
+    }
+
+    return { 
+        key: cleanKey, 
+        defaultLocale: cleanDefaultLocale, 
+        existingLocales 
+    };
+}
+

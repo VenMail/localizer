@@ -12,6 +12,7 @@ import {
     parsePlaceholderDiagnostic,
     parseStyleDiagnostic,
     parseUntranslatedDiagnostic,
+    parseMissingDefaultDiagnostic,
 } from '../commands/untranslated/utils/diagnosticParser';
 
 /**
@@ -835,7 +836,8 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 d.code === 'ai-i18n.style' ||
                 d.code === 'ai-i18n.invalid' ||
                 d.code === 'ai-i18n.placeholders' ||
-                d.code === 'ai-i18n.missing-reference',
+                d.code === 'ai-i18n.missing-reference' ||
+                d.code === 'ai-i18n.missing-default',
         );
 
         let addedBulkActions = false;
@@ -980,6 +982,42 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                     bulkAction.command = {
                         title: bulkTitle,
                         command: 'ai-localizer.i18n.bulkFixMissingKeyReferences',
+                        arguments: [document.uri],
+                    };
+                    actions.push(bulkAction);
+                }
+            } else if (diagnostic.code === 'ai-i18n.missing-default') {
+                // Parse the missing default diagnostic to extract key and locales
+                const missingDefaultParsed = parseMissingDefaultDiagnostic(String(diagnostic.message || ''));
+                if (!missingDefaultParsed) continue;
+                const { key, defaultLocale, existingLocales } = missingDefaultParsed;
+                if (!key || !defaultLocale || !existingLocales.length) continue;
+
+                // Offer to copy translation from one of the existing locales
+                const firstExistingLocale = existingLocales[0];
+                const title = `AI Localizer: Copy translation from ${firstExistingLocale} to ${defaultLocale} for ${key}`;
+                const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+                action.diagnostics = [diagnostic];
+                action.isPreferred = true;
+                action.command = {
+                    title,
+                    command: 'ai-localizer.i18n.copyTranslationToDefaultLocale',
+                    arguments: [document.uri, key, firstExistingLocale, defaultLocale],
+                };
+                actions.push(action);
+
+                // Add bulk fix action for all missing default locale translations in this file
+                if (
+                    !addedBulkActions &&
+                    (isJsonLocale || isLaravelLocale)
+                ) {
+                    addedBulkActions = true;
+                    const bulkTitle = 'AI Localizer: Bulk fix all missing default locale translations in this file';
+                    const bulkAction = new vscode.CodeAction(bulkTitle, vscode.CodeActionKind.QuickFix);
+                    bulkAction.diagnostics = [diagnostic];
+                    bulkAction.command = {
+                        title: bulkTitle,
+                        command: 'ai-localizer.i18n.bulkFixMissingDefaultTranslations',
                         arguments: [document.uri],
                     };
                     actions.push(bulkAction);

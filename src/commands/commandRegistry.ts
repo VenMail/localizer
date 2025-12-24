@@ -600,6 +600,28 @@ export class CommandRegistry {
                     untranslatedCmds.fixPlaceholderMismatch(documentUri, key, locale),
             ),
             vscode.commands.registerCommand(
+                'ai-localizer.i18n.copyTranslationToDefaultLocale',
+                (documentUri: vscode.Uri, key: string, sourceLocale: string, targetLocale: string) =>
+                    untranslatedCmds.copyTranslationToDefaultLocale(documentUri, key, sourceLocale, targetLocale),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.bulkFixMissingDefaultTranslations',
+                async (documentUri?: vscode.Uri) => {
+                    const uri = documentUri || vscode.window.activeTextEditor?.document.uri;
+                    if (!uri) {
+                        vscode.window.showWarningMessage('AI Localizer: No document available.');
+                        return;
+                    }
+                    try {
+                        await untranslatedCmds.bulkFixMissingDefaultTranslations(uri);
+                    } catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        console.error('AI Localizer: Failed to bulk fix missing default translations:', err);
+                        vscode.window.showErrorMessage(`AI Localizer: Failed to fix missing default translations. ${msg}`);
+                    }
+                },
+            ),
+            vscode.commands.registerCommand(
                 'ai-localizer.i18n.gotoTranslationFromHover',
                 async (args: { uri: string; position: { line: number; character: number } }) => {
                     try {
