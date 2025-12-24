@@ -135,21 +135,7 @@ export class ValidationModule {
         return { isValid: true };
     }
 
-    /**
-     * Validate target locale file exists
-     */
-    validateTargetLocaleFile(record: any, targetLocale: string): ValidationResult {
-        const targetLocation = record.locations.find((loc: any) => loc.locale === targetLocale);
-        if (!targetLocation) {
-            return { 
-                isValid: false, 
-                error: `No locale file found for target locale "${targetLocale}"` 
-            };
-        }
-
-        return { isValid: true };
-    }
-
+    
     /**
      * Comprehensive validation for copy translation operation
      */
@@ -158,7 +144,6 @@ export class ValidationModule {
         error?: string;
         record?: any;
         folder?: vscode.WorkspaceFolder;
-        targetLocation?: any;
     }> {
         // Basic parameter validation
         const basicValidation = this.validateCopyTranslation(params);
@@ -186,19 +171,13 @@ export class ValidationModule {
             return { isValid: false, error: sourceValidation.error };
         }
 
-        // Target locale file validation
-        const targetValidation = this.validateTargetLocaleFile(record, params.targetLocale);
-        if (!targetValidation.isValid) {
-            return { isValid: false, error: targetValidation.error };
-        }
-
-        const targetLocation = record.locations.find((loc: any) => loc.locale === params.targetLocale);
+        // Note: We don't validate target locale file existence anymore
+        // The setTranslationValue function can create missing locale files
 
         return {
             isValid: true,
             record,
-            folder: folderResult.folder,
-            targetLocation
+            folder: folderResult.folder
         };
     }
 

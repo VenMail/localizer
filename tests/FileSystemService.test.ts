@@ -19,6 +19,7 @@ vi.mock('vscode', () => ({
             readFile: vi.fn(),
             writeFile: vi.fn(),
             stat: vi.fn(),
+            readDirectory: vi.fn(),
         },
         getWorkspaceFolder: vi.fn(),
         findFiles: vi.fn(),
@@ -66,6 +67,15 @@ describe('FileSystemService Script Copying', () => {
         (workspace.fs.readFile as any).mockResolvedValue(Buffer.from('mock content'));
         (workspace.fs.writeFile as any).mockResolvedValue(undefined);
         (workspace.fs.stat as any).mockResolvedValue({ type: 1 }); // File type
+        (workspace.fs.readDirectory as any).mockResolvedValue([
+            ['extract-i18n.js', 1],
+            ['replace-i18n.js', 1],
+            ['sync-i18n.js', 1],
+            ['fix-untranslated.js', 1],
+            ['rewrite-i18n-blade.js', 1],
+            ['cleanup-i18n-unused.js', 1],
+            ['restore-i18n-invalid.js', 1],
+        ]);
         (workspace.getWorkspaceFolder as any).mockReturnValue({
             uri: { fsPath: mockProjectRoot },
         });
