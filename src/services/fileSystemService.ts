@@ -113,24 +113,8 @@ export class FileSystemService {
     async getOutdatedScripts(context: vscode.ExtensionContext, projectRoot: string): Promise<string[]> {
         const outdatedScripts: string[] = [];
         
-        // Define all scripts that should be checked
-        const scriptsToCheck = [
-            'extract-i18n.js',
-            'replace-i18n.js', 
-            'sync-i18n.js',
-            'fix-untranslated.js',
-            'rewrite-i18n-blade.js',
-            'cleanup-i18n-unused.js',
-            'restore-i18n-invalid.js',
-            'babel-extract-i18n.js',
-            'babel-replace-i18n.js',
-            'oxc-extract-i18n.js',
-            'oxc-replace-i18n.js',
-            'fix-i18n-parens-in-code.js',
-            'cleanup-i18n-unused.js',
-            'restore-i18n-invalid.js',
-            'rewrite-i18n-blade.js'
-        ];
+        // Get actual scripts that exist in the extension
+        const scriptsToCheck = await this.getActualExtensionScripts(context);
         
         for (const scriptName of scriptsToCheck) {
             const isOutdated = await this.isScriptOutdated(context, projectRoot, scriptName);
@@ -140,6 +124,53 @@ export class FileSystemService {
         }
         
         return outdatedScripts;
+    }
+
+    /**
+     * Get the list of scripts that actually exist in the extension's i18n directory
+     */
+    private async getActualExtensionScripts(context: vscode.ExtensionContext): Promise<string[]> {
+        const scripts: string[] = [];
+        const i18nDir = vscode.Uri.joinPath(context.extensionUri, 'src', 'i18n');
+        
+        try {
+            const entries = await vscode.workspace.fs.readDirectory(i18nDir);
+            
+            for (const [name, type] of entries) {
+                // Only include .js files that are actual scripts (not in lib, components, deprecated, runtime directories)
+                if (type === vscode.FileType.File && name.endsWith('.js')) {
+                    // Skip utility files and directories that shouldn't be copied to projects
+                    const skipPatterns = [
+                        /^test-/,           // test files
+                        /^debug-/,          // debug files
+                        /-test\./,          // test files
+                        /-spec\./,          // spec files
+                    ];
+                    
+                    const shouldSkip = skipPatterns.some(pattern => pattern.test(name));
+                    
+                    if (!shouldSkip) {
+                        scripts.push(name);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Failed to read extension scripts directory:', err);
+            // Fallback to essential scripts if directory read fails
+            return [
+                'extract-i18n.js',
+                'replace-i18n.js', 
+                'sync-i18n.js',
+                'fix-untranslated.js',
+                'rewrite-i18n-blade.js',
+                'cleanup-i18n-unused.js',
+                'restore-i18n-invalid.js',
+                'babel-replace-i18n.js',
+                'oxc-replace-i18n.js'
+            ];
+        }
+        
+        return scripts;
     }
 
     /**

@@ -68,7 +68,48 @@ export class DiagnosticAnalyzer {
         'python',
     ]);
 
-    private static readonly I18N_KEY_PATTERN = '[A-Za-z0-9_\\.\\-]+';
+    private static readonly I18N_KEY_PATTERN = '[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)*';
+
+    /**
+     * Check if a matched key is actually a complex expression that should be skipped
+     * This helps avoid false positives in minified/obfuscated code
+     */
+    private isComplexExpression(key: string, fullMatch: string): boolean {
+        // Skip if the key contains characters that suggest it's not a simple i18n key
+        if (key.includes('(') || key.includes('{') || key.includes('[')) {
+            return true;
+        }
+        
+        // Skip if the full match looks like a complex expression
+        // This catches cases like t("div",{class:a(l(he)("rounded-xl...
+        if (fullMatch.includes('{') && fullMatch.includes('class:')) {
+            return true;
+        }
+        
+        // Skip if the key is very long (likely obfuscated)
+        if (key.length > 100) {
+            return true;
+        }
+        
+        // Skip if the key contains patterns that suggest JSX/CSS class names
+        if (key.includes('rounded-xl') || key.includes('bg-card') || key.includes('text-card')) {
+            return true;
+        }
+        
+        // Skip if the key is a common HTML tag (likely JSX, not translation)
+        const htmlTags = ['div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'img', 'ul', 'ol', 'li', 'form', 'input', 'button', 'section', 'article', 'header', 'footer', 'nav', 'main', 'aside'];
+        if (htmlTags.includes(key.toLowerCase())) {
+            return true;
+        }
+        
+        // Skip if the key is a common CSS property or value
+        const cssTerms = ['class', 'className', 'style', 'color', 'background', 'border', 'padding', 'margin', 'width', 'height', 'display', 'position', 'top', 'left', 'right', 'bottom'];
+        if (cssTerms.includes(key.toLowerCase())) {
+            return true;
+        }
+        
+        return false;
+    }
 
     private buildTranslationCallPatterns(options: {
         isLaravelSource: boolean;
@@ -79,6 +120,7 @@ export class DiagnosticAnalyzer {
         const patterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [];
 
         // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key")
+        // More restrictive pattern to avoid false positives in complex code
         patterns.push({
             regex: new RegExp(`\\b\\$?t\\s*\\(\\s*(['"\`])(${key})\\1\\s*(?:,|\\))`, 'g'),
             keyGroupIndex: 2,
@@ -265,12 +307,42 @@ export class DiagnosticAnalyzer {
 
             // Check all locales for this key
             for (const locale of locales) {
-                if (locale === defaultLocaleForKey) {
-                    continue;
-                }
-
                 const val = record.locales.get(locale);
                 const locEntry = record.locations.find((l) => l.locale === locale);
+
+                // Special handling for default locale: check if the default locale file itself has missing translations
+                if (locale === defaultLocaleForKey) {
+                    // Only analyze the default locale if this file IS the default locale file
+                    if (fileLocale === defaultLocaleForKey && (!val || !val.trim())) {
+                        this.verboseLog(
+                            `[DiagnosticAnalyzer] Missing translation detected for key '${key}' in default locale '${locale}' while analyzing file '${uri.fsPath}'`,
+                            verbose,
+                        );
+                        
+                        const issues = this.analyzeKeyForLocale(
+                            key,
+                            locale,
+                            val,
+                            defaultValue,
+                            defaultPlaceholders,
+                            config,
+                            isConstantLikeAcrossLocales,
+                            baseIsIgnored || baseLooksNonTranslatable,
+                        );
+
+                        for (const issue of issues) {
+                            const range = await this.getKeyRangeInFile(uri, key);
+                            const diagnostic = new vscode.Diagnostic(
+                                range,
+                                issue.message,
+                                issue.severity,
+                            );
+                            diagnostic.code = issue.code;
+                            diagnostics.push(diagnostic);
+                        }
+                    }
+                    continue; // Skip to next locale
+                }
 
                 // Determine if we should report diagnostics for this locale in this file:
                 // 1. If this file IS the locale file (fileLocale === locale), always report
@@ -288,8 +360,8 @@ export class DiagnosticAnalyzer {
                     }
                 }
 
-                // Avoid duplicate missing diagnostics: only the default-locale file should emit
-                if ((!val || !val.trim()) && fileLocale !== defaultLocaleForKey) {
+                // Allow missing translation diagnostics for non-default locale files reporting their own missing translations
+                if ((!val || !val.trim()) && fileLocale !== locale) {
                     continue;
                 }
 
@@ -1311,6 +1383,7 @@ export class DiagnosticAnalyzer {
 
             while ((match = regex.exec(text)) !== null) {
                 const key = match[keyGroupIndex];
+                const fullMatch = match[0];
                 const matchIndex = match.index;
                 
                 // Skip if match is inside a comment or string literal
@@ -1318,6 +1391,11 @@ export class DiagnosticAnalyzer {
                     this.isIndexInRanges(matchIndex, commentRanges) ||
                     this.isIndexInRanges(matchIndex, stringRanges)
                 ) {
+                    continue;
+                }
+                
+                // Skip complex expressions that are likely false positives
+                if (this.isComplexExpression(key, fullMatch)) {
                     continue;
                 }
                 
