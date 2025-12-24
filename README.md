@@ -219,6 +219,9 @@ Example (user or workspace settings):
 - (Optional) OpenAI API key for AI-assisted translations
 
 ## Release Notes
+### 0.1.11
+ - Fix diagnostics shortfalls.
+
 ### 0.1.10
  - Fix stringPattern issue.
 

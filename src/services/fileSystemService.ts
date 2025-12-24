@@ -244,7 +244,8 @@ export class FileSystemService {
                     content = content.replace(/\/\*\s*Version:\s*[0-9]+\.[0-9]+\.[0-9]+\s*\*\//i, `/* Version: ${currentVersion} */`);
                 }
 
-                const finalContent = shebang ? `${shebang.endsWith('\n') ? shebang : `${shebang}\n`}${content}` : content;
+                // CRITICAL FIX: Ensure proper newline handling without duplication
+                const finalContent = shebang ? `${shebang}${content}` : content;
                 
                 await vscode.workspace.fs.writeFile(dest, this.encoder.encode(finalContent));
             } catch (err) {

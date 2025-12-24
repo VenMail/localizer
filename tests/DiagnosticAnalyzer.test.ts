@@ -182,9 +182,9 @@ describe('DiagnosticAnalyzer.analyzeFile', () => {
         const diagnostics = await analyzer.analyzeFile(uri, baseConfig);
 
         expect(diagnostics.length).toBeGreaterThan(0);
-        const missingDiag = diagnostics.find(d => d.code === 'ai-i18n.untranslated');
+        const missingDiag = diagnostics.find(d => d.code === 'ai-i18n.missing-default');
         expect(missingDiag).toBeDefined();
-        expect(missingDiag?.message).toContain('Missing translation for "app.title" [en]');
+        expect(missingDiag?.message).toContain('Missing default locale translation for "app.title" [en]');
     });
 
     it('flags missing translations in non-default locales', async () => {

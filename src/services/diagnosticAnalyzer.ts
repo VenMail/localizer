@@ -305,6 +305,49 @@ export class DiagnosticAnalyzer {
                 diagnostics.push(invalidDiag);
             }
 
+            // NEW: Check for missing default locale translations when other locales exist
+            // This detects cases where the default locale is missing a translation that exists in other locales
+            const defaultLocaleValue = record.locales.get(defaultLocaleForKey);
+            if (!defaultLocaleValue || !defaultLocaleValue.trim()) {
+                // Check if this key exists in at least one other locale
+                const otherLocalesWithTranslation = locales.filter(otherLocale => 
+                    otherLocale !== defaultLocaleForKey &&
+                    record.locales.get(otherLocale) && 
+                    record.locales.get(otherLocale)!.trim()
+                );
+                
+                // If the default locale is missing but other locales have translations, flag as missing
+                if (otherLocalesWithTranslation.length > 0) {
+                    this.verboseLog(
+                        `[DiagnosticAnalyzer] Missing default locale translation detected for key '${key}' [${defaultLocaleForKey}] while other locales (${otherLocalesWithTranslation.join(', ')}) have translations`,
+                        verbose,
+                    );
+                    
+                    // Find the best file to report this diagnostic on
+                    let reportUri = uri;
+                    const defaultLocaleEntry = record.locations.find(l => l.locale === defaultLocaleForKey);
+                    if (defaultLocaleEntry) {
+                        reportUri = defaultLocaleEntry.uri;
+                    } else if (otherLocalesWithTranslation.length > 0) {
+                        // Fall back to any locale file that has the translation
+                        const firstLocaleWithTranslation = otherLocalesWithTranslation[0];
+                        const firstLocaleEntry = record.locations.find(l => l.locale === firstLocaleWithTranslation);
+                        if (firstLocaleEntry) {
+                            reportUri = firstLocaleEntry.uri;
+                        }
+                    }
+                    
+                    const range = await this.getKeyRangeInFile(reportUri, key);
+                    const diagnostic = new vscode.Diagnostic(
+                        range,
+                        `Missing default locale translation for "${key}" [${defaultLocaleForKey}] (exists in: ${otherLocalesWithTranslation.join(', ')})`,
+                        config.missingSeverity,
+                    );
+                    diagnostic.code = 'ai-i18n.missing-default';
+                    diagnostics.push(diagnostic);
+                }
+            }
+
             // Check all locales for this key
             for (const locale of locales) {
                 const val = record.locales.get(locale);
