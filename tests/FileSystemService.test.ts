@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FileSystemService } from '../src/services/fileSystemService';
 import { workspace, Uri, ExtensionContext, window } from 'vscode';
 import * as path from 'path';
@@ -230,6 +230,18 @@ describe('FileSystemService Script Copying', () => {
     });
 
     describe('Script Version Management', () => {
+        let hasInstalledSpy: ReturnType<typeof vi.spyOn>;
+
+        beforeEach(() => {
+            hasInstalledSpy = vi
+                .spyOn(fileSystemService as unknown as { hasInstalledI18nScripts: () => Promise<boolean> }, 'hasInstalledI18nScripts' as any)
+                .mockResolvedValue(true);
+        });
+
+        afterEach(() => {
+            hasInstalledSpy.mockRestore();
+        });
+
         it('should detect outdated scripts correctly', async () => {
             // Mock getFileChecksum to return null (project script doesn't exist)
             // Mock getBundledScriptChecksum to return a checksum
@@ -263,6 +275,17 @@ describe('FileSystemService Script Copying', () => {
 
             expect(outdatedScripts).toContain('extract-i18n.js');
             expect(outdatedScripts).toContain('sync-i18n.js');
+        });
+
+        it('should skip outdated script detection when scripts were never installed', async () => {
+            hasInstalledSpy.mockResolvedValue(false);
+
+            const outdatedScripts = await fileSystemService.getOutdatedScripts(
+                mockContext,
+                mockProjectRoot,
+            );
+
+            expect(outdatedScripts).toEqual([]);
         });
     });
 
