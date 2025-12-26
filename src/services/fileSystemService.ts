@@ -112,6 +112,12 @@ export class FileSystemService {
      */
     async getOutdatedScripts(context: vscode.ExtensionContext, projectRoot: string): Promise<string[]> {
         const outdatedScripts: string[] = [];
+
+        // Skip checks entirely if project has never installed i18n scripts
+        const hasInstalledScripts = await this.hasInstalledI18nScripts(projectRoot);
+        if (!hasInstalledScripts) {
+            return outdatedScripts;
+        }
         
         // Get actual scripts that exist in the extension
         const scriptsToCheck = await this.getActualExtensionScripts(context);
@@ -171,6 +177,33 @@ export class FileSystemService {
         }
         
         return scripts;
+    }
+
+    /**
+     * Determine if project has previously installed AI Localizer scripts
+     * (avoids marking brand-new projects as having outdated scripts)
+     */
+    private async hasInstalledI18nScripts(projectRoot: string): Promise<boolean> {
+        const scriptsDirUri = vscode.Uri.file(path.join(projectRoot, 'scripts'));
+
+        try {
+            const stat = await vscode.workspace.fs.stat(scriptsDirUri);
+            if (stat.type !== vscode.FileType.Directory) {
+                return false;
+            }
+        } catch {
+            return false;
+        }
+
+        const sentinelScripts = ['extract-i18n.js', 'replace-i18n.js'];
+        for (const script of sentinelScripts) {
+            const scriptUri = vscode.Uri.file(path.join(projectRoot, 'scripts', script));
+            if (await this.fileExists(scriptUri)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -5,6 +5,7 @@ import { runI18nScript } from './workspace';
 import { getGranularSyncService } from '../services/granularSyncService';
 import { isProjectDisabled } from '../utils/projectIgnore';
 import { FileSystemService } from '../services/fileSystemService';
+import { ProjectConfigService } from '../services/projectConfigService';
 
 interface MonitorState {
     lastExtractTime: number;
@@ -26,6 +27,7 @@ export class AutoMonitor {
     private disposables: vscode.Disposable[] = [];
     private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private fileSystemService = new FileSystemService();
+    private projectConfigService = new ProjectConfigService();
 
     constructor(private context: vscode.ExtensionContext) {
         this.setupFileWatcher();
@@ -76,8 +78,7 @@ export class AutoMonitor {
         
         // Check if project is disabled
         if (isProjectDisabled(folder)) {
-            state.lastScriptCheckTime = now;
-            this.saveScriptCheckTime(folderKey, now);
+            this.recordScriptCheck(state, folderKey, now);
             return; // Project is disabled
         }
         
@@ -86,13 +87,18 @@ export class AutoMonitor {
         const promptsDisabled = config.get<boolean>('disablePrompts') || false;
         
         if (promptsDisabled) {
-            state.lastScriptCheckTime = now;
-            this.saveScriptCheckTime(folderKey, now);
+            this.recordScriptCheck(state, folderKey, now);
             return; // Prompts are disabled for this project
         }
+
+        // Skip script prompts for projects that don't have i18n scripts configured yet
+        const hasConfiguredScripts = await this.projectConfigService.hasI18nScripts(folder);
+        if (!hasConfiguredScripts) {
+            this.recordScriptCheck(state, folderKey, now);
+            return;
+        }
         
-        state.lastScriptCheckTime = now;
-        this.saveScriptCheckTime(folderKey, now);
+        this.recordScriptCheck(state, folderKey, now);
         
         try {
             const outdatedScripts = await this.detectOutdatedScripts(folder);
@@ -625,6 +631,11 @@ export class AutoMonitor {
 
     private saveScriptCheckTime(folderKey: string, time: number): void {
         this.context.workspaceState.update(`ai-localizer.lastScriptCheckTime.${folderKey}`, time);
+    }
+
+    private recordScriptCheck(state: MonitorState, folderKey: string, time: number): void {
+        state.lastScriptCheckTime = time;
+        this.saveScriptCheckTime(folderKey, time);
     }
 
     dispose(): void {

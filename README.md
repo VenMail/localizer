@@ -219,6 +219,9 @@ Example (user or workspace settings):
 - (Optional) OpenAI API key for AI-assisted translations
 
 ## Release Notes
+### 0.1.12
+ - Fix existing scripts detection.
+
 ### 0.1.11
  - Fix diagnostics shortfalls.
  - Add auto fix for missing default translations.

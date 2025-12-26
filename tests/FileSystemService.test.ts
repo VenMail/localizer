@@ -35,6 +35,10 @@ vi.mock('vscode', () => ({
         showInformationMessage: vi.fn(),
         showWarningMessage: vi.fn(),
     },
+    FileType: {
+        File: 1,
+        Directory: 2,
+    },
 }));
 
 // Mock workspace utilities
