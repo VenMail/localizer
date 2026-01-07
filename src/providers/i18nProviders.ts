@@ -41,6 +41,8 @@ export const I18N_JSON_SELECTOR: vscode.DocumentSelector = [
  * Shows all translations for a key across all locales
  */
 export class I18nHoverProvider implements vscode.HoverProvider {
+    private projectConfigService = new ProjectConfigService();
+
     constructor(private i18nIndex: I18nIndex) {}
 
     async provideHover(
@@ -76,6 +78,7 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             }
 
             await this.i18nIndex.ensureInitialized();
+            const projectConfig = folder ? await this.projectConfigService.readConfig(folder) : null;
             
             const keyInfo = extractKeyAtPosition(document, position);
             if (!keyInfo) {
@@ -93,7 +96,6 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             const isLaravelSource = languageId === 'php' || languageId === 'blade';
 
             const valueMap = new Map<string, string>();
-            let locales: string[] = [];
 
             if (isLaravelSource) {
                 const laravelByLocale = new Map<string, vscode.Uri>();
@@ -129,15 +131,36 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                     return undefined;
                 }
 
-                locales = Array.from(valueMap.keys());
             } else {
                 for (const [locale, value] of record.locales.entries()) {
                     if (typeof value === 'string') {
                         valueMap.set(locale, value);
                     }
                 }
-                locales = Array.from(valueMap.keys());
             }
+
+            const localeSet = new Set<string>();
+            localeSet.add(record.defaultLocale);
+
+            for (const locale of record.locales.keys()) {
+                localeSet.add(locale);
+            }
+            for (const locale of valueMap.keys()) {
+                localeSet.add(locale);
+            }
+            for (const loc of record.locations) {
+                localeSet.add(loc.locale);
+            }
+            if (projectConfig?.locales?.length) {
+                for (const locale of projectConfig.locales) {
+                    localeSet.add(locale);
+                }
+            }
+            for (const locale of this.i18nIndex.getAllLocales()) {
+                localeSet.add(locale);
+            }
+
+            const locales = Array.from(localeSet);
 
             locales.sort((a, b) => {
                 if (a === record.defaultLocale) return -1;
@@ -148,9 +171,9 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             const md = new vscode.MarkdownString();
             md.appendMarkdown(`**i18n key** \`${record.key}\`\n\n`);
             
-            const missingLocales = locales.filter((l) => {
-                const v = valueMap.get(l);
-                return v === undefined || v === '';
+            const missingLocales = locales.filter((locale) => {
+                const value = valueMap.get(locale);
+                return !value || value.trim() === '';
             });
             if (missingLocales.length > 0) {
                 md.appendMarkdown(`⚠️ Missing in: ${missingLocales.join(', ')}\n\n`);
@@ -158,7 +181,8 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             
             for (const locale of locales) {
                 const value = valueMap.get(locale);
-                if (value === undefined || value === '') {
+                const hasValue = typeof value === 'string' && value.trim().length > 0;
+                if (!hasValue) {
                     const isDefault = locale === record.defaultLocale;
                     const localeLabel = isDefault ? `${locale} (default)` : locale;
                     md.appendMarkdown(`- **${localeLabel}**: *(missing)*\n`);
@@ -167,7 +191,7 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                 
                 const isDefault = locale === record.defaultLocale;
                 const localeLabel = isDefault ? `${locale} (default)` : locale;
-                const displayValue = value.length > 80 ? value.substring(0, 77) + '...' : value;
+                const displayValue = value!.length > 80 ? value!.substring(0, 77) + '...' : value!;
                 md.appendMarkdown(`- **${localeLabel}**: ${escapeMarkdown(displayValue)}\n`);
             }
 

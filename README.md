@@ -219,6 +219,11 @@ Example (user or workspace settings):
 - (Optional) OpenAI API key for AI-assisted translations
 
 ## Release Notes
+
+
+### 0.1.13
+- Fix hover tooltips so they list all project locales and flag missing translations again.
+
 ### 0.1.12
  - Fix existing scripts detection.
 
