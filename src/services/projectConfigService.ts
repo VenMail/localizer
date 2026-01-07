@@ -16,11 +16,19 @@ export class ProjectConfigService {
     private decoder = new TextDecoder('utf-8');
     private encoder = new TextEncoder();
     private configCache = new Map<string, ProjectConfig | null>();
+    private watcher: vscode.FileSystemWatcher | null = null;
+    private initWatcherCalled = false;
 
     /**
      * Read project configuration from package.json
      */
     async readConfig(folder: vscode.WorkspaceFolder): Promise<ProjectConfig | null> {
+        // Initialize watcher on first call
+        if (!this.initWatcherCalled) {
+            this.initWatcherCalled = true;
+            this.initWatcher();
+        }
+
         const cacheKey = folder.uri.fsPath;
         if (this.configCache.has(cacheKey)) {
             return this.configCache.get(cacheKey) || null;
@@ -57,6 +65,42 @@ export class ProjectConfigService {
             this.configCache.set(cacheKey, null);
             return null;
         }
+    }
+
+    /**
+     * Initialize file watcher for package.json changes
+     */
+    private initWatcher(): void {
+        if (this.watcher) {
+            return;
+        }
+
+        // Watch for package.json changes in all workspace folders
+        const folders = vscode.workspace.workspaceFolders;
+        if (!folders || folders.length === 0) {
+            return;
+        }
+
+        // Create watcher for the first workspace folder (will watch all package.json files)
+        const pattern = new vscode.RelativePattern(folders[0], '**/package.json');
+        
+        this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
+        
+        this.watcher.onDidChange((uri) => {
+            // Clear cache for the folder containing the changed package.json
+            const folder = vscode.workspace.getWorkspaceFolder(uri);
+            if (folder) {
+                this.configCache.delete(folder.uri.fsPath);
+            }
+        });
+        
+        this.watcher.onDidDelete((uri) => {
+            // Clear cache when package.json is deleted
+            const folder = vscode.workspace.getWorkspaceFolder(uri);
+            if (folder) {
+                this.configCache.delete(folder.uri.fsPath);
+            }
+        });
     }
 
     /**

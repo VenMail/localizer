@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 import { getProjectEnv } from './projectEnv';
+import { ProjectConfigService } from '../services/projectConfigService';
+import { detectFrameworkProfile } from '../frameworks/detection';
 
 const MAX_LOCALE_FILE_SIZE_BYTES = Number(process.env.AI_I18N_MAX_LOCALE_SIZE || 2 * 1024 * 1024);
 const INDEX_CONCURRENCY = Number(process.env.AI_I18N_INDEX_CONCURRENCY || 16);
@@ -21,6 +23,7 @@ export class I18nIndex {
     private defaultLocale = 'en';
     private initializing: Promise<void> | null = null;
     private fileToKeys = new Map<string, { locale: string; keys: string[] }>();
+    private projectConfigService = new ProjectConfigService();
 
     async ensureInitialized(force = false): Promise<void> {
         if (!force && this.keyMap.size > 0) {
@@ -67,24 +70,22 @@ export class I18nIndex {
         // Start from user-defined globs if present, otherwise from defaults
         const baseGlobs: string[] = userGlobs && userGlobs.length ? [...userGlobs] : [...defaultGlobs];
 
-        // Always ensure Laravel PHP locale files are scanned, even when the user
-        // customizes i18n.localeGlobs. This prevents missing-reference diagnostics
-        // when a Laravel project is nested under a higher-level workspace folder.
-        const laravelPhpGlobs: string[] = [
-            'lang/**/*.php',
-            'resources/lang/**/*.php',
-            '**/lang/**/*.php',
-            '**/resources/lang/**/*.php',
-        ];
-        for (const glob of laravelPhpGlobs) {
-            if (!baseGlobs.includes(glob)) {
-                baseGlobs.push(glob);
-            }
-        }
-
         const folders = vscode.workspace.workspaceFolders || [];
         if (!folders.length) {
             return;
+        }
+
+        // Always ensure Laravel PHP locale files are scanned, but only for folders that look like Laravel
+        const laravelPhpGlobs: string[] = [
+            'lang/**/*.php',
+            'resources/lang/**/*.php',
+        ];
+        const folderLaravelGlobs = new Map<string, string[]>();
+        for (const folder of folders) {
+            const shouldIncludeLaravel = await this.folderLooksLikeLaravel(folder);
+            if (shouldIncludeLaravel) {
+                folderLaravelGlobs.set(folder.uri.fsPath, laravelPhpGlobs);
+            }
         }
 
         const fileKeySet = new Set<string>();
@@ -92,6 +93,12 @@ export class I18nIndex {
         for (const folder of folders) {
             // Start from the shared base globs for every folder
             let effectiveGlobs: string[] = [...baseGlobs];
+
+            // Add Laravel-specific globs if this folder looks like Laravel
+            const laravelGlobs = folderLaravelGlobs.get(folder.uri.fsPath);
+            if (laravelGlobs) {
+                effectiveGlobs.push(...laravelGlobs);
+            }
 
             // When localeGlobs is not explicitly configured, augment the
             // base globs with framework-specific runtime roots so we pick
@@ -310,6 +317,16 @@ export class I18nIndex {
         }
 
         return null;
+    }
+
+    private async folderLooksLikeLaravel(folder: vscode.WorkspaceFolder): Promise<boolean> {
+        const projectConfig = await this.projectConfigService.readConfig(folder);
+        // If project explicitly configures locales, trust that over heuristics
+        if (projectConfig?.locales?.length) {
+            return false;
+        }
+        const profile = await detectFrameworkProfile(folder);
+        return profile?.kind === 'laravel';
     }
 
     private inferLaravelLocaleAndRoot(uri: vscode.Uri): { locale: string; root: string } | null {

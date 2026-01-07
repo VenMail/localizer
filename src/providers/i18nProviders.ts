@@ -139,9 +139,22 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                 }
             }
 
+            // Build locale list using same logic as DiagnosticAnalyzer
             const localeSet = new Set<string>();
             localeSet.add(record.defaultLocale);
 
+            if (projectConfig?.locales?.length) {
+                for (const locale of projectConfig.locales) {
+                    localeSet.add(locale);
+                }
+            } else {
+                // Fall back to discovered locales when project doesn't configure locales
+                for (const locale of this.i18nIndex.getAllLocales()) {
+                    localeSet.add(locale);
+                }
+            }
+
+            // Also include any locales present in this specific record
             for (const locale of record.locales.keys()) {
                 localeSet.add(locale);
             }
@@ -150,14 +163,6 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             }
             for (const loc of record.locations) {
                 localeSet.add(loc.locale);
-            }
-            if (projectConfig?.locales?.length) {
-                for (const locale of projectConfig.locales) {
-                    localeSet.add(locale);
-                }
-            }
-            for (const locale of this.i18nIndex.getAllLocales()) {
-                localeSet.add(locale);
             }
 
             const locales = Array.from(localeSet);
