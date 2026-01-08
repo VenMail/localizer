@@ -71,6 +71,7 @@ export class TranslationHandler {
             if (!uri) {
                 continue;
             }
+            // Check if file is in Laravel lang directories
             const fsPath = uri.fsPath.replace(/\\/g, '/').toLowerCase();
             if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
                 return true;
@@ -84,6 +85,7 @@ export class TranslationHandler {
         if (!fsPath.endsWith('.php')) {
             return false;
         }
+        // Check if file is in Laravel lang directories
         return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
     }
 

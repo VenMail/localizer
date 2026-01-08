@@ -1358,9 +1358,53 @@ export class DiagnosticAnalyzer {
         this.logVerboseEnabled = config.verboseLogging === true;
         const fileKey = uri.toString();
         const languageId = this.getLanguageIdForUri(uri);
-        const isLaravelSource = languageId === 'php' || languageId === 'blade';
-        const isDotNetSource = languageId === 'csharp' || languageId === 'razor';
-        const isPythonSource = languageId === 'python';
+        const folder = vscode.workspace.getWorkspaceFolder(uri);
+        
+        // Use framework detection instead of hardcoded language detection
+        let isLaravelSource = false;
+        let isReactSource = false;
+        let isVueSource = false;
+        let isDotNetSource = languageId === 'csharp' || languageId === 'razor';
+        let isPythonSource = languageId === 'python';
+        
+        if (folder) {
+            const { detectFrameworkProfile } = await import('../frameworks/detection');
+            const profile = await detectFrameworkProfile(folder);
+            
+            if (profile?.kind === 'laravel' || (profile?.kind === 'mixed' && profile.frameworks?.includes('laravel'))) {
+                isLaravelSource = languageId === 'php' || languageId === 'blade';
+            }
+            if (profile?.kind === 'react' || (profile?.kind === 'mixed' && profile.frameworks?.includes('react'))) {
+                isReactSource = languageId === 'typescript' || languageId === 'javascript' || languageId === 'javascriptreact';
+            }
+            if (profile?.kind === 'vue' || (profile?.kind === 'mixed' && profile.frameworks?.includes('vue'))) {
+                isVueSource = languageId === 'vue';
+            }
+            
+            // Fallback: if no framework is detected but we have PHP files, treat them as Laravel
+            // This is important for projects that don't have explicit framework detection but use Laravel-style translations
+            if (!profile && (languageId === 'php' || languageId === 'blade')) {
+                isLaravelSource = true;
+            }
+        } else {
+            // Fallback to language-based detection if no folder
+            // PHP files should be treated as Laravel by default (Laravel uses PHP translation files, not JSON)
+            isLaravelSource = languageId === 'php' || languageId === 'blade';
+            isReactSource = languageId === 'typescript' || languageId === 'javascript' || languageId === 'javascriptreact';
+            isVueSource = languageId === 'vue';
+        }
+        
+        // Additional fallback: check file path for Laravel indicators
+        // This is now redundant since we treat all PHP files as Laravel, but kept for clarity
+        if (!isLaravelSource && (languageId === 'php' || languageId === 'blade')) {
+            const normalizedPath = uri.fsPath.replace(/\\/g, '/').toLowerCase();
+            if (normalizedPath.includes('/resources/views/') || 
+                normalizedPath.includes('/views/') ||
+                normalizedPath.includes('/lang/') ||
+                normalizedPath.includes('/resources/lang/')) {
+                isLaravelSource = true;
+            }
+        }
         
         // Only analyze supported source file types
         if (!DiagnosticAnalyzer.SOURCE_SUPPORTED_LANGUAGES.has(languageId)) {
@@ -1397,13 +1441,16 @@ export class DiagnosticAnalyzer {
         // Use cached key sets to avoid recomputing classifications on every file
         const { laravelKeys, jsonBackedKeys, resxBackedKeys, poBackedKeys } =
             this.getSourceKeySets(allKeys);
+        // Use framework-aware key validation
         const validKeysSet = isLaravelSource
             ? laravelKeys
+            : isReactSource || isVueSource
+            ? jsonBackedKeys
             : isDotNetSource
             ? resxBackedKeys
             : isPythonSource
             ? poBackedKeys
-            : jsonBackedKeys;
+            : jsonBackedKeys; // Default to JSON-backed keys
         
         const diagnostics: vscode.Diagnostic[] = [];
         
@@ -1459,9 +1506,17 @@ export class DiagnosticAnalyzer {
                             loc.uri.fsPath.toLowerCase().endsWith('.po'),
                         );
 
+                        const hasLaravelLocation = record.locations.some((loc) => {
+                            const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                            return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                        });
+
                         if (isLaravelSource) {
-                            // Any backing location is acceptable for Laravel usages.
-                            continue;
+                            // Laravel files should only use Laravel PHP translation keys
+                            if (hasLaravelLocation) {
+                                continue;
+                            }
+                            // If Laravel file is trying to use non-Laravel keys (like JSON), flag it
                         }
                         if (isDotNetSource && hasResxLocation) {
                             continue;
@@ -1469,7 +1524,12 @@ export class DiagnosticAnalyzer {
                         if (isPythonSource && hasPoLocation) {
                             continue;
                         }
-                        if (!isDotNetSource && !isPythonSource && hasJsonLocation) {
+                        if ((isReactSource || isVueSource) && hasJsonLocation) {
+                            // React/Vue uses JSON files
+                            continue;
+                        }
+                        if (!isDotNetSource && !isPythonSource && !isLaravelSource && !isReactSource && !isVueSource && hasJsonLocation) {
+                            // Default to JSON for unknown frameworks
                             continue;
                         }
                     }

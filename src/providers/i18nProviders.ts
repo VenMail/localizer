@@ -51,9 +51,13 @@ export class I18nHoverProvider implements vscode.HoverProvider {
         token: vscode.CancellationToken,
     ): Promise<vscode.Hover | undefined> {
         try {
+            // Debug: Log when hover is triggered
+            console.log(`[Hover] Triggered for ${document.languageId} file: ${document.uri.fsPath} at line ${position.line}, char ${position.character}`);
+
             // Check if project is disabled
             const folder = vscode.workspace.getWorkspaceFolder(document.uri);
             if (folder && isProjectDisabled(folder)) {
+                console.log('[Hover] Project is disabled');
                 return undefined; // Project is disabled
             }
 
@@ -82,29 +86,55 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             
             const keyInfo = extractKeyAtPosition(document, position);
             if (!keyInfo) {
+                console.log('[Hover] No key found at position');
                 return undefined;
             }
+
+            console.log(`[Hover] Found key: "${keyInfo.key}" at range ${keyInfo.range.start.line}:${keyInfo.range.start.character}-${keyInfo.range.end.line}:${keyInfo.range.end.character}`);
 
             const range = keyInfo.range;
 
             const record = this.i18nIndex.getRecord(keyInfo.key);
             if (!record) {
+                console.log(`[Hover] No record found for key: "${keyInfo.key}"`);
                 return undefined;
             }
 
+            console.log(`[Hover] Record found for key "${keyInfo.key}" with ${record.locations.length} locations and ${record.locales.size} locales`);
+
             const languageId = document.languageId;
             const isLaravelSource = languageId === 'php' || languageId === 'blade';
+            console.log(`[Hover] Language: ${languageId}, Is Laravel: ${isLaravelSource}`);
 
             const valueMap = new Map<string, string>();
 
             if (isLaravelSource) {
                 const laravelByLocale = new Map<string, vscode.Uri>();
                 for (const loc of record.locations) {
-                    const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
-                    if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
-                        const existing = laravelByLocale.get(loc.locale);
-                        if (!existing || loc.uri.fsPath.length < existing.fsPath.length) {
-                            laravelByLocale.set(loc.locale, loc.uri);
+                    // Use framework detection to determine if this is a Laravel project
+                    const folder = vscode.workspace.getWorkspaceFolder(loc.uri);
+                    if (folder) {
+                        try {
+                            const profile = await detectFrameworkProfile(folder);
+                            if (profile?.kind === 'laravel') {
+                                // For Laravel projects, prefer PHP files in lang directories
+                                const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                                if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
+                                    const existing = laravelByLocale.get(loc.locale);
+                                    if (!existing || loc.uri.fsPath.length < existing.fsPath.length) {
+                                        laravelByLocale.set(loc.locale, loc.uri);
+                                    }
+                                }
+                            }
+                        } catch {
+                            // Fallback to old logic if framework detection fails
+                            const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                            if (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/')) {
+                                const existing = laravelByLocale.get(loc.locale);
+                                if (!existing || loc.uri.fsPath.length < existing.fsPath.length) {
+                                    laravelByLocale.set(loc.locale, loc.uri);
+                                }
+                            }
                         }
                     }
                 }
@@ -210,9 +240,10 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             );
 
             md.isTrusted = true;
+            console.log(`[Hover] Successfully created hover for key "${record.key}" with ${valueMap.size} translations`);
             return new vscode.Hover(md, keyInfo.range);
         } catch (err) {
-            console.error('Hover provider error:', err);
+            console.error('[Hover] Hover provider error:', err);
             return undefined;
         }
     }
@@ -530,6 +561,7 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
 
             if (isLaravelSource) {
                 const laravelLocations = locations.filter((loc) => {
+                    // For Laravel projects, prefer PHP files in lang directories
                     const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
                     return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
                 });
@@ -676,6 +708,7 @@ export class I18nCompletionProvider implements vscode.CompletionItemProvider {
 
                 if (isLaravelSource) {
                     const hasLaravel = record.locations.some((loc) => {
+                        // For Laravel projects, check if location is in lang directories
                         const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
                         return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
                     });

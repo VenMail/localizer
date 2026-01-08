@@ -60,9 +60,6 @@ export class I18nIndex {
             '**/locale/*/LC_MESSAGES/*.po',
             '**/locales/*/LC_MESSAGES/*.po',
             '**/translations/*/LC_MESSAGES/*.po',
-            // Laravel PHP locales
-            '**/lang/**/*.php',
-            '**/resources/lang/**/*.php',
             // .NET / ASP.NET RESX resources (conventionally under Resources/)
             '**/Resources/**/*.resx',
         ];
@@ -88,6 +85,44 @@ export class I18nIndex {
             }
         }
 
+        // For mixed projects, add appropriate globs for each framework
+        const mixedProjectGlobs = new Map<string, string[]>();
+        for (const folder of folders) {
+            const profile = await detectFrameworkProfile(folder);
+            if (profile?.kind === 'mixed') {
+                const globs: string[] = [];
+                
+                // Add Laravel PHP globs if Laravel is in the mix
+                if (profile.frameworks.includes('laravel')) {
+                    globs.push(
+                        'lang/**/*.php',
+                        'resources/lang/**/*.php',
+                    );
+                }
+                
+                // Add React/Vue JSON globs (shared between React and Vue)
+                if (profile.frameworks.includes('react') || profile.frameworks.includes('vue')) {
+                    globs.push(
+                        'resources/js/i18n/**/*.json',
+                        'resources/js/locales/**/*.json',
+                        'resources/js/auto/**/*.json',
+                        'src/i18n/**/*.json',
+                        'src/locales/**/*.json',
+                    );
+                }
+                
+                // Add Nuxt JSON globs if Nuxt is in the mix
+                if (profile.frameworks.includes('nuxt')) {
+                    globs.push(
+                        'locales/**/*.json',
+                        'i18n/**/*.json',
+                    );
+                }
+                
+                mixedProjectGlobs.set(folder.uri.fsPath, globs);
+            }
+        }
+
         const fileKeySet = new Set<string>();
         const fileList: vscode.Uri[] = [];
         for (const folder of folders) {
@@ -98,6 +133,12 @@ export class I18nIndex {
             const laravelGlobs = folderLaravelGlobs.get(folder.uri.fsPath);
             if (laravelGlobs) {
                 effectiveGlobs.push(...laravelGlobs);
+            }
+
+            // Add mixed project globs for Laravel + Inertia projects
+            const mixedGlobs = mixedProjectGlobs.get(folder.uri.fsPath);
+            if (mixedGlobs) {
+                effectiveGlobs.push(...mixedGlobs);
             }
 
             // When localeGlobs is not explicitly configured, augment the
