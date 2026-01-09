@@ -174,6 +174,16 @@ export class DiagnosticAnalyzer {
         this.log.appendLine(message);
     }
 
+    private debugLog(message: string): void {
+        // Check if debug logging is enabled in settings
+        const config = vscode.workspace.getConfiguration('ai-localizer');
+        const debugEnabled = config.get<boolean>('debug.enabled');
+        
+        if (debugEnabled) {
+            this.log.appendLine(`[DEBUG] ${message}`);
+        }
+    }
+
     private verboseLog(message: string, enabled: boolean): void {
         if (!enabled) return;
         this.safeLog(message);
@@ -401,11 +411,6 @@ export class DiagnosticAnalyzer {
                     if (locEntry && locEntry.uri.toString() !== fileKey) {
                         continue;
                     }
-                }
-
-                // Allow missing translation diagnostics for non-default locale files reporting their own missing translations
-                if ((!val || !val.trim()) && fileLocale !== locale) {
-                    continue;
                 }
 
                 this.verboseLog(
@@ -997,7 +1002,7 @@ export class DiagnosticAnalyzer {
             if (!isBaseNonTranslatable) {
                 issues.push({
                     message: `Missing translation for "${key}" [${locale}]`,
-                    severity: config.missingSeverity,
+                    severity: locale === config.defaultLocale ? config.missingSeverity : config.missingLocaleSeverity,
                     code: 'ai-i18n.untranslated',
                 });
             }
@@ -1015,6 +1020,8 @@ export class DiagnosticAnalyzer {
                 const reportKey = `${key}::${locale}`;
                 allowedByReport = this.untranslatedIssuesByLocaleKey.has(reportKey);
             }
+            // When report is not active, allow all untranslated items to be reported
+            // This ensures untranslated diagnostics show up even without running "Fix untranslated" first
 
             if (!ignore && allowedByReport) {
                 issues.push({
@@ -1295,9 +1302,16 @@ export class DiagnosticAnalyzer {
         const resxBackedKeys = new Set<string>();
         const poBackedKeys = new Set<string>();
 
+        this.safeLog(`[DiagnosticAnalyzer] Building source key sets from ${allKeys.length} keys`);
+        
+        // Log sample keys for debugging
+        const sampleKeys = allKeys.slice(0, 10);
+        this.safeLog(`[DiagnosticAnalyzer] Sample keys: ${sampleKeys.join(', ')}`);
+
         for (const key of allKeys) {
             const record = this.i18nIndex.getRecord(key);
             if (!record) {
+                this.safeLog(`[DiagnosticAnalyzer] No record found for key: ${key}`);
                 continue;
             }
             let hasLaravel = false;
@@ -1336,6 +1350,8 @@ export class DiagnosticAnalyzer {
             }
         }
 
+        this.safeLog(`[DiagnosticAnalyzer] Source key sets built - Laravel: ${laravelKeys.size}, JSON: ${jsonBackedKeys.size}, RESX: ${resxBackedKeys.size}, PO: ${poBackedKeys.size}`);
+
         this.sourceKeySetsCache = {
             laravelKeys,
             jsonBackedKeys,
@@ -1345,6 +1361,79 @@ export class DiagnosticAnalyzer {
         };
 
         return { laravelKeys, jsonBackedKeys, resxBackedKeys, poBackedKeys };
+    }
+
+    /**
+     * Case-insensitive fallback check for Laravel keys.
+     * This handles cases where translation files have different capitalization
+     * (e.g., Status.php vs status.php) but should still be recognized as Laravel keys.
+     */
+    private hasCaseInsensitiveLaravelMatch(key: string, allKeys: string[]): boolean {
+        console.log(`[hasCaseInsensitiveLaravelMatch] Checking key: "${key}"`);
+        
+        // First, try exact match in Laravel keys
+        const record = this.i18nIndex.getRecord(key);
+        if (record && Array.isArray(record.locations) && record.locations.length > 0) {
+            const hasLaravelLocation = record.locations.some((loc) => {
+                const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+            });
+            if (hasLaravelLocation) {
+                console.log(`[hasCaseInsensitiveLaravelMatch] Found exact match with Laravel location for "${key}"`);
+                return true;
+            }
+        }
+
+        // Fallback: check if there's a case-insensitive match in any Laravel file
+        // This handles cases like Status.heading.meeting_status where Status.php exists
+        // but the key lookup might be case-sensitive
+        const keyParts = key.split('.');
+        if (keyParts.length >= 2) {
+            const fileKey = keyParts[0]; // e.g., "Status" from "Status.heading.meeting_status"
+            console.log(`[hasCaseInsensitiveLaravelMatch] File key part: "${fileKey}"`);
+            
+            // Look for EXACT key match with case-insensitive file name comparison
+            for (const candidateKey of allKeys) {
+                if (candidateKey === key) {
+                    // Exact match already handled above, but let's double-check
+                    const candidateRecord = this.i18nIndex.getRecord(candidateKey);
+                    if (candidateRecord && Array.isArray(candidateRecord.locations) && candidateRecord.locations.length > 0) {
+                        const hasLaravelLocation = candidateRecord.locations.some((loc) => {
+                            const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+                            return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                        });
+                        if (hasLaravelLocation) {
+                            console.log(`[hasCaseInsensitiveLaravelMatch] Found exact key match for "${key}"`);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Additional fallback: check if the file exists with different capitalization
+            // by looking at the actual file paths in all Laravel locations
+            // BUT only for the exact same key structure, not partial matches
+            for (const candidateKey of allKeys) {
+                const candidateRecord = this.i18nIndex.getRecord(candidateKey);
+                if (candidateRecord && Array.isArray(candidateRecord.locations) && candidateRecord.locations.length > 0) {
+                    for (const loc of candidateRecord.locations) {
+                        const fsPath = loc.uri.fsPath.replace(/\\/g, '/');
+                        const fileName = fsPath.split('/').pop()?.replace('.php', '');
+                        
+                        console.log(`[hasCaseInsensitiveLaravelMatch] Checking file: "${fileName}" vs "${fileKey}"`);
+                        
+                        // Check if the file name matches case-insensitively AND the full key path is identical
+                        if (fileName && fileName.toLowerCase() === fileKey.toLowerCase() && candidateKey === key) {
+                            console.log(`[hasCaseInsensitiveLaravelMatch] Found exact key match for "${key}" in case-insensitive file "${fileName}.php"`);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        console.log(`[hasCaseInsensitiveLaravelMatch] No match found for "${key}"`);
+        return false;
     }
 
     /**
@@ -1403,6 +1492,7 @@ export class DiagnosticAnalyzer {
                 normalizedPath.includes('/lang/') ||
                 normalizedPath.includes('/resources/lang/')) {
                 isLaravelSource = true;
+                this.safeLog(`[DiagnosticAnalyzer] Detected Laravel source from path: ${uri.fsPath}`);
             }
         }
         
@@ -1452,6 +1542,15 @@ export class DiagnosticAnalyzer {
             ? poBackedKeys
             : jsonBackedKeys; // Default to JSON-backed keys
         
+        this.safeLog(`[DiagnosticAnalyzer] Using ${isLaravelSource ? 'Laravel' : 'JSON'} key set with ${validKeysSet.size} keys for ${uri.fsPath}`);
+        
+        // Log some Laravel keys for verification
+        if (isLaravelSource && laravelKeys.size > 0) {
+            const laravelSampleKeys = Array.from(laravelKeys).slice(0, 10);
+            this.debugLog(`Sample Laravel keys: ${laravelSampleKeys.join(', ')}`);
+            this.debugLog(`Looking for Status keys in Laravel set: ${Array.from(laravelKeys).filter(k => k.startsWith('Status')).join(', ')}`);
+        }
+        
         const diagnostics: vscode.Diagnostic[] = [];
         
         // Build comment ranges to skip false positives in comments
@@ -1490,12 +1589,21 @@ export class DiagnosticAnalyzer {
                 }
                 
                 if (!validKeysSet.has(key)) {
+                    // Enhanced debug logging for missing keys
+                    this.debugLog(`Checking missing key "${key}" in ${uri.fsPath}`);
+                    this.debugLog(`- isLaravelSource: ${isLaravelSource}`);
+                    this.debugLog(`- validKeysSet size: ${validKeysSet.size}`);
+                    this.debugLog(`- allKeys size: ${allKeys.length}`);
+                    
                     // Fallback: if the key exists anywhere in the index, treat it as
                     // valid when it has a backing file appropriate for the source
                     // language (JSON for JS/TS, PHP for Laravel, RESX for .NET,
                     // PO for Python/Django/Flask).
                     const record = this.i18nIndex.getRecord(key);
+                    this.safeLog(`[DiagnosticAnalyzer] - record exists: ${!!record}`);
+                    
                     if (record && Array.isArray(record.locations) && record.locations.length > 0) {
+                        this.safeLog(`[DiagnosticAnalyzer] - record locations count: ${record.locations.length}`);
                         const hasJsonLocation = record.locations.some((loc) =>
                             loc.uri.fsPath.toLowerCase().endsWith('.json'),
                         );
@@ -1510,28 +1618,48 @@ export class DiagnosticAnalyzer {
                             const fsPath = loc.uri.fsPath.replace(/\\/g, '/').toLowerCase();
                             return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
                         });
+                        
+                        this.safeLog(`[DiagnosticAnalyzer] - hasJsonLocation: ${hasJsonLocation}, hasResxLocation: ${hasResxLocation}, hasPoLocation: ${hasPoLocation}, hasLaravelLocation: ${hasLaravelLocation}`);
+                        
+                        // Log all locations for debugging
+                        record.locations.forEach((loc, index) => {
+                            this.safeLog(`[DiagnosticAnalyzer] - location ${index}: ${loc.uri.fsPath} (locale: ${loc.locale})`);
+                        });
 
                         if (isLaravelSource) {
-                            // Laravel files should only use Laravel PHP translation keys
+                            // If the key has a Laravel PHP location, treat it as valid for Laravel source.
                             if (hasLaravelLocation) {
+                                this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - Laravel source with Laravel locale file`);
                                 continue;
                             }
-                            // If Laravel file is trying to use non-Laravel keys (like JSON), flag it
+                            // Otherwise, fall through so we emit a missing-reference (JSON-only keys are invalid in Laravel PHP files).
                         }
                         if (isDotNetSource && hasResxLocation) {
+                            this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - has RESX location`);
                             continue;
                         }
                         if (isPythonSource && hasPoLocation) {
+                            this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - has PO location`);
                             continue;
                         }
                         if ((isReactSource || isVueSource) && hasJsonLocation) {
                             // React/Vue uses JSON files
+                            this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - has JSON location for React/Vue`);
                             continue;
                         }
                         if (!isDotNetSource && !isPythonSource && !isLaravelSource && !isReactSource && !isVueSource && hasJsonLocation) {
                             // Default to JSON for unknown frameworks
+                            this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - has JSON location for default framework`);
                             continue;
                         }
+                    } else {
+                        this.safeLog(`[DiagnosticAnalyzer] - No record found for key "${key}"`);
+                    }
+
+                    // Case-insensitive fallback for Laravel keys
+                    if (isLaravelSource && this.hasCaseInsensitiveLaravelMatch(key, allKeys)) {
+                        this.debugLog(`Skipping key "${key}" - found case-insensitive Laravel match`);
+                        continue;
                     }
 
                     // Calculate position
@@ -1709,6 +1837,7 @@ export interface DiagnosticConfig {
     enabled: boolean;
     defaultLocale: string;
     missingSeverity: vscode.DiagnosticSeverity;
+    missingLocaleSeverity: vscode.DiagnosticSeverity;
     untranslatedEnabled: boolean;
     untranslatedSeverity: vscode.DiagnosticSeverity;
     invalidSeverity: vscode.DiagnosticSeverity;
@@ -1751,6 +1880,7 @@ export function getDiagnosticConfig(): DiagnosticConfig {
         enabled,
         defaultLocale,
         missingSeverity: mapSeverity(missingSeveritySetting),
+        missingLocaleSeverity: mapSeverity(missingSeveritySetting),
         untranslatedEnabled,
         untranslatedSeverity: mapSeverity(untranslatedSeveritySetting),
         invalidSeverity: mapSeverity(invalidSeveritySetting),

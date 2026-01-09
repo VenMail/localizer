@@ -545,6 +545,78 @@ export class CommandRegistry {
                 (documentUri?: vscode.Uri) => untranslatedCmds.restoreInvalidInFile(documentUri),
             ),
             vscode.commands.registerCommand(
+                'ai-localizer.i18n.cleanupUnusedAndOrphaned',
+                async () => {
+                    const folder = vscode.workspace.workspaceFolders?.[0];
+                    if (!folder) {
+                        vscode.window.showErrorMessage('No workspace folder found');
+                        return;
+                    }
+
+                    const choice = await vscode.window.showQuickPick([
+                        { label: '$(search) Dry run only', description: 'Show what would be deleted without making changes' },
+                        { label: '$(trash) Apply changes', description: 'Delete unused and orphaned keys from locale files' }
+                    ], {
+                        placeHolder: 'Choose cleanup mode'
+                    });
+
+                    if (!choice) return;
+
+                    const apply = choice.label.includes('Apply');
+                    const args = ['--clean-orphaned'];
+                    if (apply) args.push('--apply');
+
+                    try {
+                        await scriptCmds.runCleanupUnused(args);
+                        vscode.window.showInformationMessage(
+                            `Cleanup completed${apply ? ' with changes applied' : ' (dry run)'}`
+                        );
+                    } catch (err) {
+                        vscode.window.showErrorMessage(
+                            `Cleanup failed: ${err instanceof Error ? err.message : String(err)}`
+                        );
+                    }
+                },
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.flagMissingFromHover',
+                async (args: { uri: string; key: string; missingLocales: string[] }) => {
+                    if (!args || !args.uri || !args.key || !args.missingLocales?.length) {
+                        vscode.window.showErrorMessage('Invalid hover flag arguments');
+                        return;
+                    }
+
+                    const uri = vscode.Uri.parse(args.uri);
+                    const folder = vscode.workspace.getWorkspaceFolder(uri);
+                    if (!folder) {
+                        vscode.window.showErrorMessage('No workspace folder found');
+                        return;
+                    }
+
+                    // Ensure the i18n index is up-to-date
+                    await this.i18nIndex.ensureInitialized(true);
+
+                    // Force refresh diagnostics for the specific file and missing locales
+                    for (const locale of args.missingLocales) {
+                        // Find locale files for this locale
+                        const allKeys = this.i18nIndex.getAllKeys();
+                        for (const key of allKeys) {
+                            const record = this.i18nIndex.getRecord(key);
+                            if (!record) continue;
+
+                            const location = record.locations.find(loc => loc.locale === locale);
+                            if (location) {
+                                await this.refreshFileDiagnostics(untranslatedDiagnostics, location.uri, [args.key]);
+                            }
+                        }
+                    }
+
+                    vscode.window.showInformationMessage(
+                        `Flagged missing translations for "${args.key}" in ${args.missingLocales.join(', ')}`
+                    );
+                },
+            ),
+            vscode.commands.registerCommand(
                 'ai-localizer.i18n.bulkFixMissingKeyReferences',
                 async (documentUri?: vscode.Uri) => {
                     const uri = documentUri || vscode.window.activeTextEditor?.document.uri;
@@ -696,21 +768,22 @@ export class CommandRegistry {
 
         const folders = vscode.workspace.workspaceFolders || [];
         const globalCfg = vscode.workspace.getConfiguration('ai-localizer');
-        const localeGlobs =
-            globalCfg.get<string[]>('i18n.localeGlobs') || [
-                'resources/js/i18n/auto/**/*.json',
-                'src/i18n/**/*.json',
-                'src/locales/**/*.json',
-                'locales/**/*.json',
-                '**/locales/**/*.json',
-                'i18n/**/*.json',
-                'lang/**/*.php',
-                'resources/lang/**/*.php',
-                '**/Resources/**/*.resx',
-                '**/locale/*/LC_MESSAGES/*.po',
-                '**/locales/*/LC_MESSAGES/*.po',
-                '**/translations/*/LC_MESSAGES/*.po',
-            ];
+        const defaultLocaleGlobs: string[] = [
+            'resources/js/i18n/auto/**/*.json',
+            'src/i18n/**/*.json',
+            'src/locales/**/*.json',
+            'locales/**/*.json',
+            '**/locales/**/*.json',
+            'i18n/**/*.json',
+            // Python / Django / Flask gettext catalogs (.po)
+            '**/locale/*/LC_MESSAGES/*.po',
+            '**/locales/*/LC_MESSAGES/*.po',
+            '**/translations/*/LC_MESSAGES/*.po',
+            // .NET / ASP.NET RESX resources
+            '**/Resources/**/*.resx',
+        ];
+        const additionalLocaleGlobs = globalCfg.get<string[]>('i18n.localeGlobs') || [];
+        const localeGlobs = Array.from(new Set([...defaultLocaleGlobs, ...additionalLocaleGlobs]));
 
         const sourceIncludeGlobs =
             globalCfg.get<string[]>('i18n.sourceGlobs') || [

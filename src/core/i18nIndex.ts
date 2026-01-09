@@ -44,11 +44,24 @@ export class I18nIndex {
         const config = vscode.workspace.getConfiguration('ai-localizer');
         this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
         const enabled = config.get<boolean>('i18n.enabled');
+        const debugEnabled = config.get<boolean>('debug.enabled');
+        
+        if (debugEnabled) {
+            console.log(`[I18nIndex] Building index - enabled: ${enabled}, defaultLocale: ${this.defaultLocale}`);
+        }
+        
         if (enabled === false) {
+            if (debugEnabled) {
+                console.log('[I18nIndex] I18n disabled in settings, skipping index build');
+            }
             return;
         }
 
         const userGlobs = config.get<string[]>('i18n.localeGlobs');
+        if (debugEnabled) {
+            console.log(`[I18nIndex] User-defined locale globs: ${JSON.stringify(userGlobs)}`);
+        }
+        
         const defaultGlobs: string[] = [
             'resources/js/i18n/auto/**/*.json',
             'src/i18n/**/*.json',
@@ -63,9 +76,18 @@ export class I18nIndex {
             // .NET / ASP.NET RESX resources (conventionally under Resources/)
             '**/Resources/**/*.resx',
         ];
+        if (debugEnabled) {
+            console.log(`[I18nIndex] Default globs: ${JSON.stringify(defaultGlobs)}`);
+        }
 
-        // Start from user-defined globs if present, otherwise from defaults
-        const baseGlobs: string[] = userGlobs && userGlobs.length ? [...userGlobs] : [...defaultGlobs];
+        // Combine default globs with user-defined additional globs
+        const baseGlobs: string[] = [...defaultGlobs];
+        if (userGlobs && userGlobs.length) {
+            baseGlobs.push(...userGlobs);
+        }
+        if (debugEnabled) {
+            console.log(`[I18nIndex] Combined base globs: ${JSON.stringify(baseGlobs)}`);
+        }
 
         const folders = vscode.workspace.workspaceFolders || [];
         if (!folders.length) {
@@ -80,8 +102,26 @@ export class I18nIndex {
         const folderLaravelGlobs = new Map<string, string[]>();
         for (const folder of folders) {
             const shouldIncludeLaravel = await this.folderLooksLikeLaravel(folder);
+            if (debugEnabled) {
+                console.log(`[I18nIndex] Folder ${folder.uri.fsPath} looks like Laravel: ${shouldIncludeLaravel}`);
+            }
+            
+            // FALLBACK: If framework detection fails but we have PHP files, include Laravel globs anyway
+            // This ensures Laravel translation files are discovered even if detection fails
             if (shouldIncludeLaravel) {
                 folderLaravelGlobs.set(folder.uri.fsPath, laravelPhpGlobs);
+            } else {
+                // Check if this folder has any PHP files that might be Laravel
+                const hasPhpFiles = await this.folderHasPhpFiles(folder);
+                if (debugEnabled) {
+                    console.log(`[I18nIndex] Folder ${folder.uri.fsPath} has PHP files: ${hasPhpFiles}`);
+                }
+                if (hasPhpFiles) {
+                    if (debugEnabled) {
+                        console.log(`[I18nIndex] Including Laravel globs as fallback for PHP project`);
+                    }
+                    folderLaravelGlobs.set(folder.uri.fsPath, laravelPhpGlobs);
+                }
             }
         }
 
@@ -362,12 +402,36 @@ export class I18nIndex {
 
     private async folderLooksLikeLaravel(folder: vscode.WorkspaceFolder): Promise<boolean> {
         const projectConfig = await this.projectConfigService.readConfig(folder);
+        const config = vscode.workspace.getConfiguration('ai-localizer');
+        const debugEnabled = config.get<boolean>('debug.enabled');
+        
+        if (debugEnabled) {
+            console.log(`[I18nIndex] Project config for ${folder.uri.fsPath}:`, projectConfig);
+        }
+        
         // If project explicitly configures locales, trust that over heuristics
         if (projectConfig?.locales?.length) {
+            if (debugEnabled) {
+                console.log(`[I18nIndex] Project has explicit locale config, not using Laravel heuristics`);
+            }
             return false;
         }
         const profile = await detectFrameworkProfile(folder);
+        if (debugEnabled) {
+            console.log(`[I18nIndex] Framework profile for ${folder.uri.fsPath}:`, profile);
+            console.log(`[I18nIndex] Folder ${folder.uri.fsPath} detected as Laravel: ${profile?.kind === 'laravel'}`);
+        }
         return profile?.kind === 'laravel';
+    }
+
+    private async folderHasPhpFiles(folder: vscode.WorkspaceFolder): Promise<boolean> {
+        try {
+            const pattern = new vscode.RelativePattern(folder, '**/*.php');
+            const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 1);
+            return files.length > 0;
+        } catch {
+            return false;
+        }
     }
 
     private inferLaravelLocaleAndRoot(uri: vscode.Uri): { locale: string; root: string } | null {

@@ -2,7 +2,7 @@
   "name": "ai-localizer",
   "displayName": "Localizer – AI i18n for React, Vue, Laravel & more",
   "description": "Fully automated localization + translations in minutes. Localizer is an AI-assisted localization tool for React/Next/React Native, Vue/Nuxt, Svelte/SvelteKit, and Laravel (Blade + Inertia). Uses AST-aware parsers and smart validators to extract strings, manage locale JSON, run extract/rewrite/sync scripts, and scaffold drop-in LanguageSwitcher components with a guided first-time setup.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "venmail",
   "repository": {
     "type": "git",
@@ -35,6 +35,7 @@
     "onCommand:ai-localizer.i18n.runRestoreInvalidScript",
     "onCommand:ai-localizer.i18n.cleanupUnusedKeysInFile",
     "onCommand:ai-localizer.i18n.restoreInvalidKeysInFile",
+    "onCommand:ai-localizer.i18n.cleanupUnusedAndOrphaned",
     "onCommand:ai-localizer.i18n.removeUnusedKeyInFile",
     "onCommand:ai-localizer.i18n.removeInvalidKeyInFile",
     "onCommand:ai-localizer.i18n.restoreInvalidKeyInCode",
@@ -146,6 +147,10 @@
       {
         "command": "ai-localizer.i18n.restoreInvalidKeysInFile",
         "title": "AI Localizer: Remove Invalid Extracted Keys in This Locale File"
+      },
+      {
+        "command": "ai-localizer.i18n.cleanupUnusedAndOrphaned",
+        "title": "AI Localizer: Cleanup Unused and Orphaned Keys"
       },
       {
         "command": "ai-localizer.i18n.removeUnusedKeyInFile",
@@ -282,7 +287,7 @@
             "locales/**/*.json",
             "i18n/**/*.json"
           ],
-          "description": "Glob patterns (relative to each workspace folder) used to discover locale JSON files."
+          "description": "Additional glob patterns (relative to each workspace folder) used to discover locale files. These are combined with the built-in default patterns for comprehensive file discovery."
         },
         "ai-localizer.i18n.autoTranslate": {
           "type": "boolean",
@@ -412,6 +417,11 @@
           "default": false,
           "scope": "workspace",
           "description": "Disable AI Localizer for this workspace. When enabled, no prompts, diagnostics, or IntelliSense will be shown."
+        },
+        "ai-localizer.debug.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug logging for troubleshooting translation key detection and framework issues. Debug messages will appear in the AI Localizer output channel."
         }
       }
     }

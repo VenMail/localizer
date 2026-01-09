@@ -220,9 +220,14 @@ Example (user or workspace settings):
 
 ## Release Notes
 
+### 0.1.14
+- Add cleanup unused and orphaned keys command.
 
 ### 0.1.13
-- Fix hover tooltips so they list all project locales and flag missing translations again.
+- Fix hover tooltips so they list all project locales and flag missing translations.
+- Fix missing locale diagnostics.
+- Improve file specific diagnostics detections.
+- Add debug logging settings.
 
 ### 0.1.12
  - Fix existing scripts detection.

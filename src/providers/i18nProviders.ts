@@ -214,6 +214,20 @@ export class I18nHoverProvider implements vscode.HoverProvider {
                 md.appendMarkdown(`⚠️ Missing in: ${missingLocales.join(', ')}\n\n`);
             }
             
+            // NEW: Instant cross-check for files not yet reindexed
+            const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+            if (workspaceFolder && missingLocales.length > 0) {
+                const args = {
+                    uri: document.uri.toString(),
+                    key: record.key,
+                    missingLocales,
+                };
+                const encoded = encodeURIComponent(JSON.stringify(args));
+                md.appendMarkdown(
+                    `[🔍 Flag missing translations now](command:ai-localizer.i18n.flagMissingFromHover?${encoded})\n\n`,
+                );
+            }
+            
             for (const locale of locales) {
                 const value = valueMap.get(locale);
                 const hasValue = typeof value === 'string' && value.trim().length > 0;

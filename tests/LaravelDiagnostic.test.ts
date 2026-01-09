@@ -83,7 +83,15 @@ const createAnalyzer = (records: TranslationRecord[]): DiagnosticAnalyzer => {
             }
             return undefined;
         },
-        getAllLocales: () => ['en', 'fr', 'de'],
+        getAllLocales: () => {
+            const set = new Set<string>();
+            for (const record of recordsByKey.values()) {
+                for (const locale of record.locales.keys()) {
+                    set.add(locale);
+                }
+            }
+            return Array.from(set);
+        },
     } as unknown as I18nIndex;
 
     return new DiagnosticAnalyzer(fakeIndex, fakeProjectConfigService, new MockOutputChannel());

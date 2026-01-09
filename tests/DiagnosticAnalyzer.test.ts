@@ -158,6 +158,32 @@ describe('DiagnosticAnalyzer.analyzeSourceFile', () => {
 
         expect(diagnostics).toHaveLength(0);
     });
+
+    it('reports missing Laravel reference when key exists only in JSON', async () => {
+        const analyzer = createAnalyzer([
+            // Key exists only in JSON, not in Laravel PHP locales
+            createRecord('partner.api.title', 'en', '/locales/en/app.json'),
+        ]);
+        fileContent = "<?php echo __('partner.api.title'); ?>";
+        const uri = Uri.file('/resources/views/example.blade.php');
+
+        const diagnostics = await analyzer.analyzeSourceFile(uri, baseConfig);
+
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]?.code).toBe('ai-i18n.missing-reference');
+    });
+
+    it('does not report missing Laravel reference when Laravel PHP locale exists', async () => {
+        const analyzer = createAnalyzer([
+            createRecord('partner.api.title', 'en', '/resources/lang/en/Partner.php'),
+        ]);
+        fileContent = "<?php echo __('partner.api.title'); ?>";
+        const uri = Uri.file('/resources/views/example.blade.php');
+
+        const diagnostics = await analyzer.analyzeSourceFile(uri, baseConfig);
+
+        expect(diagnostics).toHaveLength(0);
+    });
 });
 
 describe('DiagnosticAnalyzer.analyzeFile', () => {

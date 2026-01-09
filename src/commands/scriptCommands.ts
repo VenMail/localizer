@@ -149,8 +149,8 @@ export class ScriptCommands {
         await runI18nScript('i18n:rewrite-blade', { context: this.context });
     }
 
-    async runCleanupUnused(): Promise<void> {
-        await runI18nScript('i18n:cleanup-unused', { context: this.context });
+    async runCleanupUnused(args?: string[]): Promise<void> {
+        await runI18nScript('i18n:cleanup-unused', { context: this.context, extraArgs: args });
     }
 
     async runRestoreInvalid(): Promise<void> {
