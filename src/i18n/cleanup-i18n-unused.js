@@ -240,9 +240,17 @@ async function applyDeletions(unusedKeys) {
       continue;
     }
     for (const locale of locales) {
-      const rel = baseFileRel.startsWith(baseLocale)
-        ? path.join(locale, path.relative(baseLocale, baseFileRel))
-        : baseFileRel;
+      // Map base file path to target locale file
+      // If baseFileRel is "en/common.json", map to "fr/common.json"
+      // If baseFileRel is already locale-specific, use as-is
+      let rel;
+      if (baseFileRel.startsWith(`${baseLocale}/`) || baseFileRel.startsWith(`${baseLocale}\\`)) {
+        // Replace base locale with target locale
+        rel = baseFileRel.replace(new RegExp(`^${baseLocale}[\\\\/]`), `${locale}/`);
+      } else {
+        // File is not locale-specific, use as-is
+        rel = baseFileRel;
+      }
       const abs = path.resolve(autoDir, rel);
       if (!existsSync(abs)) continue;
 
@@ -279,10 +287,8 @@ async function applyOrphanedDeletions(orphanedKeys) {
     const { keyPath, baseFileRel, locale } = entry;
     
     // Only delete from the specific locale where the orphaned key exists
-    const rel = baseFileRel.startsWith(baseLocale)
-      ? path.join(locale, path.relative(baseLocale, baseFileRel))
-      : baseFileRel;
-    const abs = path.resolve(autoDir, rel);
+    // baseFileRel is already the correct path for this locale
+    const abs = path.resolve(autoDir, baseFileRel);
     if (!existsSync(abs)) continue;
 
     let cached = fileCache.get(abs);
