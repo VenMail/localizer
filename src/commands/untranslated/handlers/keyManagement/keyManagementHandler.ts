@@ -1303,12 +1303,32 @@ export class KeyManagementHandler {
 
                         if (batchUpdates.size > 0) {
                             try {
-                                if (isLaravelSource) {
-                                    for (const [key, { value }] of batchUpdates.entries()) {
+                                // Route Laravel keys to PHP lang files even when running from JS/TS files
+                                const laravelUpdates: Array<{ key: string; value: string }> = [];
+                                const jsonUpdates = new Map<string, { value: string; rootName?: string }>();
+                                
+                                for (const [key, entry] of batchUpdates.entries()) {
+                                    const record = this.i18nIndex.getRecord(key);
+                                    const hasLaravelLocation = record?.locations?.some((loc: any) => {
+                                        const fsPath = loc.uri.fsPath.replace(/\\/g, '/');
+                                        return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+                                    });
+                                    
+                                    if (isLaravelSource || hasLaravelLocation) {
+                                        laravelUpdates.push({ key, value: entry.value });
+                                    } else {
+                                        jsonUpdates.set(key, entry);
+                                    }
+                                }
+
+                                if (laravelUpdates.length > 0) {
+                                    for (const { key, value } of laravelUpdates) {
                                         await setLaravelTranslationValue(folder!, defaultLocale, key, value);
                                     }
-                                } else {
-                                    await setTranslationValuesBatch(folder!, defaultLocale, batchUpdates);
+                                }
+                                
+                                if (jsonUpdates.size > 0) {
+                                    await setTranslationValuesBatch(folder!, defaultLocale, jsonUpdates);
                                 }
                             } catch (applyErr) {
                                 this.log?.appendLine(

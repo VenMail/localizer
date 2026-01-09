@@ -50,6 +50,7 @@
     "onCommand:ai-localizer.i18n.uninstallProjectI18n",
     "onCommand:ai-localizer.project.disable",
     "onCommand:ai-localizer.project.enable",
+    "onCommand:ai-localizer.i18n.bulkFixMissingKeyReferences",
     "onLanguage:javascript",
     "onLanguage:typescript",
     "onLanguage:javascriptreact",
@@ -79,6 +80,10 @@
       {
         "command": "ai-localizer.askAI",
         "title": "AI Localizer: Ask AI for Help"
+      },
+      {
+        "command": "ai-localizer.i18n.bulkFixMissingKeyReferences",
+        "title": "AI Localizer: Bulk Fix Missing Key References"
       },
       {
         "command": "ai-localizer.i18n.scaffoldMessagesLoader",
