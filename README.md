@@ -222,6 +222,7 @@ Example (user or workspace settings):
 
 ### 0.1.14
 - Add cleanup unused and orphaned keys command.
+- Fix laravel missing key bulk fix.
 
 ### 0.1.13
 - Fix hover tooltips so they list all project locales and flag missing translations.
