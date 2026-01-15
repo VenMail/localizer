@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { I18nIndex } from '../../../../core/i18nIndex';
-import { setTranslationValue, setTranslationValuesBatch } from '../../../../core/i18nFs';
+import { setLaravelTranslationValue, setTranslationValue, setTranslationValuesBatch } from '../../../../core/i18nFs';
 
 /**
  * Handles individual translation operations like copying and setting values
@@ -20,7 +20,7 @@ export class TranslationOperations {
         key: string,
         sourceLocale: string,
         targetLocale: string,
-        options: { skipDiagnosticsRefresh?: boolean } = {},
+        options: { skipDiagnosticsRefresh?: boolean; skipOverwritePrompt?: boolean } = {},
     ): Promise<void> {
         // Input validation
         if (!documentUri || !key || !sourceLocale || !targetLocale) {
@@ -44,12 +44,21 @@ export class TranslationOperations {
         // Check if target locale already has a translation
         const targetValue = record.locales.get(targetLocale);
         if (targetValue && targetValue.trim()) {
-            const overwrite = await vscode.window.showWarningMessage(
-                `AI Localizer: Target locale "${targetLocale}" already has a translation for "${key}". Overwrite?`,
-                'Overwrite',
-                'Cancel'
-            );
-            if (overwrite !== 'Overwrite') {
+            // Skip prompt during bulk operations
+            if (!options.skipOverwritePrompt) {
+                const overwrite = await vscode.window.showWarningMessage(
+                    `AI Localizer: Target locale "${targetLocale}" already has a translation for "${key}". Overwrite?`,
+                    'Overwrite',
+                    'Cancel'
+                );
+                if (overwrite !== 'Overwrite') {
+                    return;
+                }
+            }
+            // In bulk operations, we silently skip keys that already have values
+            // (they should have been filtered out earlier, but this is a safety check)
+            else {
+                this.log?.appendLine(`[TranslationOps] Skipping "${key}" - target locale already has value`);
                 return;
             }
         }
@@ -67,14 +76,22 @@ export class TranslationOperations {
 
         // Extract root name from the source file path for consistency
         const rootName = this.extractRootNameFromPath(existingLocation.uri.fsPath);
+        const isLaravelKey = record.locations.some((loc: any) => {
+            const fsPath = loc.uri.fsPath.replace(/\\/g, '/');
+            return fsPath.includes('/lang/') || fsPath.includes('/resources/lang/');
+        });
 
-        await setTranslationValue(folder, targetLocale, key, sourceValue, { rootName });
+        if (isLaravelKey) {
+            await setLaravelTranslationValue(folder, targetLocale, key, sourceValue);
+        } else {
+            await setTranslationValue(folder, targetLocale, key, sourceValue, { rootName });
+        }
         
         // Refresh diagnostics if not skipped - we need to find or create the target URI
         if (!options.skipDiagnosticsRefresh) {
             try {
                 // Try to resolve the target locale file URI for diagnostics refresh
-                const targetUri = await this.resolveTargetLocaleUri(folder, targetLocale, key, rootName);
+                const targetUri = await this.resolveTargetLocaleUri(folder, targetLocale, key, rootName, isLaravelKey);
                 if (targetUri) {
                     await vscode.commands.executeCommand('ai-localizer.i18n.refreshFileDiagnostics', targetUri, [key]);
                 }
@@ -131,9 +148,30 @@ export class TranslationOperations {
         folder: vscode.WorkspaceFolder,
         locale: string,
         key: string,
-        rootName: string
+        rootName: string,
+        isLaravelKey: boolean
     ): Promise<vscode.Uri | null> {
         try {
+            if (isLaravelKey) {
+                // Prefer an existing Laravel locale location if present
+                const record = this.i18nIndex.getRecord(key);
+                const laravelLoc = record?.locations.find((loc: any) => {
+                    const fsPath = loc.uri.fsPath.replace(/\\/g, '/');
+                    return loc.locale === locale && (fsPath.includes('/lang/') || fsPath.includes('/resources/lang/'));
+                });
+                if (laravelLoc) {
+                    return laravelLoc.uri;
+                }
+
+                const segments = key.split('.').filter(Boolean);
+                const group = segments[0] || 'messages';
+                const bases = ['resources/lang', 'lang'];
+                for (const base of bases) {
+                    const candidate = path.join(folder.uri.fsPath, base, locale, `${group}.php`);
+                    return vscode.Uri.file(candidate);
+                }
+            }
+
             // Use the same logic as setTranslationValue to determine the target file
             const bases = ['resources/js/i18n/auto', 'src/i18n', 'src/locales', 'locales', 'i18n'];
             

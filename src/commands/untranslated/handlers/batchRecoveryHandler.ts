@@ -246,17 +246,28 @@ export class BatchRecoveryHandler {
 
     /**
      * Search HEAD content across ALL locales (key might exist in another locale)
+     * Only searches for keys containing 'common' or 'general' to prevent incorrect matches
      */
     private searchAllLocalesHeadContent(
         cache: LocaleCache,
         keys: string[],
         results: Map<string, BatchRecoveryResult>,
     ): void {
-        this.log?.appendLine(`[BatchRecovery] Searching ALL locales HEAD content for ${keys.length} keys`);
+        // Filter keys to only allow cross-locale searching for common/general keys
+        const eligibleKeys = keys.filter(key => 
+            key.toLowerCase().includes('common') || key.toLowerCase().includes('general')
+        );
+        
+        if (eligibleKeys.length === 0) {
+            this.log?.appendLine(`[BatchRecovery] Skipping ALL locales search - no eligible common/general keys`);
+            return;
+        }
+        
+        this.log?.appendLine(`[BatchRecovery] Searching ALL locales HEAD content for ${eligibleKeys.length} eligible keys (out of ${keys.length} total)`);
         
         const allFiles = cache.getAllLocaleFiles();
         
-        for (const key of keys) {
+        for (const key of eligibleKeys) {
             if (results.has(key)) continue;
             
             const variations = getKeyPathVariations(key);
@@ -351,6 +362,7 @@ export class BatchRecoveryHandler {
 
     /**
      * Search git history across ALL locales for missing keys
+     * Only searches for keys containing 'common' or 'general' to prevent incorrect matches
      */
     private async searchAllLocalesGitHistory(
         folder: vscode.WorkspaceFolder,
@@ -360,13 +372,23 @@ export class BatchRecoveryHandler {
         maxCommitsPerFile: number,
         results: Map<string, BatchRecoveryResult>,
     ): Promise<void> {
-        this.log?.appendLine(`[BatchRecovery] Searching ALL locales git history for ${keys.length} keys`);
+        // Filter keys to only allow cross-locale searching for common/general keys
+        const eligibleKeys = keys.filter(key => 
+            key.toLowerCase().includes('common') || key.toLowerCase().includes('general')
+        );
+        
+        if (eligibleKeys.length === 0) {
+            this.log?.appendLine(`[BatchRecovery] Skipping ALL locales git history search - no eligible common/general keys`);
+            return;
+        }
+        
+        this.log?.appendLine(`[BatchRecovery] Searching ALL locales git history for ${eligibleKeys.length} eligible keys (out of ${keys.length} total)`);
         
         const allFiles = cache.getAllLocaleFiles();
         
         // Pre-build key variations
         const keyVariationsMap = new Map<string, string[]>();
-        for (const key of keys) {
+        for (const key of eligibleKeys) {
             keyVariationsMap.set(key, getKeyPathVariations(key));
         }
 
@@ -384,7 +406,7 @@ export class BatchRecoveryHandler {
                     const json = await cache.getContentAtCommit(file.path, commit.hash);
                     if (!json) continue;
 
-                    for (const key of keys) {
+                    for (const key of eligibleKeys) {
                         if (results.has(key)) continue;
                         
                         const variations = keyVariationsMap.get(key)!;

@@ -192,19 +192,27 @@ describe('DiagnosticAnalyzer.analyzeFile', () => {
         mockFiles.clear();
     });
 
-    it('flags missing translations in default locale when other locales exist', async () => {
-        // Set up mock file content for the default locale file with missing translation
-        mockFiles.set('/locales/en/app.json', JSON.stringify({
-            "app.title": "" // Empty string = missing translation
+    it('flags missing default-locale translation when other locales have values', async () => {
+        // In this scenario the key exists in non-default locales, but is completely absent in the default locale.
+        // This should trigger the dedicated "missing-default" diagnostic.
+
+        // Set up mock file content for non-default locale files only
+        mockFiles.set('/locales/fr/app.json', JSON.stringify({
+            "app.title": "Titre",
         }));
-        
+        mockFiles.set('/locales/de/app.json', JSON.stringify({
+            "app.title": "Titel",
+        }));
+
         const analyzer = createAnalyzer([
-            createRecord('app.title', 'en', '/locales/en/app.json', ''), // Missing in default locale
-            createRecord('app.title', 'fr', '/locales/fr/app.json', 'Titre'), // Present in French  
-            createRecord('app.title', 'de', '/locales/de/app.json', 'Titel'), // Present in German
+            // Note: no "en" record for app.title -> default locale truly missing
+            createRecord('app.title', 'fr', '/locales/fr/app.json', 'Titre'),
+            createRecord('app.title', 'de', '/locales/de/app.json', 'Titel'),
         ]);
-        
-        const uri = Uri.file('/locales/en/app.json');
+
+        // Analyze one of the non-default locale files; the analyzer should still report
+        // that the default locale (en) is missing while fr/de have translations.
+        const uri = Uri.file('/locales/fr/app.json');
         const diagnostics = await analyzer.analyzeFile(uri, baseConfig);
 
         expect(diagnostics.length).toBeGreaterThan(0);

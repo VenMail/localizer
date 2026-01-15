@@ -27,6 +27,7 @@ import {
     escapeRegExp,
     looksLikeUserText,
 } from '../../utils/textAnalysis';
+import { findBestKeyMatch } from '../../utils/keySimilarity';
 import { findCommentRanges, isPositionInComment } from '../../utils/commentParser';
 import { GitRecoveryHandler } from '../gitRecoveryHandler';
 import { getBatchRecoveryHandler } from '../batchRecoveryHandler';
@@ -479,7 +480,6 @@ export class KeyManagementHandler {
         const isLaravelSource = languageId === 'php' || languageId === 'blade';
         const keyParts = String(key).split('.').filter(Boolean);
         const keyLeaf = keyParts[keyParts.length - 1] || '';
-        const keyPrefix = keyParts.slice(0, -1).join('.');
 
         const syncService = getGranularSyncService(this.context);
         await syncService.syncKeys(folder, [key]);
@@ -564,43 +564,24 @@ export class KeyManagementHandler {
         }
 
         // STEP 1: Try to find the best matching existing key (typo fix)
-        let bestKey: string | null = null;
-        let bestScore = Number.POSITIVE_INFINITY;
-
-        for (const candidate of allKeys) {
-            if (!candidate) continue;
-            const parts = candidate.split('.').filter(Boolean);
-            if (!parts.length) continue;
-            const prefix = parts.slice(0, -1).join('.');
-            if (prefix !== keyPrefix) continue;
-            const leaf = parts[parts.length - 1] || '';
-            const score = computeEditDistance(keyLeaf, leaf);
-            if (score < bestScore) {
-                bestScore = score;
-                bestKey = candidate;
-            }
-        }
-
+        // Use intelligent semantic similarity instead of naive edit distance
+        const bestKey = findBestKeyMatch(key, allKeys, 0.7); // High threshold to prevent false matches
+        
         // Check if the best key is a good enough match
         if (bestKey) {
-            const bestParts = bestKey.split('.').filter(Boolean);
-            const bestLeaf = bestParts[bestParts.length - 1] || '';
-            const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
-            if (maxLen > 0 && bestScore <= Math.max(2, Math.floor(maxLen / 4))) {
-                // Auto-fix: Replace with similar key
-                const vsPosition = new vscode.Position(position.line, position.character);
-                const keyInfo = extractKeyAtPosition(doc, vsPosition);
-                if (keyInfo && keyInfo.key === key) {
-                    const edit = new vscode.WorkspaceEdit();
-                    edit.replace(documentUri, keyInfo.range, bestKey);
-                    const applied = await vscode.workspace.applyEdit(edit);
-                    if (applied) {
-                        await doc.save();
-                        vscode.window.showInformationMessage(
-                            `AI Localizer: Auto-fixed "${key}" → "${bestKey}"`,
-                        );
-                        return;
-                    }
+            // Auto-fix: Replace with similar key
+            const vsPosition = new vscode.Position(position.line, position.character);
+            const keyInfo = extractKeyAtPosition(doc, vsPosition);
+            if (keyInfo && keyInfo.key === key) {
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(documentUri, keyInfo.range, bestKey);
+                const applied = await vscode.workspace.applyEdit(edit);
+                if (applied) {
+                    await doc.save();
+                    vscode.window.showInformationMessage(
+                        `AI Localizer: Auto-fixed "${key}" → "${bestKey}"`,
+                    );
+                    return;
                 }
             }
         }
@@ -695,16 +676,12 @@ export class KeyManagementHandler {
         const items: vscode.QuickPickItem[] = [];
 
         if (bestKey && bestKey !== key) {
-            const bestParts = bestKey.split('.').filter(Boolean);
-            const bestLeaf = bestParts[bestParts.length - 1] || '';
-            const maxLen = Math.max(bestLeaf.length, keyLeaf.length);
-            if (maxLen > 0 && bestScore <= Math.max(3, Math.floor(maxLen / 2))) {
-                items.push({
-                    label: `$(replace) Replace with: ${bestKey}`,
-                    description: `Similar key found (edit distance: ${bestScore})`,
-                    detail: 'Use closest matching translation key in the same namespace',
-                });
-            }
+            // Show the similar key option if we found a good match
+            items.push({
+                label: `$(replace) Replace with: ${bestKey}`,
+                description: 'Similar key found using semantic analysis',
+                detail: 'Use closest matching translation key',
+            });
         }
 
         const suggestedLabel = buildLabelFromKeySegment(keyLeaf) || key;

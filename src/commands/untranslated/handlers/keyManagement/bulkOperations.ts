@@ -3,6 +3,7 @@ import { I18nIndex } from '../../../../core/i18nIndex';
 import { canProceedWithOperation } from '../../utils/operationLock';
 import { TranslationOperations } from './translationOperations';
 import { parseMissingDefaultDiagnostic } from '../../utils/diagnosticParser';
+import { LocaleSelector } from '../../utils/localeSelector';
 
 export interface BulkOperationResult {
     fixed: number;
@@ -88,14 +89,28 @@ export class BulkOperations {
                         continue;
                     }
 
+                    // Verify the key actually needs fixing by checking if default locale value is missing
+                    const record = this.i18nIndex.getRecord(key);
+                    if (!record) {
+                        errors.push(`Key "${key}" not found in index`);
+                        continue;
+                    }
+
+                    const defaultValue = record.locales.get(defaultLocale);
+                    if (defaultValue && defaultValue.trim()) {
+                        // Default locale already has a value - skip (likely a stale/false positive diagnostic)
+                        this.log?.appendLine(`[BulkFixMissingDefaults] Skipping "${key}" - default locale already has value`);
+                        continue;
+                    }
+
                     progress.report({
                         increment: (100 / missingDefaultDiagnostics.length),
                         message: `Fixing "${key}" (${i + 1}/${missingDefaultDiagnostics.length})`,
                     });
 
                     try {
-                        // Use the first existing locale as the source
-                        const sourceLocale = existingLocales[0];
+                        // Select the best source locale using centralized logic
+                        const sourceLocale = LocaleSelector.selectBestSourceLocale(key, existingLocales, defaultLocale, this.i18nIndex);
                         
                         // Get the record to find target file for diagnostics refresh
                         const record = this.i18nIndex.getRecord(key);
@@ -111,7 +126,7 @@ export class BulkOperations {
                             key, 
                             sourceLocale, 
                             defaultLocale, 
-                            { skipDiagnosticsRefresh: true }
+                            { skipDiagnosticsRefresh: true, skipOverwritePrompt: true }
                         );
                         fixed++;
                         this.log?.appendLine(`[BulkFixMissingDefaults] Fixed: ${key} (${sourceLocale} -> ${defaultLocale})`);

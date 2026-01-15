@@ -121,8 +121,9 @@ export class DiagnosticAnalyzer {
 
         // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key")
         // More restrictive pattern to avoid false positives in complex code
+        // For Vue templates, we need to handle cases where t() is preceded by {{ or {{
         patterns.push({
-            regex: new RegExp(`\\b\\$?t\\s*\\(\\s*(['"\`])(${key})\\1\\s*(?:,|\\))`, 'g'),
+            regex: new RegExp(`(?:\\b|\\{\\{)\\$?t\\s*\\(\\s*(['"\`])(${key})\\1\\s*(?:,|\\))`, 'g'),
             keyGroupIndex: 2,
         });
 
@@ -317,8 +318,11 @@ export class DiagnosticAnalyzer {
 
             // NEW: Check for missing default locale translations when other locales exist
             // This detects cases where the default locale is missing a translation that exists in other locales
-            const defaultLocaleValue = record.locales.get(defaultLocaleForKey);
-            if (!defaultLocaleValue || !defaultLocaleValue.trim()) {
+            
+            // Only flag as missing if:
+            // 1. The default value is empty/missing (use already-calculated hasDefaultValue) AND
+            // 2. The key exists in at least one other locale
+            if (!hasDefaultValue) {
                 // Check if this key exists in at least one other locale
                 const otherLocalesWithTranslation = locales.filter(otherLocale => 
                     otherLocale !== defaultLocaleForKey &&
@@ -1557,7 +1561,9 @@ export class DiagnosticAnalyzer {
         const commentRanges = this.findCommentRanges(text);
         // Build string literal ranges to avoid flagging t('key') patterns that only
         // appear inside plain strings (e.g. documentation prompts, AI instructions).
-        const stringRanges = this.findStringLiteralRanges(text);
+        // Note: For Vue templates, we don't need this since quotes in template expressions
+        // are not string literals in the JavaScript sense.
+        const stringRanges = isVueSource ? [] : this.findStringLiteralRanges(text);
 
         // Match translation calls that reference i18n keys.
         // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key")

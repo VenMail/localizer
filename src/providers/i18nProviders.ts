@@ -14,6 +14,7 @@ import {
     parseUntranslatedDiagnostic,
     parseMissingDefaultDiagnostic,
 } from '../commands/untranslated/utils/diagnosticParser';
+import { LocaleSelector } from '../commands/untranslated/utils/localeSelector';
 
 /**
  * Language selector for source files using i18n keys
@@ -1069,16 +1070,17 @@ class I18nUntranslatedCodeActionProvider implements vscode.CodeActionProvider {
                 const { key, defaultLocale, existingLocales } = missingDefaultParsed;
                 if (!key || !defaultLocale || !existingLocales.length) continue;
 
-                // Offer to copy translation from one of the existing locales
-                const firstExistingLocale = existingLocales[0];
-                const title = `AI Localizer: Copy translation from ${firstExistingLocale} to ${defaultLocale} for ${key}`;
+                // Offer to copy translation from the best existing locale using intelligent selection
+                await this.i18nIndex.ensureInitialized();
+                const bestSourceLocale = LocaleSelector.selectBestSourceLocale(key, existingLocales, defaultLocale, this.i18nIndex);
+                const title = `AI Localizer: Copy translation from ${bestSourceLocale} to ${defaultLocale} for ${key}`;
                 const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
                 action.diagnostics = [diagnostic];
                 action.isPreferred = true;
                 action.command = {
                     title,
                     command: 'ai-localizer.i18n.copyTranslationToDefaultLocale',
-                    arguments: [document.uri, key, firstExistingLocale, defaultLocale],
+                    arguments: [document.uri, key, bestSourceLocale, defaultLocale],
                 };
                 actions.push(action);
 
