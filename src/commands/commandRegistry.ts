@@ -73,7 +73,8 @@ export class CommandRegistry {
                 const uri = vscode.Uri.joinPath(scriptsDir, name);
                 try {
                     await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
-                } catch {
+                } catch (err) {
+                    console.error('[CommandRegistry] Failed to delete i18n report file:', err);
                 }
             }
         }
@@ -112,20 +113,26 @@ export class CommandRegistry {
                 }
             };
 
-            void updateAskAiContext();
+            void updateAskAiContext().catch(err => {
+                console.error('[CommandRegistry] Failed to update Ask AI context:', err);
+            });
             disposables.push(
                 vscode.workspace.onDidChangeConfiguration((e) => {
                     if (
                         e.affectsConfiguration('ai-localizer.openaiApiKey') ||
                         e.affectsConfiguration('ai-localizer.i18n.autoTranslate')
                     ) {
-                        void updateAskAiContext();
+                        void updateAskAiContext().catch(err => {
+                            console.error('[CommandRegistry] Failed to update Ask AI context on config change:', err);
+                        });
                     }
                 }),
             );
             disposables.push(
                 this.context.secrets.onDidChange(() => {
-                    void updateAskAiContext();
+                    void updateAskAiContext().catch(err => {
+                        console.error('[CommandRegistry] Failed to update Ask AI context on secret change:', err);
+                    });
                 }),
             );
 
@@ -957,6 +964,21 @@ export class CommandRegistry {
                 return;
             }
 
+            // IMPORTANT: Only analyze files that are within the current workspace
+            // This prevents false positives from files in external projects that might be opened
+            if (!folder) {
+                sourceFileDiagnostics.delete(document.uri);
+                return;
+            }
+            
+            // Additional check: Ensure the file is actually within the expected workspace root
+            // This prevents analyzing files from external projects that VS Code might treat as part of the workspace
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || !workspaceFolders.some(wf => document.uri.fsPath.startsWith(wf.uri.fsPath))) {
+                sourceFileDiagnostics.delete(document.uri);
+                return;
+            }
+
             const config = getDiagnosticConfig();
             if (!config.enabled || !config.missingReferenceEnabled) {
                 sourceFileDiagnostics.delete(document.uri);
@@ -982,7 +1004,9 @@ export class CommandRegistry {
             } else {
                 // Debounce to avoid analyzing on every keystroke
                 const timer = setTimeout(() => {
-                    void doAnalysis();
+                    void doAnalysis().catch(err => {
+                        console.error('[CommandRegistry] Failed to analyze source file:', err);
+                    });
                 }, SOURCE_FILE_DEBOUNCE_MS);
                 sourceFileDebounceTimers.set(uriKey, timer);
             }
@@ -1107,8 +1131,12 @@ export class CommandRegistry {
             disposables.push(reviewWatcher);
         }
 
-        void this.refreshAllDiagnostics(untranslatedDiagnostics);
-        void refreshAllSourceDiagnostics();
+        void this.refreshAllDiagnostics(untranslatedDiagnostics).catch(err => {
+            console.error('[CommandRegistry] Failed to refresh all diagnostics:', err);
+        });
+        void refreshAllSourceDiagnostics().catch(err => {
+            console.error('[CommandRegistry] Failed to refresh all source diagnostics:', err);
+        });
         
         // Cleanup debounce timers on dispose
         disposables.push({
@@ -1171,7 +1199,9 @@ export class CommandRegistry {
         // Analyze currently open source files (immediate)
         for (const editor of vscode.window.visibleTextEditors) {
             if (isSourceFile(editor.document.languageId)) {
-                void refreshSourceFileDiagnostics(editor.document, true);
+                void refreshSourceFileDiagnostics(editor.document, true).catch(err => {
+                    console.error('[CommandRegistry] Failed to refresh source file diagnostics:', err);
+                });
             }
         }
 

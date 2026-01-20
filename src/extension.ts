@@ -11,17 +11,24 @@ import { isProjectDisabled } from './utils/projectIgnore';
 
 export function activate(context: vscode.ExtensionContext) {
     try {
-        // Check if extension is disabled for any workspace folder
+        // Check if extension is disabled for ALL workspace folders BEFORE creating any resources
         const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.every(folder => isProjectDisabled(folder))) {
+            vscode.window.showWarningMessage(
+                `AI Localizer is disabled for all workspace folders. Enable via workspace settings or remove .i18n.ignore files.`
+            );
+            return; // Safe early return - no resources created yet
+        }
+        
+        // Show warning for partially disabled workspaces but continue activation
         if (workspaceFolders && workspaceFolders.some(folder => isProjectDisabled(folder))) {
             const disabledFolders = workspaceFolders
                 .filter(folder => isProjectDisabled(folder))
                 .map(folder => folder.name);
             
             vscode.window.showWarningMessage(
-                `AI Localizer is disabled for: ${disabledFolders.join(', ')}. Enable via workspace settings or remove .i18n.ignore files.`
+                `AI Localizer is disabled for: ${disabledFolders.join(', ')}. Other folders remain active.`
             );
-            return;
         }
 
         const output = vscode.window.createOutputChannel('AI i18n');
@@ -54,6 +61,12 @@ export function activate(context: vscode.ExtensionContext) {
         const translationService = new TranslationService(context, output);
         const projectConfigService = new ProjectConfigService();
         const fileSystemService = new FileSystemService();
+        
+        // Register ProjectConfigService for disposal to prevent watcher memory leak
+        context.subscriptions.push({
+            dispose: () => projectConfigService.dispose()
+        });
+        
         const registry = new CommandRegistry(
             context,
             i18nIndex,

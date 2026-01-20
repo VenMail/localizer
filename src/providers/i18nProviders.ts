@@ -68,7 +68,10 @@ export class I18nHoverProvider implements vscode.HoverProvider {
             if (delayMs > 0) {
                 // Use a cancellation-aware delay to avoid keeping promises pending
                 const cancelled = await new Promise<boolean>((resolve) => {
-                    const handle = setTimeout(() => resolve(false), delayMs);
+                    const handle = setTimeout(() => {
+                        disposable.dispose();
+                        resolve(false);
+                    }, delayMs);
                     // Listen for cancellation to resolve early and clear timer
                     const disposable = token.onCancellationRequested(() => {
                         clearTimeout(handle);

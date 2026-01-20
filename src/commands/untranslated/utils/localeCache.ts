@@ -3,6 +3,7 @@ import * as path from 'path';
 import { TextDecoder } from 'util';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { normalizeLocale, parseLocaleJson } from '../../../core/i18nLocale';
 
 const execFileAsync = promisify(execFile);
 const sharedDecoder = new TextDecoder('utf-8');
@@ -122,7 +123,7 @@ export class LocaleCache {
                                         uri: fileUri,
                                         path: fileUri.fsPath,
                                         relativePath,
-                                        locale: name,
+                                        locale: normalizeLocale(name),
                                         fileName,
                                     });
                                 }
@@ -132,7 +133,7 @@ export class LocaleCache {
                         }
                     } else if (type === vscode.FileType.File && name.endsWith('.json')) {
                         // Single locale file (e.g., en.json)
-                        const locale = name.replace('.json', '');
+                        const locale = normalizeLocale(name.replace('.json', ''));
                         const fileUri = vscode.Uri.joinPath(baseUri, name);
                         const relativePath = path.relative(this.folder.uri.fsPath, fileUri.fsPath).replace(/\\/g, '/');
                         files.push({
@@ -163,8 +164,10 @@ export class LocaleCache {
                 try {
                     const data = await vscode.workspace.fs.readFile(file.uri);
                     const raw = sharedDecoder.decode(data);
-                    const json = JSON.parse(raw);
-                    this.headContentCache.set(file.path, { json, raw });
+                    const json = parseLocaleJson(raw);
+                    if (json && typeof json === 'object' && !Array.isArray(json)) {
+                        this.headContentCache.set(file.path, { json: json as Record<string, any>, raw });
+                    }
                 } catch {
                     // File read failed
                 }

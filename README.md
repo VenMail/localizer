@@ -220,7 +220,10 @@ Example (user or workspace settings):
 
 ## Release Notes
 
-
+### 0.1.15
+- Fix hover tooltips so they list all project locales and flag missing translations.
+- Fix bulk restore similarity issues
+- Improve performance
 
 ### 0.1.14
 - Add cleanup unused and orphaned keys command.

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 import { getProjectEnv } from './projectEnv';
+import { inferJsonLocaleFromUri, parseLocaleJson } from './i18nLocale';
 import { ProjectConfigService } from '../services/projectConfigService';
 import { detectFrameworkProfile } from '../frameworks/detection';
 
@@ -29,8 +30,12 @@ export class I18nIndex {
         if (!force && this.keyMap.size > 0) {
             return;
         }
-        if (this.initializing && !force) {
-            return this.initializing;
+        if (this.initializing) {
+            if (!force) {
+                return this.initializing;
+            }
+            // Wait for current initialization to complete before forcing rebuild
+            await this.initializing;
         }
         this.initializing = this.buildIndex();
         await this.initializing;
@@ -200,6 +205,12 @@ export class I18nIndex {
             for (const glob of effectiveGlobs) {
                 const pattern = new vscode.RelativePattern(folder, glob);
                 const found = await vscode.workspace.findFiles(pattern, '**/node_modules/**');
+                if (debugEnabled) {
+                    console.log(`[I18nIndex] Glob '${glob}' found ${found.length} files`);
+                    for (const f of found) {
+                        console.log(`[I18nIndex] Found file: ${f.toString()}`);
+                    }
+                }
                 for (const f of found) {
                     const key = f.toString();
                     if (!fileKeySet.has(key)) {
@@ -254,11 +265,9 @@ export class I18nIndex {
 
             const ext = path.extname(file.fsPath).toLowerCase();
             if (ext === '.json') {
-                let json: unknown;
-                try {
-                    json = JSON.parse(text);
-                } catch (err) {
-                    console.error(`Failed to parse JSON in ${file.fsPath}:`, err);
+                const json = parseLocaleJson(text);
+                if (json === null) {
+                    console.error(`Failed to parse JSON in ${file.fsPath}`);
                     return;
                 }
                 const locale = this.inferLocaleFromPath(file);
@@ -294,6 +303,12 @@ export class I18nIndex {
         key: string,
         value: string,
     ): void {
+        const debugEnabled = vscode.workspace.getConfiguration('ai-localizer').get<boolean>('debug.enabled');
+        
+        if (debugEnabled && locale === this.defaultLocale) {
+            console.log(`[I18nIndex] Registering default locale translation: key='${key}', locale='${locale}', value='${value}'`);
+        }
+        
         let record = this.keyMap.get(key);
         if (!record) {
             record = {
@@ -331,36 +346,7 @@ export class I18nIndex {
     }
 
     private inferLocaleFromPath(uri: vscode.Uri): string | null {
-        const parts = uri.fsPath.split(path.sep).filter(Boolean);
-
-        // 1) Auto-generated runtime JSON: .../auto/<locale>/...
-        const autoIndex = parts.lastIndexOf('auto');
-        if (autoIndex >= 0 && autoIndex + 1 < parts.length) {
-            const raw = parts[autoIndex + 1];
-            return path.basename(raw, '.json');
-        }
-
-        // 2) Next.js / next-i18next style: .../locales/<locale>/<namespace>.json
-        const localesIndex = parts.lastIndexOf('locales');
-        if (localesIndex >= 0 && localesIndex + 1 < parts.length) {
-            const candidate = parts[localesIndex + 1];
-            if (/^[A-Za-z0-9_-]+$/.test(candidate)) {
-                return candidate;
-            }
-        }
-
-        // 3) Fallback: infer from filename (supports src/en.json and active.en.json)
-        const fileName = path.basename(uri.fsPath);
-        const match = fileName.match(/^([A-Za-z0-9_.-]+)\.json$/);
-        if (match) {
-            const base = match[1];
-            const dotIndex = base.lastIndexOf('.');
-            const candidate = dotIndex >= 0 ? base.slice(dotIndex + 1) : base;
-            if (/^[A-Za-z0-9_-]+$/.test(candidate)) {
-                return candidate;
-            }
-        }
-        return null;
+        return inferJsonLocaleFromUri(uri);
     }
 
     private inferPoLocaleFromPath(uri: vscode.Uri): string | null {
@@ -934,16 +920,14 @@ export class I18nIndex {
 
         const ext = path.extname(uri.fsPath).toLowerCase();
         if (ext === '.json') {
-            let json: unknown;
-            try {
-                json = JSON.parse(text);
-            } catch (err) {
-                console.error(`Failed to parse JSON in ${uri.fsPath}:`, err);
+            const json = parseLocaleJson(text);
+            if (json === null) {
+                console.error(`Failed to parse JSON in ${uri.fsPath}`);
                 return;
             }
 
             const locale = this.inferLocaleFromPath(uri) || existingLocale;
-            if (!locale) {
+            if (!locale || typeof locale !== 'string' || !locale.trim()) {
                 // Can't determine locale, remove the entry
                 this.fileToKeys.delete(fileKey);
                 return;
@@ -951,38 +935,38 @@ export class I18nIndex {
 
             // Always set/update the fileToKeys entry, even if no keys are found
             // This preserves locale information for empty files
-            this.fileToKeys.set(fileKey, { locale, keys: [] });
+            this.fileToKeys.set(fileKey, { locale: locale.trim(), keys: [] });
 
             this.walkJson('', json, locale, uri);
         } else if (ext === '.php') {
             const info = this.inferLaravelLocaleAndRoot(uri);
             const locale = info?.locale || existingLocale;
-            if (!info || !locale) {
+            if (!info || !locale || typeof locale !== 'string' || !locale.trim()) {
                 this.fileToKeys.delete(fileKey);
                 return;
             }
 
-            this.fileToKeys.set(fileKey, { locale, keys: [] });
+            this.fileToKeys.set(fileKey, { locale: locale.trim(), keys: [] });
 
             this.walkLaravelPhpFile(text, locale, uri, info.root);
         } else if (ext === '.resx') {
             const locale = this.inferDotNetLocaleFromResxPath(uri) || existingLocale;
-            if (!locale) {
+            if (!locale || typeof locale !== 'string' || !locale.trim()) {
                 this.fileToKeys.delete(fileKey);
                 return;
             }
 
-            this.fileToKeys.set(fileKey, { locale, keys: [] });
+            this.fileToKeys.set(fileKey, { locale: locale.trim(), keys: [] });
 
             this.walkResxFile(text, locale, uri);
         } else if (ext === '.po') {
             const locale = this.inferPoLocaleFromPath(uri) || existingLocale;
-            if (!locale) {
+            if (!locale || typeof locale !== 'string' || !locale.trim()) {
                 this.fileToKeys.delete(fileKey);
                 return;
             }
 
-            this.fileToKeys.set(fileKey, { locale, keys: [] });
+            this.fileToKeys.set(fileKey, { locale: locale.trim(), keys: [] });
 
             this.walkPoFile(text, locale, uri);
         }

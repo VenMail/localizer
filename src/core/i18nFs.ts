@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder, TextEncoder } from 'util';
+import { parseLocaleJson } from './i18nLocale';
 
 // Shared encoder/decoder instances to avoid repeated allocations
 export const sharedDecoder = new TextDecoder('utf-8');
@@ -34,7 +35,7 @@ export async function withFileMutex<T>(fileUri: vscode.Uri, operation: () => Pro
     }
     
     // Create our lock
-    let resolver: () => void;
+    let resolver: (() => void) | undefined;
     const ourLock = new Promise<void>((resolve) => {
         resolver = resolve;
     });
@@ -43,7 +44,9 @@ export async function withFileMutex<T>(fileUri: vscode.Uri, operation: () => Pro
     try {
         return await operation();
     } finally {
-        resolver!();
+        if (resolver) {
+            resolver();
+        }
         // Only delete if it's still our lock (prevent race with next operation)
         if (fileMutex.get(key) === ourLock) {
             fileMutex.delete(key);
@@ -248,7 +251,7 @@ async function readLocaleJsonObject(fileUri: vscode.Uri): Promise<{ root: any; o
         if (!trimmed) {
             return { root: {}, ok: true };
         }
-        const parsed = JSON.parse(decoded);
+        const parsed = parseLocaleJson(decoded);
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
             return { root: {}, ok: false };
         }

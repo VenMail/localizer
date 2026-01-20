@@ -55,7 +55,7 @@ export class TranslationService {
         const raw = (cfg.get<string>('openaiModel') || '').trim();
 
         if (!raw || raw.toLowerCase() === 'auto') {
-            // Default to gpt-5-nano when not explicitly specified
+            // Default to gpt-4o-mini (cost-effective model for translations)
             return 'gpt-4o-mini';
         }
 

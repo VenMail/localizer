@@ -237,4 +237,16 @@ export class ProjectConfigService {
 
         return picked.label;
     }
+
+    /**
+     * Dispose of resources (file watcher and cache)
+     */
+    dispose(): void {
+        if (this.watcher) {
+            this.watcher.dispose();
+            this.watcher = null;
+        }
+        this.configCache.clear();
+        this.initWatcherCalled = false;
+    }
 }

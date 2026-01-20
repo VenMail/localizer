@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { TextDecoder } from 'util';
+import * as path from 'path';
 import { I18nIndex, TranslationRecord } from '../core/i18nIndex';
+import { getLocaleValue, parseLocaleJson, parseLocaleJsonWithError } from '../core/i18nLocale';
 import { ProjectConfigService } from './projectConfigService';
 import { operationLock } from '../commands/untranslated/utils/operationLock';
 import { isProjectDisabled } from '../utils/projectIgnore';
@@ -207,6 +209,33 @@ export class DiagnosticAnalyzer {
         this.safeLog(`[DiagnosticAnalyzer] Analyzing file: ${uri.fsPath}`);
         const verbose = config.verboseLogging === true;
 
+        // Check for JSON syntax errors in locale files
+        const ext = path.extname(uri.fsPath).toLowerCase();
+        if (ext === '.json') {
+            try {
+                const data = await vscode.workspace.fs.readFile(uri);
+                const text = sharedDecoder.decode(data);
+                const parseResult = parseLocaleJsonWithError(text);
+                
+                if (parseResult.error) {
+                    // Create a diagnostic for the syntax error
+                    const diagnostic = new vscode.Diagnostic(
+                        new vscode.Range(
+                            new vscode.Position(parseResult.errorLine ? parseResult.errorLine - 1 : 0, 0),
+                            new vscode.Position(parseResult.errorLine ? parseResult.errorLine - 1 : 0, 1000)
+                        ),
+                        `JSON syntax error: ${parseResult.error}`,
+                        vscode.DiagnosticSeverity.Error
+                    );
+                    diagnostic.code = 'ai-i18n.json-syntax-error';
+                    diagnostic.source = 'AI Localizer';
+                    return [diagnostic];
+                }
+            } catch (error) {
+                this.safeLog(`[DiagnosticAnalyzer] Failed to read file for syntax checking: ${uri.fsPath}`);
+            }
+        }
+
         // Get keys contributed by this file
         const fileInfo = this.i18nIndex.getKeysForFile(uri);
         
@@ -318,11 +347,19 @@ export class DiagnosticAnalyzer {
 
             // NEW: Check for missing default locale translations when other locales exist
             // This detects cases where the default locale is missing a translation that exists in other locales
+            // NOTE: Only run this logic when analyzing files that could contain the default locale
+            // to avoid excessive processing and debug logging on non-default locale files
             
             // Only flag as missing if:
             // 1. The default value is empty/missing (use already-calculated hasDefaultValue) AND
-            // 2. The key exists in at least one other locale
-            if (!hasDefaultValue) {
+            // 2. The key exists in at least one other locale AND
+            // 3. This is the appropriate file to report the diagnostic (avoid duplicates) AND
+            // 4. We're analyzing a file that could contain the default locale (optimization)
+            
+            const shouldCheckMissingDefault = fileLocale === defaultLocaleForKey || 
+                                             locales.includes(defaultLocaleForKey);
+            
+            if (!hasDefaultValue && shouldCheckMissingDefault) {
                 // Check if this key exists in at least one other locale
                 const otherLocalesWithTranslation = locales.filter(otherLocale => 
                     otherLocale !== defaultLocaleForKey &&
@@ -330,35 +367,75 @@ export class DiagnosticAnalyzer {
                     record.locales.get(otherLocale)!.trim()
                 );
                 
-                // If the default locale is missing but other locales have translations, flag as missing
+                // Only report if other locales have translations
                 if (otherLocalesWithTranslation.length > 0) {
-                    this.verboseLog(
-                        `[DiagnosticAnalyzer] Missing default locale translation detected for key '${key}' [${defaultLocaleForKey}] while other locales (${otherLocalesWithTranslation.join(', ')}) have translations`,
-                        verbose,
-                    );
-                    
-                    // Find the best file to report this diagnostic on
-                    let reportUri = uri;
+                    // Determine the best file to report this diagnostic on
+                    // Priority: 1) Default locale file (if exists), 2) First non-default locale file
+                    let shouldReportHere = false;
                     const defaultLocaleEntry = record.locations.find(l => l.locale === defaultLocaleForKey);
-                    if (defaultLocaleEntry) {
-                        reportUri = defaultLocaleEntry.uri;
-                    } else if (otherLocalesWithTranslation.length > 0) {
-                        // Fall back to any locale file that has the translation
-                        const firstLocaleWithTranslation = otherLocalesWithTranslation[0];
-                        const firstLocaleEntry = record.locations.find(l => l.locale === firstLocaleWithTranslation);
-                        if (firstLocaleEntry) {
-                            reportUri = firstLocaleEntry.uri;
+                    
+                    if (defaultLocaleEntry && defaultLocaleEntry.uri.toString() === fileKey) {
+                        // Report on the default locale file if it exists (even with empty value)
+                        // BUT FIRST: Verify against actual file content to avoid false positives from stale index data
+                        // If we're analyzing the default locale file itself, check if the key actually has a value in the file
+                        if (fileLocale === defaultLocaleForKey) {
+                            // Try to get the actual value from the file being analyzed
+                            const actualValueInFile = await this.getKeyValueInFile(uri, key);
+                            
+                            if (actualValueInFile && actualValueInFile.trim()) {
+                                // The file actually has the value - this is a false positive from stale index data
+                                // Skip reporting this diagnostic
+                                this.verboseLog(
+                                    `[DiagnosticAnalyzer] Skipping missing-default diagnostic for key '${key}' - file has value '${actualValueInFile}' but index is stale`,
+                                    verbose,
+                                );
+                                shouldReportHere = false;
+                            } else {
+                                shouldReportHere = true;
+                            }
+                        } else {
+                            shouldReportHere = true;
+                        }
+                    } else {
+                        // Report on the first non-default locale file that has this key
+                        // This includes cases where the default locale file doesn't exist
+                        // But only report on the FIRST such file to avoid duplicates
+                        const firstNonDefaultLocale = otherLocalesWithTranslation[0];
+                        const firstNonDefaultLocation = record.locations.find(l => l.locale === firstNonDefaultLocale);
+                        
+                        if (firstNonDefaultLocation && firstNonDefaultLocation.uri.toString() === fileKey) {
+                            shouldReportHere = true;
+                        } else {
+                            shouldReportHere = false;
                         }
                     }
                     
-                    const range = await this.getKeyRangeInFile(reportUri, key);
-                    const diagnostic = new vscode.Diagnostic(
-                        range,
-                        `Missing default locale translation for "${key}" [${defaultLocaleForKey}] (exists in: ${otherLocalesWithTranslation.join(', ')})`,
-                        config.missingSeverity,
-                    );
-                    diagnostic.code = 'ai-i18n.missing-default';
-                    diagnostics.push(diagnostic);
+                    if (shouldReportHere) {
+                        // FINAL VERIFICATION: Before emitting the diagnostic, double-check the index record
+                        // This catches cases where the index was rebuilt but the record still has stale data
+                        const freshRecord = this.i18nIndex.getRecord(key);
+                        const freshDefaultValue = freshRecord?.locales.get(defaultLocaleForKey);
+                        const freshHasDefaultValue = typeof freshDefaultValue === 'string' && !!freshDefaultValue.trim();
+                        
+                        if (freshHasDefaultValue) {
+                            // The index now has the value - skip this diagnostic
+                            continue;
+                        }
+                        
+                        this.verboseLog(
+                            `[DiagnosticAnalyzer] Missing default locale translation detected for key '${key}' [${defaultLocaleForKey}] while other locales (${otherLocalesWithTranslation.join(', ')}) have translations`,
+                            verbose,
+                        );
+                        
+                        const range = await this.getKeyRangeInFile(uri, key);
+                        const diagnostic = new vscode.Diagnostic(
+                            range,
+                            `Missing default locale translation for "${key}" [${defaultLocaleForKey}] (exists in: ${otherLocalesWithTranslation.join(', ')})`,
+                            config.missingSeverity,
+                        );
+                        diagnostic.code = 'ai-i18n.missing-default';
+                        diagnostics.push(diagnostic);
+                    }
                 }
             }
 
@@ -514,6 +591,10 @@ export class DiagnosticAnalyzer {
     async analyzeAll(config: DiagnosticConfig): Promise<Map<string, vscode.Diagnostic[]>> {
         this.logVerboseEnabled = config.verboseLogging === true;
         this.safeLog('[DiagnosticAnalyzer] Performing full analysis...');
+        
+        // Ensure index is fully initialized before analysis
+        await this.i18nIndex.ensureInitialized();
+        this.safeLog(`[DiagnosticAnalyzer] Index initialized with ${this.i18nIndex.getAllKeys().length} keys`);
 
         // Collect all unique locale file URIs from the index
         const allKeys = this.i18nIndex.getAllKeys();
@@ -1128,6 +1209,50 @@ export class DiagnosticAnalyzer {
     }
 
     /**
+     * Get the actual value of a key in a locale file by parsing the file content.
+     * This is used to verify against stale index data and prevent false positives.
+     */
+    private async getKeyValueInFile(uri: vscode.Uri, fullKey: string): Promise<string | null> {
+        try {
+            const data = await vscode.workspace.fs.readFile(uri);
+            const text = sharedDecoder.decode(data);
+            
+            // Parse the file based on extension
+            const ext = path.extname(uri.fsPath).toLowerCase();
+            
+            if (ext === '.json') {
+                const parsed = parseLocaleJson(text);
+                if (parsed === null) {
+                    return null;
+                }
+                const value = getLocaleValue(parsed, fullKey);
+                return value;
+            } else if (ext === '.php') {
+                // For PHP files, use a simple regex-based extraction
+                // This is a simplified approach - for complex cases, the index should be trusted
+                const parts = fullKey.split('.');
+                const lastSegment = parts[parts.length - 1];
+                
+                // Look for patterns like 'key' => 'value' or "key" => "value"
+                const escapeRegex = (input: string): string =>
+                    input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const escaped = escapeRegex(lastSegment);
+                const pattern = new RegExp(`(['"])${escaped}\\1\\s*=>\\s*(['"])([^\\2]*?)\\2`, 'g');
+                const match = pattern.exec(text);
+                
+                if (match && match[3]) {
+                    return match[3];
+                }
+                return null;
+            }
+            
+            return null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
      * Get the range of a key in a locale file, with caching.
      */
     private async getKeyRangeInFile(uri: vscode.Uri, fullKey: string): Promise<vscode.Range> {
@@ -1453,6 +1578,17 @@ export class DiagnosticAnalyzer {
         const languageId = this.getLanguageIdForUri(uri);
         const folder = vscode.workspace.getWorkspaceFolder(uri);
         
+        // IMPORTANT: Only analyze files that are within the current workspace
+        // This prevents false positives from files in external projects
+        if (!folder) {
+            return [];
+        }
+        
+        // Check if project is disabled
+        if (isProjectDisabled(folder)) {
+            return []; // Project is disabled
+        }
+        
         // Use framework detection instead of hardcoded language detection
         let isLaravelSource = false;
         let isReactSource = false;
@@ -1460,31 +1596,23 @@ export class DiagnosticAnalyzer {
         let isDotNetSource = languageId === 'csharp' || languageId === 'razor';
         let isPythonSource = languageId === 'python';
         
-        if (folder) {
-            const { detectFrameworkProfile } = await import('../frameworks/detection');
-            const profile = await detectFrameworkProfile(folder);
-            
-            if (profile?.kind === 'laravel' || (profile?.kind === 'mixed' && profile.frameworks?.includes('laravel'))) {
-                isLaravelSource = languageId === 'php' || languageId === 'blade';
-            }
-            if (profile?.kind === 'react' || (profile?.kind === 'mixed' && profile.frameworks?.includes('react'))) {
-                isReactSource = languageId === 'typescript' || languageId === 'javascript' || languageId === 'javascriptreact';
-            }
-            if (profile?.kind === 'vue' || (profile?.kind === 'mixed' && profile.frameworks?.includes('vue'))) {
-                isVueSource = languageId === 'vue';
-            }
-            
-            // Fallback: if no framework is detected but we have PHP files, treat them as Laravel
-            // This is important for projects that don't have explicit framework detection but use Laravel-style translations
-            if (!profile && (languageId === 'php' || languageId === 'blade')) {
-                isLaravelSource = true;
-            }
-        } else {
-            // Fallback to language-based detection if no folder
-            // PHP files should be treated as Laravel by default (Laravel uses PHP translation files, not JSON)
+        const { detectFrameworkProfile } = await import('../frameworks/detection');
+        const profile = await detectFrameworkProfile(folder);
+        
+        if (profile?.kind === 'laravel' || (profile?.kind === 'mixed' && profile.frameworks?.includes('laravel'))) {
             isLaravelSource = languageId === 'php' || languageId === 'blade';
+        }
+        if (profile?.kind === 'react' || (profile?.kind === 'mixed' && profile.frameworks?.includes('react'))) {
             isReactSource = languageId === 'typescript' || languageId === 'javascript' || languageId === 'javascriptreact';
+        }
+        if (profile?.kind === 'vue' || (profile?.kind === 'mixed' && profile.frameworks?.includes('vue'))) {
             isVueSource = languageId === 'vue';
+        }
+        
+        // Fallback: if no framework is detected but we have PHP files, treat them as Laravel
+        // This is important for projects that don't have explicit framework detection but use Laravel-style translations
+        if (!profile && (languageId === 'php' || languageId === 'blade')) {
+            isLaravelSource = true;
         }
         
         // Additional fallback: check file path for Laravel indicators
@@ -1595,12 +1723,6 @@ export class DiagnosticAnalyzer {
                 }
                 
                 if (!validKeysSet.has(key)) {
-                    // Enhanced debug logging for missing keys
-                    this.debugLog(`Checking missing key "${key}" in ${uri.fsPath}`);
-                    this.debugLog(`- isLaravelSource: ${isLaravelSource}`);
-                    this.debugLog(`- validKeysSet size: ${validKeysSet.size}`);
-                    this.debugLog(`- allKeys size: ${allKeys.length}`);
-                    
                     // Fallback: if the key exists anywhere in the index, treat it as
                     // valid when it has a backing file appropriate for the source
                     // language (JSON for JS/TS, PHP for Laravel, RESX for .NET,
@@ -1885,7 +2007,7 @@ export function getDiagnosticConfig(): DiagnosticConfig {
     return {
         enabled,
         defaultLocale,
-        missingSeverity: mapSeverity(missingSeveritySetting),
+        missingSeverity: mapSeverity(missingSeveritySetting), // Use same setting for consistency
         missingLocaleSeverity: mapSeverity(missingSeveritySetting),
         untranslatedEnabled,
         untranslatedSeverity: mapSeverity(untranslatedSeveritySetting),

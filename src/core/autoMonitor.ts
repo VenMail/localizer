@@ -345,6 +345,7 @@ export class AutoMonitor {
 
         // Schedule new processing
         const timer = setTimeout(() => {
+            this.debounceTimers.delete(folderKey);
             this.processPendingFiles(folder);
         }, DEBOUNCE_DELAY);
 
