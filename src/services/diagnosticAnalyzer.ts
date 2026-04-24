@@ -122,10 +122,18 @@ export class DiagnosticAnalyzer {
         const patterns: Array<{ regex: RegExp; keyGroupIndex: number }> = [];
 
         // JS/TS/Vue: t('key'), t("key"), $t('key'), $t("key")
-        // More restrictive pattern to avoid false positives in complex code
-        // For Vue templates, we need to handle cases where t() is preceded by {{ or {{
+        // Also handle TypeScript generics: t<Type>('key')
+        // Covers the common vue-i18n / react-i18next access patterns:
+        //   t('k')                     (import { t } / const { t } = useI18n())
+        //   $t('k')                    (Vue 2 instance property, Vue 3 legacy)
+        //   i18n.t('k')                (Vue 3 global instance method)
+        //   i18n.global.t('k')         (Vue 3 global composer)
+        //   useI18n().t('k')           (Composition API without destructuring)
+        // The `(?:^|[^a-zA-Z0-9_$]|\\{\\{)` lookbehind lets `.t(` match because
+        // `.` is not a word char, which is why `i18n.t` / `i18n.global.t` work.
+        // `{{` is included for Vue template interpolations.
         patterns.push({
-            regex: new RegExp(`(?:\\b|\\{\\{)\\$?t\\s*\\(\\s*(['"\`])(${key})\\1\\s*(?:,|\\))`, 'g'),
+            regex: new RegExp(`(?:^|[^a-zA-Z0-9_$]|\\{\\{)\\$?t\\s*(?:<[^>]+>)?\\s*\\(\\s*(['"\`])(${key})\\1\\s*(?:,|\\))`, 'g'),
             keyGroupIndex: 2,
         });
 
@@ -1574,6 +1582,12 @@ export class DiagnosticAnalyzer {
         config: DiagnosticConfig,
     ): Promise<vscode.Diagnostic[]> {
         this.logVerboseEnabled = config.verboseLogging === true;
+        
+        // Early return if missing reference detection is disabled
+        if (!config.missingReferenceEnabled) {
+            return [];
+        }
+        
         const fileKey = uri.toString();
         const languageId = this.getLanguageIdForUri(uri);
         const folder = vscode.workspace.getWorkspaceFolder(uri);
@@ -1602,8 +1616,11 @@ export class DiagnosticAnalyzer {
         if (profile?.kind === 'laravel' || (profile?.kind === 'mixed' && profile.frameworks?.includes('laravel'))) {
             isLaravelSource = languageId === 'php' || languageId === 'blade';
         }
-        if (profile?.kind === 'react' || (profile?.kind === 'mixed' && profile.frameworks?.includes('react'))) {
-            isReactSource = languageId === 'typescript' || languageId === 'javascript' || languageId === 'javascriptreact';
+        // Check for React: pure React, mixed projects with React, or Laravel with Inertia React
+        if (profile?.kind === 'react' || 
+            (profile?.kind === 'mixed' && profile.frameworks?.includes('react')) ||
+            (profile?.kind === 'laravel' && profile.flavor === 'inertia-react')) {
+            isReactSource = languageId === 'typescript' || languageId === 'typescriptreact' || languageId === 'javascript' || languageId === 'javascriptreact';
         }
         if (profile?.kind === 'vue' || (profile?.kind === 'mixed' && profile.frameworks?.includes('vue'))) {
             isVueSource = languageId === 'vue';
@@ -1613,6 +1630,13 @@ export class DiagnosticAnalyzer {
         // This is important for projects that don't have explicit framework detection but use Laravel-style translations
         if (!profile && (languageId === 'php' || languageId === 'blade')) {
             isLaravelSource = true;
+        }
+        
+        // Fallback: if no framework is detected but we have TS/TSX/JS/JSX files, treat them as React
+        // This is important for projects that don't have explicit framework detection but use React-style translations
+        if (!profile && (languageId === 'typescript' || languageId === 'typescriptreact' || languageId === 'javascript' || languageId === 'javascriptreact')) {
+            isReactSource = true;
+            this.safeLog(`[DiagnosticAnalyzer] Fallback: Detected React source from language ID: ${languageId}`);
         }
         
         // Additional fallback: check file path for Laravel indicators
@@ -1674,7 +1698,8 @@ export class DiagnosticAnalyzer {
             ? poBackedKeys
             : jsonBackedKeys; // Default to JSON-backed keys
         
-        this.safeLog(`[DiagnosticAnalyzer] Using ${isLaravelSource ? 'Laravel' : 'JSON'} key set with ${validKeysSet.size} keys for ${uri.fsPath}`);
+        this.safeLog(`[DiagnosticAnalyzer] Framework detection: profile=${profile?.kind}, flavor=${(profile as any)?.flavor}, isLaravelSource=${isLaravelSource}, isReactSource=${isReactSource}, isVueSource=${isVueSource}`);
+        this.safeLog(`[DiagnosticAnalyzer] Using ${isLaravelSource ? 'Laravel' : isReactSource || isVueSource ? 'JSON (React/Vue)' : 'JSON (default)'} key set with ${validKeysSet.size} keys for ${uri.fsPath}`);
         
         // Log some Laravel keys for verification
         if (isLaravelSource && laravelKeys.size > 0) {
@@ -1699,36 +1724,102 @@ export class DiagnosticAnalyzer {
         // ASP.NET C#/Razor: Localizer["Key"], HtmlLocalizer["Key"], etc.
         // Python (Django/Flask): _('key'), gettext('key')
         const tCallPatterns = this.buildTranslationCallPatterns({ isLaravelSource, isPythonSource });
+        
+        this.safeLog(`[DiagnosticAnalyzer] Using ${tCallPatterns.length} regex pattern(s) for translation call detection`);
+        tCallPatterns.forEach((pattern, idx) => {
+            this.safeLog(`[DiagnosticAnalyzer] Pattern ${idx + 1}: ${pattern.regex.source.substring(0, 100)}...`);
+        });
+
+        let totalMatches = 0;
+        let skippedComments = 0;
+        let skippedStrings = 0;
+        let skippedComplex = 0;
+        let checkedKeys = 0;
+        let missingKeys = 0;
 
         for (const { regex, keyGroupIndex } of tCallPatterns) {
             regex.lastIndex = 0;
             let match;
+            let patternMatches = 0;
 
             while ((match = regex.exec(text)) !== null) {
+                totalMatches++;
+                patternMatches++;
                 const key = match[keyGroupIndex];
                 const fullMatch = match[0];
                 const matchIndex = match.index;
+                
+                // Validate that we actually extracted a key
+                if (!key || typeof key !== 'string') {
+                    this.safeLog(`[DiagnosticAnalyzer] WARNING: Regex matched but keyGroupIndex ${keyGroupIndex} is invalid. Match groups: ${JSON.stringify(match)}`);
+                    continue;
+                }
+                
+                this.safeLog(`[DiagnosticAnalyzer] Found match #${totalMatches}: "${key}" at index ${matchIndex}, full match: "${fullMatch.substring(0, 50)}"`);
                 
                 // Skip if match is inside a comment or string literal
                 if (
                     this.isIndexInRanges(matchIndex, commentRanges) ||
                     this.isIndexInRanges(matchIndex, stringRanges)
                 ) {
+                    skippedComments++;
+                    this.safeLog(`[DiagnosticAnalyzer] - Skipping "${key}" - inside comment or string literal`);
                     continue;
                 }
                 
                 // Skip complex expressions that are likely false positives
                 if (this.isComplexExpression(key, fullMatch)) {
+                    skippedComplex++;
+                    this.safeLog(`[DiagnosticAnalyzer] - Skipping "${key}" - complex expression`);
                     continue;
                 }
                 
+                checkedKeys++;
+                const inValidSet = validKeysSet.has(key);
+                this.safeLog(`[DiagnosticAnalyzer] Checking key "${key}" - in validKeysSet: ${inValidSet}`);
+                
+                // Double-check: if key is in validKeysSet, verify it actually exists in the index
+                if (inValidSet) {
+                    const record = this.i18nIndex.getRecord(key);
+                    if (!record) {
+                        this.safeLog(`[DiagnosticAnalyzer] WARNING: Key "${key}" is in validKeysSet but has no record in index!`);
+                    } else {
+                        this.safeLog(`[DiagnosticAnalyzer] Key "${key}" is valid (has ${record.locations.length} location(s))`);
+                    }
+                }
+                
                 if (!validKeysSet.has(key)) {
+                    missingKeys++;
+                    this.safeLog(`[DiagnosticAnalyzer] Key "${key}" is MISSING from validKeysSet`);
                     // Fallback: if the key exists anywhere in the index, treat it as
                     // valid when it has a backing file appropriate for the source
                     // language (JSON for JS/TS, PHP for Laravel, RESX for .NET,
                     // PO for Python/Django/Flask).
                     const record = this.i18nIndex.getRecord(key);
-                    this.safeLog(`[DiagnosticAnalyzer] - record exists: ${!!record}`);
+                    this.safeLog(`[DiagnosticAnalyzer] Key "${key}" not in validKeysSet (set size: ${validKeysSet.size}), record exists: ${!!record}, isReactSource: ${isReactSource}, isVueSource: ${isVueSource}, isLaravelSource: ${isLaravelSource}`);
+                    
+                    // If key doesn't exist in index at all, it's definitely missing
+                    if (!record || !Array.isArray(record.locations) || record.locations.length === 0) {
+                        this.safeLog(`[DiagnosticAnalyzer] - No record found for key "${key}" - creating missing reference diagnostic`);
+                        
+                        // Calculate position
+                        const startIndex = match.index + match[0].indexOf(key);
+                        const endIndex = startIndex + key.length;
+                        
+                        const startPos = this.indexToPosition(text, startIndex);
+                        const endPos = this.indexToPosition(text, endIndex);
+                        const range = new vscode.Range(startPos, endPos);
+
+                        const diagnostic = new vscode.Diagnostic(
+                            range,
+                            `Missing translation key "${key}" - key not found in locale files`,
+                            config.missingReferenceSeverity ?? config.missingSeverity,
+                        );
+                        diagnostic.code = 'ai-i18n.missing-reference';
+                        diagnostic.source = 'AI Localizer';
+                        diagnostics.push(diagnostic);
+                        continue;
+                    }
                     
                     if (record && Array.isArray(record.locations) && record.locations.length > 0) {
                         this.safeLog(`[DiagnosticAnalyzer] - record locations count: ${record.locations.length}`);
@@ -1775,10 +1866,18 @@ export class DiagnosticAnalyzer {
                             this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - has JSON location for React/Vue`);
                             continue;
                         }
+                        // Only use default JSON fallback if we're actually using JSON-backed keys
+                        // This prevents incorrectly skipping missing keys when framework detection fails
                         if (!isDotNetSource && !isPythonSource && !isLaravelSource && !isReactSource && !isVueSource && hasJsonLocation) {
-                            // Default to JSON for unknown frameworks
-                            this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - has JSON location for default framework`);
-                            continue;
+                            // Check if we're using JSON-backed keys as the valid set (which means this is likely a React/Vue project)
+                            const isUsingJsonKeys = validKeysSet === jsonBackedKeys;
+                            if (isUsingJsonKeys) {
+                                // Default to JSON for unknown frameworks that are using JSON keys
+                                this.safeLog(`[DiagnosticAnalyzer] - Skipping key "${key}" - has JSON location for default framework`);
+                                continue;
+                            }
+                            // If we're not using JSON keys but the key has JSON location, it's a mismatch - flag it
+                            this.safeLog(`[DiagnosticAnalyzer] - Key "${key}" has JSON location but we're not using JSON keys - treating as missing`);
                         }
                     } else {
                         this.safeLog(`[DiagnosticAnalyzer] - No record found for key "${key}"`);
@@ -1808,9 +1907,35 @@ export class DiagnosticAnalyzer {
                     diagnostics.push(diagnostic);
                 }
             }
+            
+            if (patternMatches > 0) {
+                this.safeLog(`[DiagnosticAnalyzer] Pattern found ${patternMatches} match(es)`);
+            }
+        }
+        
+        if (totalMatches === 0) {
+            this.safeLog(`[DiagnosticAnalyzer] WARNING: No regex matches found in file ${uri.fsPath}. This might indicate a regex pattern issue.`);
+            // Try a simple test pattern to verify the file has t() calls
+            const simpleTest = /\bt\s*\(/g;
+            const testMatches = text.match(simpleTest);
+            if (testMatches && testMatches.length > 0) {
+                this.safeLog(`[DiagnosticAnalyzer] Found ${testMatches.length} simple 't(' pattern(s) in file, but regex patterns didn't match. This suggests a regex pattern issue.`);
+            }
         }
 
         this.diagnosticsByFile.set(fileKey, diagnostics);
+        
+        // Log detailed statistics
+        this.safeLog(
+            `[DiagnosticAnalyzer] Analysis summary for ${uri.fsPath}: ` +
+            `total matches: ${totalMatches}, ` +
+            `skipped (comments/strings): ${skippedComments}, ` +
+            `skipped (complex): ${skippedComplex}, ` +
+            `checked keys: ${checkedKeys}, ` +
+            `missing keys: ${missingKeys}, ` +
+            `diagnostics created: ${diagnostics.length}`
+        );
+        
         // Avoid spamming the output channel for every scanned file.
         // Only log per-file results when there are actual missing refs, or when verbose logging is enabled.
         if (diagnostics.length > 0) {
@@ -1864,18 +1989,82 @@ export class DiagnosticAnalyzer {
      * Find ranges of JavaScript/TypeScript string literals (", ' and `) in raw text.
      * This is a lightweight heuristic used only to suppress false positives where
      * t('key') appears inside documentation strings or prompt text.
+     * 
+     * IMPORTANT: We need to exclude string literals that are arguments to t() calls,
+     * because those are the actual translation keys we want to detect.
+     * 
+     * Strategy: First find all t() calls, then when scanning for string literals,
+     * skip any that are inside a t() call.
      */
     private findStringLiteralRanges(text: string): Array<{ start: number; end: number }> {
         const ranges: Array<{ start: number; end: number }> = [];
         const len = text.length;
-        let i = 0;
+        
+        // First, find all t() call patterns to exclude their string arguments
+        // Use a simpler pattern that matches t('key'), t("key"), $t('key'), etc.
+        const tCallPattern = /(?:^|[^a-zA-Z0-9_$])\$?t\s*(?:<[^>]+>)?\s*\(\s*(['"`])/g;
+        const tCallStringStarts: number[] = [];
+        let tMatch;
+        while ((tMatch = tCallPattern.exec(text)) !== null) {
+            const quoteChar = tMatch[1];
+            const stringStart = tMatch.index + tMatch[0].length - 1; // Position of the quote
+            // Find the closing quote
+            let stringEnd = stringStart + 1;
+            let escaped = false;
+            while (stringEnd < len) {
+                const c = text[stringEnd];
+                if (escaped) {
+                    escaped = false;
+                } else if (c === '\\') {
+                    escaped = true;
+                } else if (c === quoteChar) {
+                    stringEnd += 1;
+                    tCallStringStarts.push(stringStart);
+                    tCallStringStarts.push(stringEnd);
+                    break;
+                }
+                stringEnd += 1;
+            }
+        }
 
+        // Now find all string literals, but exclude those that are arguments to t() calls
+        let i = 0;
         while (i < len) {
             const ch = text[i];
             if (ch === '"' || ch === '\'' || ch === '`') {
                 const quote = ch;
                 const start = i;
                 i += 1;
+                
+                // Check if this string literal is an argument to a t() call
+                let isTCallArg = false;
+                for (let j = 0; j < tCallStringStarts.length; j += 2) {
+                    if (start >= tCallStringStarts[j] && start < tCallStringStarts[j + 1]) {
+                        isTCallArg = true;
+                        break;
+                    }
+                }
+                
+                if (isTCallArg) {
+                    // Skip this string literal - it's a t() call argument
+                    // Find the closing quote and continue
+                    let escaped = false;
+                    while (i < len) {
+                        const c = text[i];
+                        if (escaped) {
+                            escaped = false;
+                        } else if (c === '\\') {
+                            escaped = true;
+                        } else if (c === quote) {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+                
+                // This is a regular string literal (not a t() argument) - include it
                 let escaped = false;
                 while (i < len) {
                     const c = text[i];

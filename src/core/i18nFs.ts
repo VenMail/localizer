@@ -7,6 +7,27 @@ import { parseLocaleJson } from './i18nLocale';
 export const sharedDecoder = new TextDecoder('utf-8');
 export const sharedEncoder = new TextEncoder();
 
+/**
+ * Strip a leading UTF-8 BOM (U+FEFF) from a decoded string. The Node/VS Code
+ * TextDecoder keeps the BOM as the first code point, which silently poisons
+ * JSON parsing (first key becomes "\uFEFFkey") — callers should normalize.
+ */
+export function stripUtf8Bom(text: string): string {
+    if (text && text.charCodeAt(0) === 0xFEFF) {
+        return text.slice(1);
+    }
+    return text;
+}
+
+/**
+ * Decode UTF-8 bytes and strip any leading BOM. Preferred over
+ * `sharedDecoder.decode(data)` for any code path that subsequently parses JSON
+ * or compares strings against known-non-BOM inputs.
+ */
+export function decodeUtf8(data: Uint8Array): string {
+    return stripUtf8Bom(sharedDecoder.decode(data));
+}
+
 // Cache for locale directory lookups (cleared on workspace change)
 const localeDirCache = new Map<string, vscode.Uri>();
 
@@ -154,9 +175,21 @@ function decodeLocaleText(data: Uint8Array): string | null {
         }
     }
 
+    // Strip UTF-8 BOM (EF BB BF) before decoding.
+    let utf8Start = 0;
+    if (
+        data.length >= 3 &&
+        data[0] === 0xef &&
+        data[1] === 0xbb &&
+        data[2] === 0xbf
+    ) {
+        utf8Start = 3;
+    }
+
     if (!hasNul) {
         try {
-            return sharedDecoder.decode(data);
+            const decoded = sharedDecoder.decode(utf8Start ? data.subarray(utf8Start) : data);
+            return stripUtf8Bom(decoded);
         } catch (err) {
             console.error('Failed to decode locale file as UTF-8:', err);
             return null;
@@ -174,7 +207,7 @@ function decodeLocaleText(data: Uint8Array): string | null {
         codeUnits.push(cu);
     }
     try {
-        return String.fromCharCode(...codeUnits);
+        return stripUtf8Bom(String.fromCharCode(...codeUnits));
     } catch (err) {
         console.error('Failed to decode locale file as UTF-16LE:', err);
         return null;
@@ -191,7 +224,18 @@ async function resolveLocaleWriteTarget(
 ): Promise<LocaleWriteTarget> {
     const cfg = vscode.workspace.getConfiguration('ai-localizer', folder.uri);
     const defaultLocale = cfg.get<string>('i18n.defaultLocale') || 'en';
-    const bases = ['resources/js/i18n/auto', 'src/i18n', 'src/locales', 'locales', 'i18n'];
+
+    // Honour explicit aiI18n.localesDir before heuristics.
+    const explicit = await readAiI18nLocalesDir(folder);
+    const explicitBases = explicit ? [explicit] : [];
+    const bases = [
+        ...explicitBases,
+        'resources/js/i18n/auto',
+        'src/i18n',
+        'src/locales',
+        'locales',
+        'i18n',
+    ];
 
     for (const base of bases) {
         const baseUri = vscode.Uri.file(path.join(folder.uri.fsPath, base));
@@ -265,12 +309,47 @@ async function readLocaleJsonObject(fileUri: vscode.Uri): Promise<{ root: any; o
     }
 }
 
+async function readAiI18nLocalesDir(folder: vscode.WorkspaceFolder): Promise<string | null> {
+    try {
+        const pkgUri = vscode.Uri.joinPath(folder.uri, 'package.json');
+        const data = await vscode.workspace.fs.readFile(pkgUri);
+        const text = stripUtf8Bom(sharedDecoder.decode(data));
+        const pkg = JSON.parse(text);
+        if (pkg?.aiI18n?.localesDir && typeof pkg.aiI18n.localesDir === 'string') {
+            return String(pkg.aiI18n.localesDir);
+        }
+    } catch {
+        // ignore — fall back to heuristic search
+    }
+    return null;
+}
+
 async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: string): Promise<vscode.Uri> {
     // Check cache first
     const cacheKey = `${folder.uri.fsPath}::${locale}`;
     const cached = localeDirCache.get(cacheKey);
     if (cached) {
         return cached;
+    }
+
+    // Honour explicit aiI18n.localesDir first — users who configured this
+    // expect writes to land there even if the dir doesn't exist yet.
+    const explicit = await readAiI18nLocalesDir(folder);
+    if (explicit) {
+        const explicitBase = vscode.Uri.file(path.join(folder.uri.fsPath, explicit));
+        try {
+            await vscode.workspace.fs.createDirectory(explicitBase);
+        } catch {
+            // ignore
+        }
+        const localeUri = vscode.Uri.file(path.join(explicitBase.fsPath, locale));
+        try {
+            await vscode.workspace.fs.createDirectory(localeUri);
+        } catch {
+            // ignore
+        }
+        localeDirCache.set(cacheKey, localeUri);
+        return localeUri;
     }
 
     const bases = ['resources/js/i18n/auto', 'src/i18n', 'src/locales', 'locales', 'i18n'];
@@ -295,7 +374,18 @@ async function findOrCreateLocaleDir(folder: vscode.WorkspaceFolder, locale: str
         } catch {
         }
     }
-    const fallback = vscode.Uri.file(path.join(folder.uri.fsPath, 'resources/js/i18n/auto', locale));
+    // Non-Laravel fallback: prefer src/locales when src/ exists.
+    const srcRoot = vscode.Uri.file(path.join(folder.uri.fsPath, 'src'));
+    let fallbackBase = 'resources/js/i18n/auto';
+    try {
+        const s = await vscode.workspace.fs.stat(srcRoot);
+        if (s.type === vscode.FileType.Directory) {
+            fallbackBase = 'src/locales';
+        }
+    } catch {
+        // ignore
+    }
+    const fallback = vscode.Uri.file(path.join(folder.uri.fsPath, fallbackBase, locale));
     await vscode.workspace.fs.createDirectory(fallback);
     localeDirCache.set(cacheKey, fallback);
     return fallback;

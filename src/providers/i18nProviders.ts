@@ -46,6 +46,30 @@ export class I18nHoverProvider implements vscode.HoverProvider {
 
     constructor(private i18nIndex: I18nIndex) {}
 
+    /**
+     * Get the primary location for a translation record, preferring structured files
+     */
+    private getPrimaryLocation(record: any): { locale: string; uri: vscode.Uri } {
+        if (!record.locations || record.locations.length === 0) {
+            throw new Error('No locations available for translation record');
+        }
+
+        // Prefer JSON files first, then RESX/PO, then PHP
+        const jsonLocation = record.locations.find((loc: any) => 
+            loc.uri.fsPath.toLowerCase().endsWith('.json')
+        );
+        if (jsonLocation) return jsonLocation;
+
+        const resxOrPoLocation = record.locations.find((loc: any) => 
+            loc.uri.fsPath.toLowerCase().endsWith('.resx') || 
+            loc.uri.fsPath.toLowerCase().endsWith('.po')
+        );
+        if (resxOrPoLocation) return resxOrPoLocation;
+
+        // Fallback to first location (should be PHP in most cases)
+        return record.locations[0];
+    }
+
     async provideHover(
         document: vscode.TextDocument,
         position: vscode.Position,
@@ -275,6 +299,30 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
     private projectConfigService = new ProjectConfigService();
 
     constructor(private i18nIndex: I18nIndex) {}
+
+    /**
+     * Get the primary location for a translation record, preferring structured files
+     */
+    private getPrimaryLocation(record: any): { locale: string; uri: vscode.Uri } {
+        if (!record.locations || record.locations.length === 0) {
+            throw new Error('No locations available for translation record');
+        }
+
+        // Prefer JSON files first, then RESX/PO, then PHP
+        const jsonLocation = record.locations.find((loc: any) => 
+            loc.uri.fsPath.toLowerCase().endsWith('.json')
+        );
+        if (jsonLocation) return jsonLocation;
+
+        const resxOrPoLocation = record.locations.find((loc: any) => 
+            loc.uri.fsPath.toLowerCase().endsWith('.resx') || 
+            loc.uri.fsPath.toLowerCase().endsWith('.po')
+        );
+        if (resxOrPoLocation) return resxOrPoLocation;
+
+        // Fallback to first location (should be PHP in most cases)
+        return record.locations[0];
+    }
 
     private skipJsonWhitespaceAndComments(text: string, index: number): number {
         let i = index;
@@ -659,7 +707,7 @@ export class I18nDefinitionProvider implements vscode.DefinitionProvider {
                 // User cancelled - jump to default locale as fallback
                 const primary =
                     record.locations.find((l) => l.locale === record.defaultLocale) ||
-                    record.locations[0];
+                    this.getPrimaryLocation(record);
                 console.log('[i18n] User cancelled, jumping to default:', primary.uri.toString());
                 const range = await this.findKeyPositionInFile(primary.uri, keyInfo.key);
                 return new vscode.Location(primary.uri, range);

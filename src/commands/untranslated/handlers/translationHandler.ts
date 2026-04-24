@@ -50,7 +50,12 @@ export class TranslationHandler {
         const defaultLocale = record.defaultLocale;
         let location = record.locations.find((loc: any) => loc && loc.locale === defaultLocale);
         if (!location) {
-            location = record.locations[0];
+            // Prefer structured files over PHP for fallback
+            location = record.locations.find((loc: any) => 
+                loc.uri.fsPath.toLowerCase().endsWith('.json') ||
+                loc.uri.fsPath.toLowerCase().endsWith('.resx') ||
+                loc.uri.fsPath.toLowerCase().endsWith('.po')
+            ) || record.locations[0];
         }
         if (!location || !location.uri) {
             return 'common';
@@ -813,7 +818,13 @@ export class TranslationHandler {
                 if (!needsTranslation) continue;
 
                 if (!sampleFileByLocale.has(locale) && record.locations && record.locations.length) {
-                    const locEntry = record.locations.find((l) => l.locale === locale) || record.locations[0];
+                    const locEntry = record.locations.find((l) => l.locale === locale) || 
+                        record.locations.find((l) => 
+                            l.uri.fsPath.toLowerCase().endsWith('.json') ||
+                            l.uri.fsPath.toLowerCase().endsWith('.resx') ||
+                            l.uri.fsPath.toLowerCase().endsWith('.po')
+                        ) ||
+                        record.locations[0];
                     if (locEntry) {
                         sampleFileByLocale.set(locale, locEntry.uri);
                     }

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextDecoder, TextEncoder } from 'util';
 import { getProjectEnv } from '../core/projectEnv';
+import { stripUtf8Bom } from '../core/i18nFs';
 
 const sharedDecoder = new TextDecoder('utf-8');
 const sharedEncoder = new TextEncoder();
@@ -66,7 +67,7 @@ function hasKeyPath(obj: unknown, keyPath: string): boolean {
 async function readJsonFile(uri: vscode.Uri): Promise<Record<string, unknown> | null> {
     try {
         const data = await vscode.workspace.fs.readFile(uri);
-        const text = sharedDecoder.decode(data);
+        const text = stripUtf8Bom(sharedDecoder.decode(data));
         const parsed = JSON.parse(text);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             return parsed as Record<string, unknown>;
@@ -77,9 +78,68 @@ async function readJsonFile(uri: vscode.Uri): Promise<Record<string, unknown> | 
     }
 }
 
-async function writeJsonFile(uri: vscode.Uri, data: Record<string, unknown>): Promise<void> {
-    const sorted = sortObjectDeep(data) as Record<string, unknown>;
-    const payload = `${JSON.stringify(sorted, null, 2)}\n`;
+async function readAiI18nConfig(folder: vscode.WorkspaceFolder): Promise<Record<string, unknown>> {
+    try {
+        const pkgUri = vscode.Uri.joinPath(folder.uri, 'package.json');
+        const data = await vscode.workspace.fs.readFile(pkgUri);
+        const pkg = JSON.parse(stripUtf8Bom(sharedDecoder.decode(data)));
+        if (pkg && typeof pkg === 'object' && pkg.aiI18n && typeof pkg.aiI18n === 'object') {
+            return pkg.aiI18n as Record<string, unknown>;
+        }
+    } catch {
+        // No package.json or no aiI18n block.
+    }
+    return {};
+}
+
+async function shouldSortKeys(folder?: vscode.WorkspaceFolder): Promise<boolean> {
+    if (!folder) return true;
+    const cfg = await readAiI18nConfig(folder);
+    if (typeof cfg.sortKeys === 'boolean') return cfg.sortKeys;
+    // When the user supplies an `aiI18n` block we default to preserving
+    // insertion order; legacy projects (no block) keep the historical sort.
+    return Object.keys(cfg).length === 0;
+}
+
+function mergePreservingOrder(existing: unknown, incoming: unknown): unknown {
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+        return incoming;
+    }
+    const incomingObj = incoming as Record<string, unknown>;
+    const existingObj =
+        existing && typeof existing === 'object' && !Array.isArray(existing)
+            ? (existing as Record<string, unknown>)
+            : {};
+    const result: Record<string, unknown> = {};
+    // Preserve existing order first.
+    for (const key of Object.keys(existingObj)) {
+        if (Object.prototype.hasOwnProperty.call(incomingObj, key)) {
+            result[key] = mergePreservingOrder(existingObj[key], incomingObj[key]);
+        }
+    }
+    // Append keys new to this write at the end.
+    for (const key of Object.keys(incomingObj)) {
+        if (Object.prototype.hasOwnProperty.call(result, key)) continue;
+        result[key] = incomingObj[key];
+    }
+    return result;
+}
+
+async function writeJsonFile(
+    uri: vscode.Uri,
+    data: Record<string, unknown>,
+    folder?: vscode.WorkspaceFolder,
+): Promise<void> {
+    const sort = await shouldSortKeys(folder);
+    let out: Record<string, unknown>;
+    if (sort) {
+        out = sortObjectDeep(data) as Record<string, unknown>;
+    } else {
+        // Preserve existing file's key order where possible.
+        const existing = await readJsonFile(uri);
+        out = mergePreservingOrder(existing, data) as Record<string, unknown>;
+    }
+    const payload = `${JSON.stringify(out, null, 2)}\n`;
     await vscode.workspace.fs.writeFile(uri, sharedEncoder.encode(payload));
 }
 
@@ -123,14 +183,27 @@ export class GranularSyncService {
     private async getAutoDir(folder: vscode.WorkspaceFolder): Promise<vscode.Uri> {
         try {
             const env = await getProjectEnv(folder);
-            return vscode.Uri.file(path.join(env.runtimeRoot, 'auto'));
+            // Prefer the explicit localesDir (honours aiI18n.localesDir).
+            const candidate = vscode.Uri.joinPath(folder.uri, env.localesDir);
+            if (await fileExists(candidate)) {
+                return candidate;
+            }
+            // Legacy Laravel projects store locales one level deeper.
+            if (env.framework?.kind === 'laravel') {
+                const legacy = vscode.Uri.file(path.join(env.runtimeRoot, 'auto'));
+                if (await fileExists(legacy)) {
+                    return legacy;
+                }
+            }
+            return candidate;
         } catch {
             // Fallback paths
             const candidates = [
-                'resources/js/i18n/auto',
-                'src/i18n/auto',
                 'src/locales',
                 'locales',
+                'src/i18n',
+                'resources/js/i18n/auto',
+                'src/i18n/auto',
             ];
             for (const candidate of candidates) {
                 const uri = vscode.Uri.joinPath(folder.uri, candidate);
@@ -138,7 +211,7 @@ export class GranularSyncService {
                     return uri;
                 }
             }
-            return vscode.Uri.joinPath(folder.uri, 'resources/js/i18n/auto');
+            return vscode.Uri.joinPath(folder.uri, 'src/locales');
         }
     }
 
@@ -146,7 +219,7 @@ export class GranularSyncService {
         try {
             const pkgUri = vscode.Uri.joinPath(folder.uri, 'package.json');
             const data = await vscode.workspace.fs.readFile(pkgUri);
-            const pkg = JSON.parse(sharedDecoder.decode(data));
+            const pkg = JSON.parse(stripUtf8Bom(sharedDecoder.decode(data)));
             if (pkg?.aiI18n?.locales && Array.isArray(pkg.aiI18n.locales)) {
                 return pkg.aiI18n.locales.filter((l: unknown) => typeof l === 'string' && l);
             }
@@ -182,7 +255,7 @@ export class GranularSyncService {
     }
 
     /**
-     * Sync specific keys only across all locales.
+     * Sync specific keys only across all locales, but skip keys that were recently deleted.
      * Use this for quick fixes where only a few keys need syncing.
      */
     async syncKeys(
@@ -197,6 +270,21 @@ export class GranularSyncService {
             return result;
         }
 
+        // Filter out keys that were recently deleted (prevent reintroduction)
+        const filteredKeys = await this.filterRecentlyDeletedKeys(folder, keys, baseLocale);
+        if (!filteredKeys.length) {
+            if (verbose) {
+                this.log('[granular-sync] All keys were recently deleted, skipping sync');
+            }
+            return result;
+        }
+
+        if (filteredKeys.length < keys.length && verbose) {
+            const skippedCount = keys.length - filteredKeys.length;
+            this.log(`[granular-sync] Skipped ${skippedCount} recently deleted key(s)`);
+        }
+
+        // Continue with filtered keys...
         const autoDir = await this.getAutoDir(folder);
         const baseGroupedDir = vscode.Uri.joinPath(autoDir, baseLocale);
         const useGrouped = await fileExists(baseGroupedDir);
@@ -219,7 +307,7 @@ export class GranularSyncService {
         if (useGrouped) {
             // Group keys by their target file
             const keysByFile = new Map<string, string[]>();
-            for (const key of keys) {
+            for (const key of filteredKeys) {
                 const fileName = getFileNameForKey(key);
                 if (!keysByFile.has(fileName)) {
                     keysByFile.set(fileName, []);
@@ -255,7 +343,7 @@ export class GranularSyncService {
 
                     if (modified) {
                         await ensureDir(localeDir);
-                        await writeJsonFile(targetFileUri, targetData);
+                        await writeJsonFile(targetFileUri, targetData, folder);
                         result.updated++;
                         result.files.push(targetFileUri.fsPath);
                     }
@@ -272,7 +360,7 @@ export class GranularSyncService {
                 const targetData = (await readJsonFile(targetFileUri)) || {};
                 let modified = false;
 
-                for (const key of keys) {
+                for (const key of filteredKeys) {
                     const baseValue = getKeyValue(baseData, key);
                     if (baseValue === undefined) continue;
 
@@ -286,7 +374,7 @@ export class GranularSyncService {
                 }
 
                 if (modified) {
-                    await writeJsonFile(targetFileUri, targetData);
+                    await writeJsonFile(targetFileUri, targetData, folder);
                     result.updated++;
                     result.files.push(targetFileUri.fsPath);
                 }
@@ -294,10 +382,89 @@ export class GranularSyncService {
         }
 
         if (verbose) {
-            this.log(`[granular-sync] Synced ${keys.length} key(s), updated ${result.updated} file(s)`);
+            this.log(`[granular-sync] Synced ${filteredKeys.length} key(s), updated ${result.updated} file(s)`);
         }
 
         return result;
+    }
+
+    /**
+     * Filter out keys that were recently deleted to prevent reintroduction
+     */
+    private async filterRecentlyDeletedKeys(
+        folder: vscode.WorkspaceFolder,
+        keys: string[],
+        _baseLocale: string
+    ): Promise<string[]> {
+        const autoDir = await this.getAutoDir(folder);
+        const deletedKeysFile = vscode.Uri.joinPath(autoDir, '.recently-deleted-keys.json');
+        
+        try {
+            const data = await vscode.workspace.fs.readFile(deletedKeysFile);
+            const deletedInfo = JSON.parse(stripUtf8Bom(sharedDecoder.decode(data)));
+            
+            // Filter out keys that were deleted within the last hour
+            const oneHourAgo = Date.now() - (60 * 60 * 1000);
+            const recentlyDeleted = new Set<string>();
+            
+            for (const [key, timestamp] of Object.entries(deletedInfo)) {
+                if (typeof timestamp === 'number' && timestamp > oneHourAgo) {
+                    recentlyDeleted.add(key);
+                }
+            }
+            
+            return keys.filter(key => !recentlyDeleted.has(key));
+        } catch {
+            // No deleted keys file exists, return all keys
+            return keys;
+        }
+    }
+
+    /**
+     * Record keys as recently deleted to prevent sync reintroduction
+     */
+    async recordRecentlyDeletedKeys(
+        folder: vscode.WorkspaceFolder,
+        keys: string[]
+    ): Promise<void> {
+        if (!keys.length) return;
+        
+        const autoDir = await this.getAutoDir(folder);
+        const deletedKeysFile = vscode.Uri.joinPath(autoDir, '.recently-deleted-keys.json');
+        
+        try {
+            let deletedInfo: Record<string, number> = {};
+            
+            try {
+                const data = await vscode.workspace.fs.readFile(deletedKeysFile);
+                deletedInfo = JSON.parse(stripUtf8Bom(sharedDecoder.decode(data)));
+            } catch {
+                // File doesn't exist yet
+            }
+            
+            // Add current timestamp for each deleted key
+            const now = Date.now();
+            for (const key of keys) {
+                deletedInfo[key] = now;
+            }
+            
+            // Clean up old entries (older than 24 hours)
+            const oneDayAgo = now - (24 * 60 * 60 * 1000);
+            const cleanedInfo: Record<string, number> = {};
+            for (const [key, timestamp] of Object.entries(deletedInfo)) {
+                if (typeof timestamp === 'number' && timestamp > oneDayAgo) {
+                    cleanedInfo[key] = timestamp;
+                }
+            }
+            
+            await ensureDir(autoDir);
+            const payload = `${JSON.stringify(cleanedInfo, null, 2)}\n`;
+            await vscode.workspace.fs.writeFile(deletedKeysFile, sharedEncoder.encode(payload));
+            
+            this.log(`[granular-sync] Recorded ${keys.length} key(s) as recently deleted`);
+        } catch (err) {
+            console.error('Failed to record recently deleted keys:', err);
+        }
     }
 
     /**
@@ -397,7 +564,7 @@ export class GranularSyncService {
                 if (modified) {
                     const targetDir = vscode.Uri.file(path.dirname(targetFileUri.fsPath));
                     await ensureDir(targetDir);
-                    await writeJsonFile(targetFileUri, targetData);
+                    await writeJsonFile(targetFileUri, targetData, folder);
                     result.updated++;
                     result.files.push(targetFileUri.fsPath);
                     if (verbose) {
@@ -422,7 +589,7 @@ export class GranularSyncService {
                 }
 
                 if (modified) {
-                    await writeJsonFile(targetFileUri, targetData);
+                    await writeJsonFile(targetFileUri, targetData, folder);
                     result.updated++;
                     result.files.push(targetFileUri.fsPath);
                     if (verbose) {
@@ -489,7 +656,7 @@ export class GranularSyncService {
 
                 if (modified) {
                     await ensureDir(baseGroupedDir);
-                    await writeJsonFile(baseFileUri, baseData);
+                    await writeJsonFile(baseFileUri, baseData, folder);
                     result.updated++;
                     result.files.push(baseFileUri.fsPath);
                     if (verbose) {
@@ -515,7 +682,7 @@ export class GranularSyncService {
 
             if (modified) {
                 await ensureDir(autoDir);
-                await writeJsonFile(baseFileUri, baseData);
+                await writeJsonFile(baseFileUri, baseData, folder);
                 result.updated++;
                 result.files.push(baseFileUri.fsPath);
                 if (verbose) {

@@ -2,7 +2,7 @@
   "name": "ai-localizer",
   "displayName": "Localizer – AI i18n for React, Vue, Laravel & more",
   "description": "Fully automated localization + translations in minutes. Localizer is an AI-assisted localization tool for React/Next/React Native, Vue/Nuxt, Svelte/SvelteKit, and Laravel (Blade + Inertia). Uses AST-aware parsers and smart validators to extract strings, manage locale JSON, run extract/rewrite/sync scripts, and scaffold drop-in LanguageSwitcher components with a guided first-time setup.",
-  "version": "0.1.15",
+  "version": "0.2.0",
   "publisher": "venmail",
   "repository": {
     "type": "git",
@@ -423,6 +423,27 @@
           "scope": "workspace",
           "description": "Disable AI Localizer for this workspace. When enabled, no prompts, diagnostics, or IntelliSense will be shown."
         },
+        "ai-localizer.i18n.diagnostics.missingReferenceEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect missing translation key references in source code (t('key') calls where the key doesn't exist in any locale files)."
+        },
+        "ai-localizer.i18n.diagnostics.missingReferenceSeverity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "hint"
+          ],
+          "default": "error",
+          "description": "Severity level used when a translation key reference is missing from all locale files."
+        },
+        "ai-localizer.i18n.diagnostics.verboseLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose logging for diagnostic analysis to troubleshoot missing key detection issues."
+        },
         "ai-localizer.debug.enabled": {
           "type": "boolean",
           "default": false,
@@ -492,5 +513,8 @@
     "openai": "^4.0.0",
     "oxc-parser": "^0.89.0"
   },
-  "aiI18n": {}
+  "aiI18n": {},
+  "workspaces": [
+    "packages/*"
+  ]
 }

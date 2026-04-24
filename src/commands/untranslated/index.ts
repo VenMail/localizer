@@ -13,6 +13,7 @@ import {
 
 // Import the new modular key management handler
 import { KeyManagementHandler } from './handlers/keyManagement';
+import { EnhancedCleanupHandler } from './handlers/enhancedCleanupHandler';
 
 /**
  * Commands for handling untranslated strings
@@ -23,6 +24,7 @@ export class UntranslatedCommands {
     private translationHandler: TranslationHandler;
     private keyManagementHandler: KeyManagementHandler;
     private cleanupHandler: CleanupHandler;
+    private enhancedCleanupHandler: EnhancedCleanupHandler;
     private styleHandler: StyleHandler;
     private reportHandler: ReportHandler;
 
@@ -54,6 +56,19 @@ export class UntranslatedCommands {
             i18nIndex,
             async (keyPath, uris, defaultValue) => {
                 return await this.keyManagementHandler.deleteKeyFromLocaleFiles(keyPath, uris, defaultValue);
+            },
+            async (keyPath, uris, defaultValue) => {
+                return await this.keyManagementHandler.deleteKeyFromAllLocaleFiles(keyPath, uris, defaultValue);
+            },
+        );
+        
+        this.enhancedCleanupHandler = new EnhancedCleanupHandler(
+            i18nIndex,
+            async (keyPath, uris, defaultValue) => {
+                return await this.keyManagementHandler.deleteKeyFromLocaleFiles(keyPath, uris, defaultValue);
+            },
+            async (keyPath, uris, defaultValue) => {
+                return await this.keyManagementHandler.deleteKeyFromAllLocaleFiles(keyPath, uris, defaultValue);
             },
         );
         
@@ -162,6 +177,10 @@ export class UntranslatedCommands {
 
     async cleanupUnusedInFile(documentUri?: vscode.Uri): Promise<void> {
         return this.cleanupHandler.cleanupUnusedInFile(documentUri);
+    }
+
+    async cleanupUnusedKeysInJsonFile(documentUri?: vscode.Uri): Promise<void> {
+        return this.enhancedCleanupHandler.cleanupUnusedKeysInJsonFile(documentUri);
     }
 
     async removeUnusedKeyInFile(documentUri: vscode.Uri, keyPath: string): Promise<void> {

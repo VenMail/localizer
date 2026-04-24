@@ -1,0 +1,51 @@
+{
+  "name": "@ai-localizer/cli",
+  "version": "0.1.0",
+  "description": "ai-localize CLI — extract / replace / sync / translate / cleanup i18n for Vue, React, Next, and Laravel. Designed to be driven by Claude or Codex skills with near-zero AI token spend.",
+  "license": "Apache-2.0",
+  "author": "Chibueze Opata",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VenMail/localizer.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/VenMail/localizer#readme",
+  "bugs": {
+    "url": "https://github.com/VenMail/localizer/issues"
+  },
+  "keywords": [
+    "i18n",
+    "cli",
+    "internationalization",
+    "localization",
+    "translation",
+    "vue",
+    "react",
+    "next",
+    "laravel",
+    "claude",
+    "codex",
+    "ai-agent"
+  ],
+  "bin": {
+    "ai-localize": "./bin/ai-localize.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node ./bin/ai-localize.js"
+  },
+  "dependencies": {
+    "@ai-localizer/core": "^0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

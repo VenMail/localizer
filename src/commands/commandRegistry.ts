@@ -376,6 +376,24 @@ export class CommandRegistry {
                             progress.report({ message: 'Cleaning existing i18n reports (unused/invalid/untranslated)...' });
                             await this.clearI18nReports();
 
+                            try {
+                                const bootstrapFolder = (vscode.workspace.workspaceFolders || [])[0];
+                                if (bootstrapFolder) {
+                                    progress.report({ message: 'Detecting Vue framework and checking i18n dependencies...' });
+                                    const { bootstrapVueI18nProject } = await import('../core/vueRuntime');
+                                    const ok = await bootstrapVueI18nProject(bootstrapFolder);
+                                    if (!ok) {
+                                        vscode.window.showInformationMessage(
+                                            'AI Localizer: Setup cancelled by user (vue-i18n bootstrap).',
+                                        );
+                                        return;
+                                    }
+                                }
+                            } catch (bootstrapErr) {
+                                const msg = bootstrapErr instanceof Error ? bootstrapErr.message : String(bootstrapErr);
+                                this.log.appendLine(`[FirstTimeSetup] Vue bootstrap skipped: ${msg}`);
+                            }
+
                             progress.report({ message: 'Configuring project i18n (scripts, locales, srcRoot)...' });
                             await configureCmd.execute();
 
@@ -546,6 +564,10 @@ export class CommandRegistry {
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.cleanupUnusedKeysInFile',
                 (documentUri?: vscode.Uri) => untranslatedCmds.cleanupUnusedInFile(documentUri),
+            ),
+            vscode.commands.registerCommand(
+                'ai-localizer.i18n.cleanupUnusedKeysInJsonFile',
+                (documentUri?: vscode.Uri) => untranslatedCmds.cleanupUnusedKeysInJsonFile(documentUri),
             ),
             vscode.commands.registerCommand(
                 'ai-localizer.i18n.restoreInvalidKeysInFile',

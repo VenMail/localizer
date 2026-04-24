@@ -1582,6 +1582,56 @@ export class KeyManagementHandler {
     }
 
     /**
+     * Delete a key from ALL locale files without guard (for symmetric cleanup)
+     * This method bypasses the default locale guard to ensure symmetric cleanup
+     */
+    async deleteKeyFromAllLocaleFiles(
+        keyPath: string,
+        uris: vscode.Uri[],
+        _defaultValue?: string,
+    ): Promise<number> {
+        if (!uris.length) return 0;
+
+        const changedUris: vscode.Uri[] = [];
+
+        for (const uri of uris) {
+            try {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                if (doc.languageId !== 'json' && doc.languageId !== 'jsonc') {
+                    continue;
+                }
+
+                let root: any = await readJsonFile(uri) || {};
+                if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+
+                if (!deleteKeyPathInObject(root, keyPath)) {
+                    continue;
+                }
+
+                await writeJsonFile(uri, root);
+                changedUris.push(uri);
+            } catch {
+                // Ignore failures for individual locale files
+            }
+        }
+
+        for (const uri of changedUris) {
+            try {
+                await this.i18nIndex.updateFile(uri);
+                await vscode.commands.executeCommand(
+                    'ai-localizer.i18n.refreshFileDiagnostics',
+                    uri,
+                    [keyPath],
+                );
+            } catch {
+                // Ignore failures during diagnostics refresh
+            }
+        }
+
+        return changedUris.length;
+    }
+
+    /**
      * Guard: Prevent deletion of default locale keys that are used in components
      */
     async guardDeleteDefaultLocaleKey(

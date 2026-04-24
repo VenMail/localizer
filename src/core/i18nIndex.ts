@@ -3,6 +3,7 @@ import * as path from 'path';
 import { TextDecoder } from 'util';
 import { getProjectEnv } from './projectEnv';
 import { inferJsonLocaleFromUri, parseLocaleJson } from './i18nLocale';
+import { stripUtf8Bom } from './i18nFs';
 import { ProjectConfigService } from '../services/projectConfigService';
 import { detectFrameworkProfile } from '../frameworks/detection';
 
@@ -14,6 +15,8 @@ export type TranslationRecord = {
     locales: Map<string, string>;
     defaultLocale: string;
     locations: { locale: string; uri: vscode.Uri }[];
+    /** Tracks which file type currently provides the locale's canonical value */
+    localeSourcePriority?: Map<string, number>;
 };
 
 // Shared decoder instance to avoid repeated allocations
@@ -316,16 +319,43 @@ export class I18nIndex {
                 locales: new Map<string, string>(),
                 defaultLocale: this.defaultLocale,
                 locations: [],
+                localeSourcePriority: new Map<string, number>(),
             };
             this.keyMap.set(key, record);
         }
-        record.locales.set(locale, value);
+        const locationPriority = this.getLocationPriority(uri);
+
+        if (!record.localeSourcePriority) {
+            record.localeSourcePriority = new Map<string, number>();
+        }
+
+        const previousPriority = record.localeSourcePriority.get(locale);
+        if (previousPriority === undefined || locationPriority <= previousPriority) {
+            record.locales.set(locale, value);
+            record.localeSourcePriority.set(locale, locationPriority);
+        }
         
         const uriStr = uri.toString();
         // Use string comparison for faster location lookup
         const locationKey = `${locale}:${uriStr}`;
         if (!record.locations.some((l) => `${l.locale}:${l.uri.toString()}` === locationKey)) {
-            record.locations.push({ locale, uri });
+            const newLocation = { locale, uri };
+            let inserted = false;
+            for (let i = 0; i < record.locations.length; i += 1) {
+                const existing = record.locations[i];
+                if (existing.locale !== locale) {
+                    continue;
+                }
+                const existingPriority = this.getLocationPriority(existing.uri);
+                if (locationPriority < existingPriority) {
+                    record.locations.splice(i, 0, newLocation);
+                    inserted = true;
+                    break;
+                }
+            }
+            if (!inserted) {
+                record.locations.push(newLocation);
+            }
         }
 
         const fileKey = uriStr;
@@ -343,6 +373,20 @@ export class I18nIndex {
             entryAny.keySet.add(key);
             entry.keys.push(key);
         }
+    }
+
+    private getLocationPriority(uri: vscode.Uri): number {
+        const ext = path.extname(uri.fsPath).toLowerCase();
+        if (ext === '.json') {
+            return 0;
+        }
+        if (ext === '.resx' || ext === '.po') {
+            return 1;
+        }
+        if (ext === '.php') {
+            return 2;
+        }
+        return 3;
     }
 
     private inferLocaleFromPath(uri: vscode.Uri): string | null {
@@ -459,9 +503,21 @@ export class I18nIndex {
                 break;
             }
         }
+        // Strip UTF-8 BOM (EF BB BF) before decoding.
+        let utf8Start = 0;
+        if (
+            data.length >= 3 &&
+            data[0] === 0xef &&
+            data[1] === 0xbb &&
+            data[2] === 0xbf
+        ) {
+            utf8Start = 3;
+        }
+
         if (!hasNul) {
             try {
-                return sharedDecoder.decode(data);
+                const decoded = sharedDecoder.decode(utf8Start ? data.subarray(utf8Start) : data);
+                return stripUtf8Bom(decoded);
             } catch (err) {
                 console.error('Failed to decode locale file as UTF-8:', err);
                 return null;
@@ -480,7 +536,7 @@ export class I18nIndex {
             codeUnits.push(cu);
         }
         try {
-            return String.fromCharCode(...codeUnits);
+            return stripUtf8Bom(String.fromCharCode(...codeUnits));
         } catch (err) {
             console.error('Failed to decode locale file as UTF-16LE:', err);
             return null;
@@ -1075,18 +1131,34 @@ export function escapeMarkdown(text: string): string {
     return text.replace(/([\\`*_{}[\]()#+\-.!])/g, '\\$1');
 }
 
+function stableHashForSlug(input: string): string {
+    let hash = 0;
+    for (let i = 0; i < input.length; i += 1) {
+        const ch = input.charCodeAt(i);
+        hash = (hash << 5) - hash + ch;
+        hash |= 0;
+    }
+    return Math.abs(hash).toString(36).slice(0, 8);
+}
+
 export function slugifyForKey(text: string, maxWords = 4, maxLength = 48): string {
-    const normalized = String(text || '')
+    const original = String(text || '');
+    const normalized = original
         .normalize('NFKD')
         .replace(/[\u0300-\u036f]/g, '');
     const words = normalized.toLowerCase().match(/[a-z0-9]+/g) || [];
     const sliced = words.slice(0, maxWords);
     let slug = sliced.join('_');
     if (!slug) {
-        slug = 'text';
+        const trimmed = original.trim();
+        if (trimmed) {
+            slug = `text_${stableHashForSlug(trimmed)}`;
+        } else {
+            slug = 'text';
+        }
     }
     if (slug.length > maxLength) {
-        slug = slug.slice(0, maxLength);
+        slug = slug.slice(0, maxLength).replace(/_+$/, '');
     }
     return slug;
 }

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { I18nIndex } from '../../../core/i18nIndex';
 import { pickWorkspaceFolder, runI18nScript } from '../../../core/workspace';
+import { getGranularSyncService } from '../../../services/granularSyncService';
 import {
     sharedDecoder,
     readJsonFile,
@@ -14,6 +15,7 @@ export class CleanupHandler {
     constructor(
         private i18nIndex: I18nIndex,
         private deleteKeyFromLocaleFiles: (keyPath: string, uris: vscode.Uri[], defaultValue?: string) => Promise<number>,
+        private deleteKeyFromAllLocaleFiles: (keyPath: string, uris: vscode.Uri[], defaultValue?: string) => Promise<number>,
     ) {}
 
     /**
@@ -216,14 +218,29 @@ export class CleanupHandler {
 
                 if (applyToAllLocales && deletedKeys.size > 0) {
                     await this.i18nIndex.ensureInitialized();
+                    
+                    // Collect all locale files for each deleted key
+                    const keysToDeleteFromAllLocales = new Map<string, vscode.Uri[]>();
+                    
                     for (const keyPath of deletedKeys) {
                         const record = this.i18nIndex.getRecord(keyPath);
                         if (!record) continue;
-                        const otherUris = record.locations
-                            .map((l) => l.uri)
-                            .filter((u) => u.toString() !== targetUri.toString());
-                        if (!otherUris.length) continue;
-                        deletedFromOtherFiles += await this.deleteKeyFromLocaleFiles(keyPath, otherUris);
+                        
+                        // Get ALL locale files containing this key (including default locale)
+                        const allLocaleUris = record.locations.map((l) => l.uri);
+                        keysToDeleteFromAllLocales.set(keyPath, allLocaleUris);
+                    }
+                    
+                    // Delete from ALL locales symmetrically
+                    for (const [keyPath, allUris] of keysToDeleteFromAllLocales) {
+                        deletedFromOtherFiles += await this.deleteKeyFromAllLocaleFiles(keyPath, allUris);
+                    }
+                    
+                    // Record deleted keys to prevent sync reintroduction
+                    const folder = vscode.workspace.getWorkspaceFolder(targetUri);
+                    if (folder) {
+                        const syncService = getGranularSyncService();
+                        await syncService.recordRecentlyDeletedKeys(folder, Array.from(deletedKeys));
                     }
                 }
 
@@ -904,10 +921,6 @@ export class CleanupHandler {
                 await this.deleteKeyFromLocaleFiles(keyPath, otherUris);
             }
         }
-
-        vscode.window.showInformationMessage(
-            `AI Localizer: Removed invalid/non-translatable key ${keyPath} from locale files.`,
-        );
     }
 
     /**

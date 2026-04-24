@@ -1,0 +1,63 @@
+{
+  "name": "@ai-localizer/core",
+  "version": "0.1.0",
+  "description": "Pure-Node i18n pipeline — extract, replace, sync, cleanup, translate-queue — for Vue 3, React/Next, and Laravel projects. Designed for AI agent orchestration with minimal token spend.",
+  "license": "Apache-2.0",
+  "author": "Chibueze Opata",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VenMail/localizer.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/VenMail/localizer#readme",
+  "bugs": {
+    "url": "https://github.com/VenMail/localizer/issues"
+  },
+  "keywords": [
+    "i18n",
+    "internationalization",
+    "localization",
+    "translation",
+    "vue",
+    "vue-i18n",
+    "react",
+    "next-intl",
+    "laravel",
+    "claude",
+    "ai-agent",
+    "extract",
+    "pipeline"
+  ],
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./translator/queue": "./src/translator/queue.js",
+    "./translator/cache": "./src/translator/cache.js",
+    "./lib/projectConfig": "./src/i18n/lib/projectConfig.js",
+    "./lib/stringUtils": "./src/i18n/lib/stringUtils.js",
+    "./lib/localeUtils": "./src/i18n/lib/localeUtils.js",
+    "./lib/validators": "./src/i18n/lib/validators/index.js",
+    "./lib/parsers": "./src/i18n/lib/parsers/index.js"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "oxc-parser": "^0.89.0",
+    "magic-string": "^0.30.21"
+  },
+  "peerDependenciesMeta": {
+    "@babel/parser": { "optional": true },
+    "@babel/generator": { "optional": true },
+    "@babel/traverse": { "optional": true },
+    "@babel/types": { "optional": true }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

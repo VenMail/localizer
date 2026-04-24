@@ -6,6 +6,8 @@ import { FrameworkProfile, detectFrameworkProfile } from '../frameworks/detectio
 
 export type Bundler = 'vite' | 'next' | 'webpack' | 'unknown';
 
+export type LocaleLayout = 'single' | 'grouped';
+
 export interface ProjectEnv {
     folder: vscode.WorkspaceFolder;
     framework?: FrameworkProfile;
@@ -15,6 +17,12 @@ export interface ProjectEnv {
     composablesRoot?: string;
     isTypeScript: boolean;
     bundler: Bundler;
+    /** Directory (relative to workspace root) where locale JSON files live. */
+    localesDir: string;
+    /** File layout convention for locale files. */
+    localeLayout: LocaleLayout;
+    /** Source language for AI translations (the "from" locale). */
+    sourceLocale: string;
 }
 
 const envCache = new Map<string, ProjectEnv>();
@@ -108,6 +116,33 @@ export async function getProjectEnv(folder: vscode.WorkspaceFolder): Promise<Pro
 
     const bundler: Bundler = pkg ? detectBundlerFromPkg(pkg) : 'unknown';
 
+    // Locale output defaults: Laravel keeps legacy path; other frameworks
+    // prefer `<srcRoot>/locales`. Overridable via `aiI18n.localesDir`.
+    let localesDir: string;
+    if (aiI18n && typeof aiI18n.localesDir === 'string' && aiI18n.localesDir.length > 0) {
+        localesDir = normalizeRoot(aiI18n.localesDir);
+    } else if (framework?.kind === 'laravel') {
+        localesDir = 'resources/js/i18n/auto';
+    } else {
+        localesDir = `${srcRootPosix}/locales`;
+    }
+
+    let localeLayout: LocaleLayout;
+    if (aiI18n && (aiI18n.layout === 'single' || aiI18n.layout === 'grouped')) {
+        localeLayout = aiI18n.layout;
+    } else if (aiI18n && framework?.kind !== 'laravel') {
+        localeLayout = 'single';
+    } else {
+        localeLayout = 'grouped';
+    }
+
+    let sourceLocale = 'en';
+    if (aiI18n && typeof aiI18n.sourceLocale === 'string' && aiI18n.sourceLocale) {
+        sourceLocale = aiI18n.sourceLocale;
+    } else if (aiI18n && typeof aiI18n.defaultLocale === 'string' && aiI18n.defaultLocale) {
+        sourceLocale = aiI18n.defaultLocale;
+    }
+
     const env: ProjectEnv = {
         folder,
         framework,
@@ -117,6 +152,9 @@ export async function getProjectEnv(folder: vscode.WorkspaceFolder): Promise<Pro
         composablesRoot,
         isTypeScript,
         bundler,
+        localesDir,
+        localeLayout,
+        sourceLocale,
     };
 
     envCache.set(key, env);
