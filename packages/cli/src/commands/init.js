@@ -63,6 +63,9 @@ async function run(parsed) {
   const srcRoot = String(parsed.flags['src-root'] || defaults.srcRoot);
   const localesDir = String(parsed.flags['locales-dir'] || defaults.localesDir);
   const layout = String(parsed.flags.layout || defaults.layout);
+  if (layout !== 'single' && layout !== 'grouped') {
+    throw new Error('Invalid --layout: expected single or grouped');
+  }
 
   const newBlock = {
     sourceLocale,
@@ -70,7 +73,7 @@ async function run(parsed) {
     locales: finalLocales,
     srcRoot,
     localesDir,
-    localeLayout: layout,
+    layout,
   };
 
   const hasExisting = data.aiI18n && typeof data.aiI18n === 'object' && Object.keys(data.aiI18n).length > 0;

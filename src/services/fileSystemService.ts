@@ -318,6 +318,7 @@ export class FileSystemService {
             'translationStore.js',
             'textValidation.js',
             'vueTemplateParser.js',
+            'sfcBlocks.js',
             'localeUtils.js',
         ];
 

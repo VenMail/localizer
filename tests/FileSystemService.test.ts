@@ -137,6 +137,7 @@ describe('FileSystemService Script Copying', () => {
                 'translationStore.js',
                 'textValidation.js',
                 'vueTemplateParser.js',
+                'sfcBlocks.js',
                 'localeUtils.js',
             ];
 

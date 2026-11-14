@@ -258,7 +258,7 @@ function isSingleCssClass(part) {
   
   // Check for known framework prefixes
   for (const prefix of cssFrameworkPrefixes) {
-    if (lower.startsWith(prefix) || lower.includes(prefix)) {
+    if (lower.startsWith(prefix)) {
       return true;
     }
   }
@@ -332,7 +332,7 @@ function isSingleCssClass(part) {
   }
   
   // 11. Contains common color names as suffix or segment
-  if (/(red|blue|green|yellow|purple|pink|orange|gray|grey|black|white|indigo|teal|cyan|amber|lime|emerald|sky|violet|fuchsia|rose|primary|secondary|success|danger|warning|info|light|dark)(-\d+)?$/i.test(part)) {
+  if (/(?:^|-)(red|blue|green|yellow|purple|pink|orange|gray|grey|black|white|indigo|teal|cyan|amber|lime|emerald|sky|violet|fuchsia|rose|primary|secondary|success|danger|warning|info|light|dark)(-\d+)?$/i.test(part)) {
     return true;
   }
   

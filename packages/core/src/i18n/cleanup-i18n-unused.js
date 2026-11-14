@@ -152,7 +152,9 @@ async function collectSourceFiles(dir, out) {
       }
       await collectSourceFiles(entryPath, out);
     } else if (entry.isFile()) {
-      if (/\.(tsx|ts|jsx|js|vue|svelte|mjs|cjs|mts|cts)$/i.test(entry.name)) {
+      if (/\.(tsx|ts|jsx|js|vue|svelte|mjs|cjs|mts|cts)$/i.test(entry.name) ||
+          (/\.(?:blade\.php|php)$/i.test(entry.name) &&
+           entryPath.replace(/\\/g, '/').includes('/resources/views/'))) {
         out.push(entryPath);
       }
     }
@@ -189,7 +191,8 @@ async function buildUsageIndex(candidateKeys) {
   for (const file of uniqueFiles) {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
-    const tCallRegex = /(?:^|[^a-zA-Z0-9_$])\$?t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.\-:]+)\1\s*(?:,|\))/g;
+    // Includes Vue/React t(), and Laravel Blade __(), trans(), @lang().
+    const tCallRegex = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans|@lang)\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.\-:]+)\1\s*(?:,|\))/g;
     let match;
     while ((match = tCallRegex.exec(code)) !== null) {
       const key = match[2];
@@ -252,8 +255,10 @@ async function applyDeletions(unusedKeys) {
       if (baseFileRel.startsWith(`${baseLocale}/`) || baseFileRel.startsWith(`${baseLocale}\\`)) {
         // Replace base locale with target locale
         rel = baseFileRel.replace(new RegExp(`^${baseLocale}[\\\\/]`), `${locale}/`);
+      } else if (baseFileRel === `${baseLocale}.json`) {
+        // Single-file locale layout: en.json maps to fr.json, not en.json.
+        rel = `${locale}.json`;
       } else {
-        // File is not locale-specific, use as-is
         rel = baseFileRel;
       }
       const abs = path.resolve(autoDir, rel);

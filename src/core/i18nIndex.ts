@@ -27,6 +27,10 @@ export class I18nIndex {
     private defaultLocale = 'en';
     private initializing: Promise<void> | null = null;
     private fileToKeys = new Map<string, { locale: string; keys: string[] }>();
+    // Structural JSON paths (objects/arrays) are not scalar translations, but
+    // can be valid references in APIs configured to return nested objects.
+    private jsonContainerFiles = new Map<string, Set<string>>();
+    private jsonContainersByFile = new Map<string, Set<string>>();
     private projectConfigService = new ProjectConfigService();
 
     async ensureInitialized(force = false): Promise<void> {
@@ -48,6 +52,8 @@ export class I18nIndex {
     private async buildIndex(): Promise<void> {
         this.keyMap.clear();
         this.fileToKeys.clear();
+        this.jsonContainerFiles.clear();
+        this.jsonContainersByFile.clear();
 
         const config = vscode.workspace.getConfiguration('ai-localizer');
         this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
@@ -543,13 +549,58 @@ export class I18nIndex {
         }
     }
 
+    private registerJsonContainer(uri: vscode.Uri, key: string): void {
+        if (!key) return;
+        const file = uri.toString();
+        const keys = this.jsonContainersByFile.get(file) || new Set<string>();
+        keys.add(key);
+        this.jsonContainersByFile.set(file, keys);
+        const files = this.jsonContainerFiles.get(key) || new Set<string>();
+        files.add(file);
+        this.jsonContainerFiles.set(key, files);
+    }
+
+    private clearJsonContainersForFile(file: string): void {
+        for (const key of this.jsonContainersByFile.get(file) || []) {
+            const files = this.jsonContainerFiles.get(key);
+            if (!files) continue;
+            files.delete(file);
+            if (files.size === 0) this.jsonContainerFiles.delete(key);
+        }
+        this.jsonContainersByFile.delete(file);
+    }
+
+    hasJsonContainerKey(key: string): boolean {
+        return (this.jsonContainerFiles.get(key)?.size || 0) > 0;
+    }
+
     private walkJson(prefix: string, node: unknown, locale: string, uri: vscode.Uri): void {
         if (!node || typeof node !== 'object') {
             return;
         }
 
         if (Array.isArray(node)) {
-            // Handle go-i18n style catalogs: an array of objects with id/key and translation/message fields.
+            if (prefix) this.registerJsonContainer(uri, prefix);
+            // Preserve support for top-level go-i18n id-based catalogs.
+            // Nested arrays of ordinary objects must still be traversed.
+            const isCatalog = !prefix && node.length > 0 && node.every(element =>
+                element && typeof element === 'object' && !Array.isArray(element) &&
+                (typeof (element as Record<string, unknown>).id === 'string' ||
+                 typeof (element as Record<string, unknown>).key === 'string') &&
+                ['translation', 'message', 'text', 'other'].some(field =>
+                    typeof (element as Record<string, unknown>)[field] === 'string'));
+            if (!isCatalog) {
+                node.forEach((element, index) => {
+                    if (element && typeof element === 'object') {
+                        const childKey = prefix ? `${prefix}.${index}` : String(index);
+                        this.registerJsonContainer(uri, childKey);
+                        this.walkJson(childKey, element, locale, uri);
+                    } else if (typeof element === 'string') {
+                        this.registerTranslation(locale, uri, prefix ? `${prefix}.${index}` : String(index), element);
+                    }
+                });
+                return;
+            }
             for (const element of node) {
                 if (!element || typeof element !== 'object' || Array.isArray(element)) {
                     continue;
@@ -584,6 +635,7 @@ export class I18nIndex {
             if (typeof value === 'string') {
                 this.registerTranslation(locale, uri, nextKey, value);
             } else if (value && typeof value === 'object') {
+                this.registerJsonContainer(uri, nextKey);
                 this.walkJson(nextKey, value, locale, uri);
             }
         }
@@ -931,6 +983,7 @@ export class I18nIndex {
         this.defaultLocale = config.get<string>('i18n.defaultLocale') || 'en';
 
         const fileKey = uri.toString();
+        this.clearJsonContainersForFile(fileKey);
         const existing = this.fileToKeys.get(fileKey);
         const existingLocale = existing?.locale;
         

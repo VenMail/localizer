@@ -263,8 +263,10 @@ function getSortKeys(projectRoot) {
  */
 function getLocaleLayout(projectRoot) {
   const cfg = getAiI18nConfig(projectRoot);
-  if (cfg.layout === 'single' || cfg.layout === 'grouped') {
-    return cfg.layout;
+  const configured = (cfg.layout === 'single' || cfg.layout === 'grouped')
+    ? cfg.layout : cfg.localeLayout;
+  if (configured === 'single' || configured === 'grouped') {
+    return configured;
   }
   const kind = detectFrameworkKind(projectRoot);
   const pkg = readPackageJson(projectRoot);

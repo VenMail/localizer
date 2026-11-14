@@ -12,6 +12,7 @@
  */
 
 const { BaseParser, decodeHtmlEntities } = require('./baseParser');
+const { findSfcBlocks } = require('../sfcBlocks');
 const { shouldTranslate, isTranslatableAttribute, isNonTranslatableAttribute, LOGGING_LINE_PATTERNS } = require('../validators');
 
 // Parser states
@@ -75,9 +76,8 @@ class VueParser extends BaseParser {
     }
 
     // Also extract from script section for i18n keys
-    const script = this.extractScript(content);
-    if (script) {
-      this.parseScript(script, results);
+    for (const block of findSfcBlocks(content, 'script')) {
+      this.parseScript(content.slice(block.innerStart, block.innerEnd), results);
     }
 
     return results;
@@ -508,6 +508,46 @@ class VueParser extends BaseParser {
   }
 
   /**
+   * Remove comments and clearly technical fields without shifting line offsets.
+   * This is a conservative safety filter for the regex fallback: translating a
+   * persisted value or RBAC role is far worse than missing a candidate key.
+   */
+  maskNonUiScript(source) {
+    const chars = source.split('');
+    let quoted = null;
+    let escaped = false;
+    for (let i = 0; i < chars.length; i++) {
+      const c = source[i];
+      const n = source[i + 1];
+      if (quoted) {
+        if (escaped) { escaped = false; continue; }
+        if (c === '\\') { escaped = true; continue; }
+        if (c === quoted) quoted = null;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') { quoted = c; continue; }
+      if (c === '/' && n === '/') {
+        let j = i;
+        while (j < chars.length && source[j] !== '\n') chars[j++] = ' ';
+        i = j - 1;
+      } else if (c === '/' && n === '*') {
+        let j = i + 2;
+        while (j < chars.length && !(source[j] === '*' && source[j + 1] === '/')) j++;
+        j = Math.min(chars.length, j + 2);
+        while (i < j) { if (chars[i] !== '\n') chars[i] = ' '; i++; }
+        i--;
+      }
+    }
+    let cleaned = chars.join('');
+    const blank = m => m.replace(/[^\n]/g, ' ');
+    // Constant identifier arrays commonly hold database/RBAC identifiers.
+    cleaned = cleaned.replace(/\b(?:const|let|var)\s+[A-Z][A-Z0-9_]{2,}\s*=\s*\[[\s\S]*?\]/g, blank);
+    // Select option machine values must not become translation keys.
+    cleaned = cleaned.replace(/\b(?:value|id|key|slug|type)\s*:\s*(['"])(?:\\.|(?!\1)[^\\])*?\1/g, blank);
+    return cleaned;
+  }
+
+  /**
    * Parse script section for i18n patterns
    */
   parseScript(script, results) {
@@ -520,7 +560,7 @@ class VueParser extends BaseParser {
       return;
     }
 
-    const lines = script.split('\n');
+    const lines = this.maskNonUiScript(script).split('\n');
 
     // First, identify lines that contain explicit i18n key lookups or logging
     // so we avoid treating those strings as user-facing text.
@@ -569,7 +609,7 @@ class VueParser extends BaseParser {
       if (!line || !line.trim()) continue;
 
       // Skip import/export lines
-      if (/^\s*(import|export)\s/.test(line)) continue;
+      if (/^\s*import\s/.test(line) || /^\s*export\s+(?:\{|\*|.*\bfrom\s*['"])/.test(line)) continue;
 
       // Check ref patterns first (higher priority)
       for (const pattern of refPatterns) {

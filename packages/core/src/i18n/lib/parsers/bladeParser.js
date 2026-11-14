@@ -59,8 +59,10 @@ class BladeParser extends BaseParser {
     // Parse HTML-like content
     this.parseHtmlContent(template, results);
 
-    // Parse plain text content that may contain Blade expressions
-    this.parsePlainTextContent(template, results);
+    // Avoid extracting isolated fragments from inline markup: they cannot
+    // be rewritten in context. Leaf HTML text is handled by parseHtmlContent.
+    const outsideElements = template.replace(/<([A-Za-z][A-Za-z0-9-_]*)\b[^>]*>[\s\S]*?<\/\1>/g, ' ');
+    this.parsePlainTextContent(outsideElements, results);
 
     // Parse Blade-specific patterns
     this.parseBladePatterns(template, results);
@@ -120,13 +122,14 @@ class BladeParser extends BaseParser {
    */
   parseHtmlContent(template, results) {
     // Match text content between tags (including multi-line)
-    const tagRegex = /<([A-Za-z][A-Za-z0-9-_]*)\b([^>]*)>([\s\S]*?)<\/\1>/g;
+    const tagRegex = /<([A-Za-z][A-Za-z0-9-_]*)\b([^>]*)>([^<]*)<\/\1>/g;
     let match;
 
     while ((match = tagRegex.exec(template)) !== null) {
       const tagName = match[1];
       const attributes = match[2];
       const rawText = match[3];
+      if (/^(pre|code|script|style)$/i.test(tagName) || rawText.includes('<')) continue;
 
       // Skip if already translated
       if (this.isAlreadyTranslated(rawText)) continue;
