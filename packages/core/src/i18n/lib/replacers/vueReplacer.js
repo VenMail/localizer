@@ -98,7 +98,15 @@ class VueReplacer extends BaseReplacer {
     // including the Options-API block, rather than only the first one.
     for (const block of findSfcBlocks(modified, 'script').reverse()) {
       const before = modified.slice(block.innerStart, block.innerEnd);
-      const result = rewriteVueScript(before, this, keyMap, namespace, canTranslate);
+      const openingTag = modified.slice(block.start, block.innerStart);
+      const setup = /\ssetup(?:\s|=|>)/i.test(openingTag);
+      const result = rewriteVueScript(before, this, keyMap, namespace, canTranslate, {
+        setup,
+        vueSetupTranslation: options.vueSetupTranslation,
+      });
+      if (result.skippedUnbound) {
+        console.warn(`[i18n-replace] ${options.filePath || 'Vue component'}: skipped ${result.skippedUnbound} setup string(s); no translation binding was found. Configure vueSetupTranslation for a compatible runtime.`);
+      }
       if (result.content !== before) {
         changeCount += result.changeCount;
         modified = modified.slice(0, block.innerStart) + result.content + modified.slice(block.innerEnd);

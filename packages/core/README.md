@@ -20,7 +20,9 @@ Most users should install the CLI. Install this package directly only if you wan
 npm install @ai-localizer/core
 ```
 
-Optional deps for legacy Babel-based JSX extraction fallback: `@babel/parser @babel/generator @babel/traverse @babel/types`. Default path uses `oxc-parser` (already bundled).
+`@babel/parser` and `oxc-parser` are installed with the package. The legacy
+Babel JSX backend additionally requires `@babel/generator`, `@babel/traverse`
+and `@babel/types`.
 
 ## API
 
@@ -71,6 +73,27 @@ The pipeline reads `package.json#aiI18n` (or `composer.json#extra.aiI18n` for La
   }
 }
 ```
+
+### Vue setup scripts
+
+The default `replace` backend reuses a top-level `useI18n()` composer or its
+`t` binding in `<script setup>`. When a component has no such binding, it
+leaves script strings unchanged unless the project explicitly opts in:
+
+```json
+{
+  "aiI18n": {
+    "vueSetupTranslation": "vue-i18n-composition"
+  }
+}
+```
+
+Use this setting only when the project uses Vue I18n's Composition API and has
+configured it accordingly (for legacy-capable Vue I18n versions, this means
+`createI18n({ legacy: false, ... })`). The rewriter then imports `useI18n` and
+creates a collision-safe binding only in setup scripts that need one. It does
+not configure or install Vue I18n. Existing composers and their scope/options
+are preserved. See the [Vue I18n composition guide](https://vue-i18n.intlify.dev/guide/advanced/composition).
 
 ## License
 

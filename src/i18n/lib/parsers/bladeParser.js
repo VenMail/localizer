@@ -16,6 +16,7 @@
 const { BaseParser } = require('./baseParser');
 const { shouldTranslate, isTranslatableAttribute, isNonTranslatableAttribute } = require('../validators');
 const { STRING_PATTERNS } = require('../stringPatterns');
+const { isShellCommand } = require('../bladeSafety');
 
 class BladeParser extends BaseParser {
   static getExtensions() {
@@ -105,7 +106,7 @@ class BladeParser extends BaseParser {
       const cleanText = text.replace(/\s+/g, ' ').trim();
       if (!cleanText) continue;
 
-      if (shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
+      if (!isShellCommand(validationText) && shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
         results.items.push({
           type: 'text',
           text: cleanText,
@@ -155,7 +156,7 @@ class BladeParser extends BaseParser {
       const text = processedText.replace(/\s+/g, ' ').trim();
       if (!text) continue;
 
-      if (shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
+      if (!isShellCommand(validationText) && shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
         const kind = this.inferKindFromTag(tagName);
         results.items.push({
           type: 'text',
@@ -212,7 +213,7 @@ class BladeParser extends BaseParser {
       const text = attrValue.replace(/\s+/g, ' ').trim();
       if (!text) continue;
 
-      if (shouldTranslate(text, { ignorePatterns: this.ignorePatterns })) {
+      if (!isShellCommand(text) && shouldTranslate(text, { ignorePatterns: this.ignorePatterns })) {
         const kind = this.inferKindFromAttr(attrName);
         results.items.push({
           type: 'attribute',
@@ -250,7 +251,7 @@ class BladeParser extends BaseParser {
         // Skip if it looks like a variable or identifier
         if (/^[a-z_$][a-zA-Z0-9_$]*$/.test(candidate)) return;
         
-        if (shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
+        if (!isShellCommand(candidate) && shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
           results.items.push({
             type: 'text',
             text: candidate,
@@ -271,7 +272,7 @@ class BladeParser extends BaseParser {
       // Skip if it looks like a variable or identifier
       if (/^[a-z_$][a-zA-Z0-9_$]*$/.test(candidate)) continue;
 
-      if (!shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
+      if (isShellCommand(candidate) || !shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
         continue;
       }
 
@@ -304,7 +305,7 @@ class BladeParser extends BaseParser {
         // Skip if already translated
         if (this.isAlreadyTranslated(defaultValue)) continue;
 
-        if (shouldTranslate(defaultValue, { ignorePatterns: this.ignorePatterns })) {
+        if (!isShellCommand(defaultValue) && shouldTranslate(defaultValue, { ignorePatterns: this.ignorePatterns })) {
           results.items.push({
             type: 'string',
             text: defaultValue,

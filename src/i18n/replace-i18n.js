@@ -25,6 +25,7 @@ const {
   detectSrcRoot,
   detectLocalesDir,
   getSourceLocale,
+  getVueSetupTranslation,
 } = require('./lib/projectConfig');
 const { getNamespaceFromFile, parseJsonText } = require('./lib/stringUtils');
 const { loadIgnorePatterns } = require('./lib/ignorePatterns');
@@ -36,6 +37,7 @@ const projectRoot = process.env.AI_I18N_PROJECT_ROOT ? path.resolve(process.env.
 const srcRoot = detectSrcRoot(projectRoot);
 const outputDir = detectLocalesDir(projectRoot, srcRoot);
 const sourceLocale = getSourceLocale(projectRoot);
+const vueSetupTranslation = getVueSetupTranslation(projectRoot);
 
 const ignorePatterns = loadIgnorePatterns(projectRoot);
 
@@ -167,7 +169,11 @@ async function processFile(filePath, keyMap) {
   const content = await readFile(filePath, 'utf8');
   const namespace = getNamespaceFromFile(filePath, srcRoot);
 
-  const result = replaceInFile(content, filePath, keyMap, namespace, { ignorePatterns });
+  const result = replaceInFile(content, filePath, keyMap, namespace, {
+    ignorePatterns,
+    filePath,
+    vueSetupTranslation,
+  });
 
   if (result.changeCount > 0) {
     await writeFile(filePath, result.content, 'utf8');

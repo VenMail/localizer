@@ -141,6 +141,7 @@ describe('FileSystemService Script Copying', () => {
                 'sfcBlocks.js',
                 'vueScriptRewriter.js',
                 'vueExpressions.js',
+                'bladeSafety.js',
                 'localeUtils.js',
             ];
 

@@ -14,12 +14,12 @@ const { getLocaleLayout } = require('../packages/core/src/i18n/lib/projectConfig
 function srcTexts(source) {
   return new Set(new VueParser().parse(source).items.map(item => item.text));
 }
-function vueReplaced(source, pairs) {
+function vueReplaced(source, pairs, options = {}) {
   const keyMap = new Map(pairs.map(([kind, text, key]) => [
     `${text.length <= 24 && text.split(/\s+/).length <= 2 && !/[.!?]/.test(text) ? 'Commons' : 'Pages.Form'}|${kind}|${text}`,
     key,
   ]));
-  return new VueReplacer().replace(source, keyMap, 'Pages.Form');
+  return new VueReplacer().replace(source, keyMap, 'Pages.Form', options);
 }
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'localizer-regression-'));
@@ -151,6 +151,58 @@ test('Vue type-only imports do not count as runtime translation bindings', () =>
   assert.equal(result.content, input);
 });
 
+test('Vue setup reuses an existing composer, including aliased hooks and bindings', () => {
+  const pairs = [['text','Save the file','Pages.Form.text.save']];
+  for (const [setup, expected] of [
+    ["import { useI18n as useLocale } from 'vue-i18n'; const composer = useLocale();", /title = composer\.t\(/],
+    ["const { t: translate } = useI18n();", /title = translate\(/],
+    ["const { locale, } = useI18n();", /title = __localizerT\(/],
+    ["const { locale, /* comment */ } = useI18n();", /title = __localizerT\(/],
+    ["const { t: translate = fallback } = useI18n();", /title = translate\(/],
+    ["const { locale, ...rest } = useI18n();", /title = __localizerT\(/],
+  ]) {
+    const input = `<script setup>${setup} const title = 'Save the file';</script>`;
+    const output = vueReplaced(input,pairs).content;
+    assert.match(output,expected);
+    require('@babel/parser').parse(output.slice('<script setup>'.length, -'</script>'.length), {sourceType:'module',plugins:['typescript']});
+    assert.equal(vueReplaced(output,pairs).content,output);
+  }
+});
+
+test('Vue setup can opt into composition binding without identifier collisions', () => {
+  const input = `<script setup lang="ts">const __localizerT = 'existing'; const __localizerUseI18n = 1; const title = 'Save the file';</script>`;
+  const pairs = [['text','Save the file','Pages.Form.text.save']];
+  const options = {vueSetupTranslation:'vue-i18n-composition'};
+  const output = vueReplaced(input,pairs,options).content;
+  assert.match(output, /import \{ useI18n as __localizerUseI18n2 \} from 'vue-i18n'/);
+  assert.match(output, /const \{ t: __localizerT2 \} = __localizerUseI18n2\(\)/);
+  assert.match(output, /title = __localizerT2\("Pages.Form.text.save"\)/);
+  require('@babel/parser').parse(output.slice(output.indexOf('>')+1,output.indexOf('</script>')), {sourceType:'module',plugins:['typescript']});
+  assert.equal(vueReplaced(output,pairs,options).content,output);
+  assert.equal(vueReplaced(input,pairs).content,input);
+  assert.equal(vueReplaced(input,[],options).content,input);
+});
+
+test('default replace backend honors the Vue composition setup option', () => {
+  const dir=fixture();
+  try {
+    const pkgPath=path.join(dir,'package.json');
+    const pkg=JSON.parse(fs.readFileSync(pkgPath,'utf8'));
+    pkg.aiI18n.vueSetupTranslation='vue-i18n-composition';
+    fs.writeFileSync(pkgPath, JSON.stringify(pkg));
+    const file=path.join(dir,'resources','js','Form.vue');
+    fs.writeFileSync(file, `<script setup>const title = 'Save the file';</script>`);
+    const locale=path.join(dir,'resources','js','i18n','auto','en.json');
+    fs.writeFileSync(locale,JSON.stringify({Common:{text:{save:'Save the file'}}}));
+    runCoreScript(dir,'replace-i18n.js');
+    const out=fs.readFileSync(file,'utf8');
+    assert.match(out, /import \{ useI18n as __localizerUseI18n \} from 'vue-i18n'/);
+    assert.match(out, /title = __localizerT\("Common.text.save"\)/);
+    runCoreScript(dir,'replace-i18n.js');
+    assert.equal(fs.readFileSync(file,'utf8'),out);
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});
+
 test('Vue mustache comparison literals remain program values', () => {
   const input = `<template><p>{{ status === 'Pending' ? 'Pending' : 'Completed' }}</p></template>`;
   const result = vueReplaced(input, [['text','Pending','Commons.text.pending'], ['text','Completed','Commons.text.completed']]);
@@ -220,6 +272,28 @@ test('Blade extraction ignores nested content in protected blocks and HTML comme
   assert(!texts.has('Example command text'));
   assert(!texts.has('Hidden comment text'));
   assert(texts.has('Visible message'));
+});
+
+test('Blade command filtering applies outside pre and preserves ordinary instructions', () => {
+  const source = `<p>docker compose up -d</p><p>npm install package</p><p>APP_DEBUG=true</p><p>Run npm install to continue.</p><p>Install the package now.</p>`;
+  const texts = new Set(new BladeParser().parse(source).items.map(i=>i.text));
+  for (const command of ['docker compose up -d','npm install package','APP_DEBUG=true']) assert(!texts.has(command));
+  assert(texts.has('Run npm install to continue.'));
+  assert(texts.has('Install the package now.'));
+});
+
+test('Blade rewrite preserves command-shaped text even if a locale key already exists', () => {
+  const dir=fixture();
+  try {
+    const locales=path.join(dir,'resources','js','i18n','auto');
+    fs.writeFileSync(path.join(locales,'en.json'), JSON.stringify({Reports:{Pallet:{text:{command:'docker compose up -d', instruction:'Run npm install to continue.'}}}}));
+    const view=path.join(dir,'resources','views','reports','pallet.blade.php');
+    fs.writeFileSync(view,'<p>docker compose up -d</p><p>Run npm install to continue.</p>');
+    runCoreScript(dir,'rewrite-i18n-blade.js');
+    const out=fs.readFileSync(view,'utf8');
+    assert.match(out, /<p>docker compose up -d<\/p>/);
+    assert.match(out, /Reports.Pallet.text.instruction/);
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });
 
 test('Blade rewrite honors configured source locale and locale directory', () => {

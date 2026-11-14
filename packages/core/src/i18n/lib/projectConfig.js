@@ -122,6 +122,10 @@ function getAiI18nConfig(projectRoot) {
   return cfg && typeof cfg === 'object' ? cfg : {};
 }
 
+function getVueSetupTranslation(projectRoot) {
+  return getAiI18nConfig(projectRoot).vueSetupTranslation;
+}
+
 /**
  * Get project locales from package.json
  */
@@ -286,4 +290,5 @@ module.exports = {
   getTsExtractKeys,
   getSortKeys,
   getLocaleLayout,
+  getVueSetupTranslation,
 };

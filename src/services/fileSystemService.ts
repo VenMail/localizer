@@ -322,6 +322,7 @@ export class FileSystemService {
             'sfcBlocks.js',
             'vueScriptRewriter.js',
             'vueExpressions.js',
+            'bladeSafety.js',
             'localeUtils.js',
         ];
 

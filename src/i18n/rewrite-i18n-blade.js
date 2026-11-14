@@ -7,6 +7,7 @@ const process = require('node:process');
 // Import shared utilities
 const { getIgnorePatterns, shouldIgnoreText } = require('./lib/ignorePatterns');
 const { validateText } = require('./lib/validators');
+const { isShellCommand } = require('./lib/bladeSafety');
 const { detectSrcRoot, detectLocalesDir, getSourceLocale } = require('./lib/projectConfig');
 
 const projectRoot = process.env.AI_I18N_PROJECT_ROOT ? path.resolve(process.env.AI_I18N_PROJECT_ROOT) : path.resolve(__dirname, '..');
@@ -24,7 +25,7 @@ function normalizeText(text) {
 
 function shouldTranslateText(text) {
   const trimmed = normalizeText(text);
-  return !!trimmed && !shouldIgnoreText(trimmed) && validateText(trimmed).valid;
+  return !!trimmed && !isShellCommand(trimmed) && !shouldIgnoreText(trimmed) && validateText(trimmed).valid;
 }
 
 function buildKeyMapFromTranslations(translations) {
