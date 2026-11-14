@@ -7,10 +7,11 @@ const process = require('node:process');
 // Import shared utilities
 const { getIgnorePatterns, shouldIgnoreText } = require('./lib/ignorePatterns');
 const { validateText } = require('./lib/validators');
+const { detectSrcRoot, detectLocalesDir, getSourceLocale } = require('./lib/projectConfig');
 
 const projectRoot = process.env.AI_I18N_PROJECT_ROOT ? path.resolve(process.env.AI_I18N_PROJECT_ROOT) : path.resolve(__dirname, '..');
-const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
-const baseLocale = 'en';
+const autoDir = detectLocalesDir(projectRoot, detectSrcRoot(projectRoot));
+const baseLocale = getSourceLocale(projectRoot);
 const MAX_FILE_SIZE_BYTES = Number(process.env.AI_I18N_MAX_FILE_SIZE || 2 * 1024 * 1024);
 const CONCURRENCY = Number(process.env.AI_I18N_CONCURRENCY || 8);
 
@@ -193,8 +194,6 @@ async function processBladeFile(filePath, keyMap) {
 
   const viewsRoot = path.resolve(projectRoot, 'resources', 'views');
   const rel = path.relative(viewsRoot, filePath);
-  // We operate on the full file content (with Blade comments stripped), so
-  // simply write the transformed template back.
   code = template;
   await writeFile(filePath, code, 'utf8');
   console.log(`[i18n-rewrite-blade] Updated ${rel}`);

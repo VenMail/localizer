@@ -49,8 +49,8 @@ class BladeParser extends BaseParser {
 
     results.stats.processed = 1;
 
-    // Remove Blade comments
-    let template = content.replace(/\{\{--[\s\S]*?--\}\}/g, ' ');
+    // Never inspect examples or comments, even if they contain nested tags.
+    let template = content.replace(/\{\{--[\s\S]*?--\}\}|<!--[\s\S]*?-->|<(pre|code|script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
 
     // Remove PHP blocks
     template = template.replace(/<\?php[\s\S]*?\?>/g, ' ');

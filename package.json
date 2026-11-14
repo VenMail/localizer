@@ -459,7 +459,7 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "package": "npm run test && vsce package",
-    "test": "vitest run",
+    "test": "vitest run && node --test tests/ReportedIssues.regression.test.cjs",
     "test:watch": "vitest",
     "i18n:extract": "node ./scripts/extract-i18n.js",
     "i18n:rewrite": "node ./scripts/replace-i18n.js",
@@ -508,6 +508,7 @@
     "vitest": "^1.2.2"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.14",
     "magic-string": "^0.30.21",
     "node-fetch": "^2.7.0",
     "openai": "^4.0.0",

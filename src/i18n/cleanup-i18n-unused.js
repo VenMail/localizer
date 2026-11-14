@@ -163,6 +163,7 @@ async function collectSourceFiles(dir, out) {
 
 let cachedUsageIndex = null;
 let cachedUsageKeySet = null;
+const dynamicUsageFiles = new Set();
 
 async function buildUsageIndex(candidateKeys) {
   const index = Object.create(null);
@@ -191,6 +192,15 @@ async function buildUsageIndex(candidateKeys) {
   for (const file of uniqueFiles) {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
+    // A computed translation key cannot be resolved from text alone. Refuse
+    // destructive cleanup when any such call is present instead of guessing.
+    const callStart = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans|@lang)\s*(?:<[^>]+>\s*)?\(\s*/g;
+    let call;
+    while ((call = callStart.exec(code)) !== null) {
+      const argument = code.slice(callStart.lastIndex);
+      const literal = argument.match(/^(['"`])((?:\\.|(?!\1)[^\\])*)\1\s*(?:,|\))/);
+      if (!literal || (literal[1] === '`' && literal[2].includes('${'))) dynamicUsageFiles.add(rel);
+    }
     // Includes Vue/React t(), and Laravel Blade __(), trans(), @lang().
     const tCallRegex = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans|@lang)\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.\-:]+)\1\s*(?:,|\))/g;
     let match;
@@ -389,6 +399,7 @@ async function main() {
     autoDir: path.relative(projectRoot, autoDir).replace(/\\/g, '/'),
     unused,
     orphaned: cleanOrphaned ? orphaned : undefined,
+    dynamicUsageFiles: [...dynamicUsageFiles],
   };
   await writeFile(reportPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
   
@@ -399,10 +410,17 @@ async function main() {
   console.log(`[cleanup-i18n-unused] Report written to`, path.relative(projectRoot, reportPath));
 
   if (!apply) {
+    if (dynamicUsageFiles.size) console.warn(`[cleanup-i18n-unused] Dynamic translation calls found in ${dynamicUsageFiles.size} file(s); the unused report may contain false positives.`);
     console.log('[cleanup-i18n-unused] Dry run only. Re-run with --apply to delete unused/orphaned keys from locale files.');
     if (cleanOrphaned) {
       console.log('[cleanup-i18n-unused] Use --clean-orphaned to also remove keys that exist in non-default locales but are missing from the default locale.');
     }
+    return;
+  }
+
+  if (dynamicUsageFiles.size) {
+    console.error(`[cleanup-i18n-unused] Refusing --apply: dynamic translation calls in ${[...dynamicUsageFiles].join(', ')} may reference reported keys.`);
+    process.exitCode = 1;
     return;
   }
 

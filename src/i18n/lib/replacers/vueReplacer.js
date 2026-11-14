@@ -7,9 +7,10 @@
  */
 
 const { BaseReplacer } = require('./baseReplacer');
-const { JsxReplacer } = require('./jsxReplacer');
 const { findSfcBlocks } = require('../sfcBlocks');
 const { VueParser } = require('../parsers/vueParser');
+const { rewriteVueScript } = require('../vueScriptRewriter');
+const { displayLiterals } = require('../vueExpressions');
 
 class VueReplacer extends BaseReplacer {
   static getExtensions() {
@@ -31,7 +32,6 @@ class VueReplacer extends BaseReplacer {
     const canTranslate = (text) => {
       const cleaned = this.normalizeText(text);
       if (!cleaned) return false;
-      if (!/[A-Za-z]/.test(cleaned)) return false;
       
       // For text with mustache expressions, create a validation version with placeholders
       let validationText = cleaned;
@@ -48,7 +48,15 @@ class VueReplacer extends BaseReplacer {
     // cannot truncate the SFC, and edits do not invalidate later positions.
     for (const block of findSfcBlocks(modified, 'template').reverse()) {
       const before = modified.slice(block.innerStart, block.innerEnd);
-      const after = this.replaceInTemplate(before, keyMap, namespace, canTranslate);
+      const protectedRegions = /<!--[\s\S]*?-->|<(pre|code|script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+      let after = '';
+      let offset = 0;
+      let match;
+      while ((match = protectedRegions.exec(before)) !== null) {
+        after += this.replaceInTemplate(before.slice(offset, match.index), keyMap, namespace, canTranslate) + match[0];
+        offset = protectedRegions.lastIndex;
+      }
+      after += this.replaceInTemplate(before.slice(offset), keyMap, namespace, canTranslate);
       if (before !== after) {
         changeCount += this.countDifferences(before, after);
         modified = modified.slice(0, block.innerStart) + after + modified.slice(block.innerEnd);
@@ -59,10 +67,7 @@ class VueReplacer extends BaseReplacer {
     // including the Options-API block, rather than only the first one.
     for (const block of findSfcBlocks(modified, 'script').reverse()) {
       const before = modified.slice(block.innerStart, block.innerEnd);
-      // A bare t() must already be available in this module. Introducing an
-      // unbound call would break the component at runtime.
-      if (!/(?:import\s*\{[^}]*\bt\b[^}]*\}\s*from\s*['"]|(?:const|let|var)\s*\{[^}]*\bt\b[^}]*\}\s*=\s*useI18n\s*\()/s.test(before)) continue;
-      const result = new JsxReplacer().replace(before, keyMap, namespace, options);
+      const result = rewriteVueScript(before, this, keyMap, namespace, canTranslate);
       if (result.content !== before) {
         changeCount += result.changeCount;
         modified = modified.slice(0, block.innerStart) + result.content + modified.slice(block.innerEnd);
@@ -115,7 +120,7 @@ class VueReplacer extends BaseReplacer {
     // 2. Attribute values (non-bound)
     // Matches: placeholder="text", title="text", etc.
     // Skip already bound attributes (prefixed with : or v-bind:)
-    const attrNames = 'placeholder|title|alt|aria-label|label|error-message|helper-text';
+    const attrNames = 'placeholder|title|alt|aria-label|label|error-message|helper-text|[a-z][\\w-]*caption';
     const attrRegex = new RegExp(
       `(\\s)(?![:v])(${attrNames})(\\s*=\\s*)(['"])([^'"]{2,200})\\4`,
       'gi'
@@ -140,21 +145,14 @@ class VueReplacer extends BaseReplacer {
     const ranges = new VueParser().getMustacheRanges(modified);
     for (const { start, end } of ranges.reverse()) {
       const expression = modified.slice(start + 2, end - 2);
-      const next = expression.replace(/'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"/g,
-        (literal, single, double, offset) => {
-          const text = single === undefined ? double : single;
-          if (text.length < 2 || text.length > 200) return literal;
-          const before = expression.slice(0, offset);
-          // Comparisons, property lookups and function arguments often use
-          // persistent identifiers rather than display text.
-          if (/(?:[=!<>]=?|\[|\()\s*$/.test(before)) return literal;
-          // An existing translation call owns its argument; do not double wrap.
-          if (/(?:\$?t|i18n\.t)\s*\(\s*$/.test(before)) return literal;
-          if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return literal;
-          if (!canTranslate(text)) return literal;
-          const fullKey = this.lookupKey(keyMap, namespace, 'text', text);
-          return fullKey ? `$t('${fullKey}')` : literal;
-        });
+      let next = expression;
+      for (const literal of displayLiterals(expression).reverse()) {
+        const text = literal.value;
+        if (!canTranslate(text)) continue;
+        const fullKey = this.lookupKey(keyMap, namespace, 'text', text);
+        if (!fullKey) continue;
+        next = next.slice(0, literal.start) + `$t(${JSON.stringify(fullKey)})` + next.slice(literal.end);
+      }
       if (next !== expression) {
         modified = modified.slice(0, start + 2) + next + modified.slice(end - 2);
       }

@@ -13,6 +13,7 @@
 
 const { BaseParser, decodeHtmlEntities } = require('./baseParser');
 const { findSfcBlocks } = require('../sfcBlocks');
+const { displayLiterals } = require('../vueExpressions');
 const { shouldTranslate, isTranslatableAttribute, isNonTranslatableAttribute, LOGGING_LINE_PATTERNS } = require('../validators');
 
 // Parser states
@@ -175,10 +176,8 @@ class VueParser extends BaseParser {
           // Find all string literals inside the expression. We deliberately just
           // hand candidates to shouldTranslate; validators will reject keys,
           // technical identifiers, etc.
-          const stringRegex = /(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\1/g;
-          let strMatch;
-          while ((strMatch = stringRegex.exec(expr)) !== null) {
-            const candidate = (strMatch[2] || '').trim();
+          for (const literal of displayLiterals(expr)) {
+            const candidate = literal.value.trim();
             if (!candidate) continue;
 
             if (!shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
@@ -248,7 +247,7 @@ class VueParser extends BaseParser {
 
       // Skip Vue directives and bindings
       if (isNonTranslatableAttribute(name)) return;
-      if (!isTranslatableAttribute(name)) return;
+      if (!isTranslatableAttribute(name) && !/^[a-z][\w-]*caption$/i.test(name)) return;
 
       const cleanValue = value.replace(/\s+/g, ' ').trim();
       if (!cleanValue) return;

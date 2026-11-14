@@ -57,6 +57,13 @@ test('SFC section discovery ignores comments and tag-like strings in scripts', (
   assert.equal(findSfcBlocks(source, 'script').length, 1);
 });
 
+test('#2 extracts and replaces component caption attributes in later slots', () => {
+  const input = `<template><Form><template #one>First</template><template #two><Form newrecordcaption="Add Category" /></template></Form></template>`;
+  assert(srcTexts(input).has('Add Category'));
+  const result = vueReplaced(input, [['text','Add Category','Commons.text.add_category']]).content;
+  assert.match(result, /:newrecordcaption="\$t\('Commons.text.add_category'\)"/);
+});
+
 test('#9 ternary mustache processes every literal independently and is idempotent', () => {
   const input = `<template><button>{{ confirming ? 'Confirm Delete — cannot be undone' : 'Delete' }}</button></template>`;
   const pairs = [
@@ -64,8 +71,8 @@ test('#9 ternary mustache processes every literal independently and is idempoten
     ['text','Delete','Commons.text.delete'],
   ];
   const first = vueReplaced(input, pairs);
-  assert.match(first.content, /\$t\('Pages.Form.text.confirm'\)/);
-  assert.match(first.content, /\$t\('Commons.text.delete'\)/);
+  assert.match(first.content, /\$t\("Pages.Form.text.confirm"\)/);
+  assert.match(first.content, /\$t\("Commons.text.delete"\)/);
   assert.equal(vueReplaced(first.content,pairs).content,first.content);
   const extracted = srcTexts(input);
   assert(extracted.has('Confirm Delete — cannot be undone'));
@@ -103,21 +110,63 @@ test('#12 scans both setup script and Options-API script', () => {
     ['text','Submit your request','Pages.Form.text.submit'],
     ['text','Cannot perform this operation','Pages.Form.text.cannot_perform'],
   ]).content;
-  assert.match(replaced, /t\('Pages.Form.text.cannot_perform'\)/);
-  assert.match(replaced, /t\('Pages.Form.text.submit'\)/);
+  assert.match(replaced, /this\.\$t\("Pages.Form.text.cannot_perform"\)/);
+  assert.match(replaced, /t\("Pages.Form.text.submit"\)/);
 });
 
-test('Vue script replacement never introduces an unbound t call', () => {
+test('Vue Options API uses the component translator without an unbound t call', () => {
   const input = `<script>export default { data(){return {description: 'Cannot perform this operation'}} }</script>`;
   const result = vueReplaced(input, [['text','Cannot perform this operation','Pages.Form.text.cannot_perform']]);
-  assert.equal(result.content, input);
+  assert.match(result.content, /this\.\$t\("Pages.Form.text.cannot_perform"\)/);
+  const vm = require('node:vm');
+  const script = result.content.replace(/^<script>/, '').replace(/<\/script>$/, '').replace('export default', 'module.exports =');
+  const context = { module: {exports:{}} };
+  vm.runInNewContext(script, context);
+  const state = context.module.exports.data.call({$t: key => `translated:${key}`});
+  assert.equal(state.description, 'translated:Pages.Form.text.cannot_perform');
+  assert.equal(vueReplaced(result.content, [['text','Cannot perform this operation','Pages.Form.text.cannot_perform']]).content, result.content);
+});
+
+test('Vue script rewriting respects comments, module scope and function this', () => {
+  const input = `<script>\n// title: 'Save the file'\nconst title = 'Save the file';\nexport default { methods: { errorMessage() { const nested = function(){ return 'Save the file' }; return 'Save the file'; }, roleName() { return 'Save the file'; }, bad: () => ({title:'Save the file'}) } };\n</script>`;
+  const result = vueReplaced(input, [['text', 'Save the file', 'Pages.Form.text.save']]).content;
+  assert.match(result, /\/\/ title: 'Save the file'/);
+  assert.match(result, /const title = 'Save the file'/);
+  assert.match(result, /function\(\)\{ return 'Save the file' \}/);
+  assert.match(result, /return this\.\$t\("Pages.Form.text.save"\)/);
+  assert.match(result, /roleName\(\) \{ return 'Save the file'; \}/);
+  assert.match(result, /bad: \(\) => \(\{title:'Save the file'\}\)/);
+});
+
+test('Vue setup does not use a translation binding before initialization', () => {
+  const input = `<script setup>const titleBefore = 'Save the file'; const { t } = useI18n(); const titleAfter = 'Save the file';</script>`;
+  const result = vueReplaced(input, [['text','Save the file','Pages.Form.text.save']]).content;
+  assert.match(result, /titleBefore = 'Save the file'/);
+  assert.match(result, /titleAfter = t\("Pages.Form.text.save"\)/);
 });
 
 test('Vue mustache comparison literals remain program values', () => {
   const input = `<template><p>{{ status === 'Pending' ? 'Pending' : 'Completed' }}</p></template>`;
   const result = vueReplaced(input, [['text','Pending','Commons.text.pending'], ['text','Completed','Commons.text.completed']]);
   assert.match(result.content, /status === 'Pending'/);
-  assert.match(result.content, /\? \$t\('Commons.text.pending'\)/);
+  assert.match(result.content, /\? \$t\("Commons.text.pending"\)/);
+});
+
+test('Vue mustache extraction and rewriting do not change comparison operands', () => {
+  const input = `<template><p>{{ status === prefix + 'Pending' ? 'Pending' : 'Completed' }}</p></template>`;
+  const pairs = [['text','Pending','Commons.text.pending'], ['text','Completed','Commons.text.completed']];
+  const output = vueReplaced(input, pairs).content;
+  assert.match(output, /prefix \+ 'Pending'/);
+  assert.match(output, /\? \$t\("Commons.text.pending"\)/);
+  assert.equal((output.match(/Commons.text.pending/g) || []).length, 1);
+});
+
+test('Vue replacement leaves comments and nested code examples intact', () => {
+  const input = `<template><!-- <p>Save the file</p> --><pre><span>Save the file</span></pre><p>Save the file</p></template>`;
+  const result = vueReplaced(input, [['text', 'Save the file', 'Pages.Form.text.save']]).content;
+  assert.match(result, /<!-- <p>Save the file<\/p> -->/);
+  assert.match(result, /<pre><span>Save the file<\/span><\/pre>/);
+  assert.match(result, /<p>\{\{ \$t\('Pages.Form.text.save'\) \}\}<\/p>/);
 });
 
 test('#5 Blade extractor rejects pre/code content and inline fragments', () => {
@@ -128,6 +177,28 @@ test('#5 Blade extractor rejects pre/code content and inline fragments', () => {
   assert(!texts.has('docker compose up -d'));
   assert(!texts.has('then run:'));
   assert(!texts.has('First'));
+});
+
+test('Blade extraction ignores nested content in protected blocks and HTML comments', () => {
+  const source = `<pre><span>Example command text</span></pre><!-- <p>Hidden comment text</p> --><p>Visible message</p>`;
+  const texts = new Set(new BladeParser().parse(source).items.map(i => i.text));
+  assert(!texts.has('Example command text'));
+  assert(!texts.has('Hidden comment text'));
+  assert(texts.has('Visible message'));
+});
+
+test('Blade rewrite honors configured source locale and locale directory', () => {
+  const dir = fixture();
+  try {
+    const localeDir = path.join(dir, 'translations');
+    fs.mkdirSync(localeDir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({aiI18n:{srcRoot:'resources/js',localesDir:'translations',sourceLocale:'pt',locales:['pt','en']}}));
+    fs.writeFileSync(path.join(localeDir, 'pt.json'), JSON.stringify({Commons:{text:{report:'Relatório geral'}}}));
+    const view = path.join(dir,'resources','views','reports','pallet.blade.php');
+    fs.writeFileSync(view, '<title>Relatório geral</title>');
+    runCoreScript(dir,'rewrite-i18n-blade.js');
+    assert.match(fs.readFileSync(view,'utf8'), /Commons.text.report/);
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });
 
 test('#3/#4/#5 Blade rewrite uses Commons + text fallback and preserves protected content', () => {
@@ -179,4 +250,20 @@ test('#8 cleanup --apply preserves keys used in Blade and removes unused keys fr
       assert.equal(keys.unused_text,undefined);
     }
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('cleanup refuses deletion when translation keys are computed dynamically', () => {
+  const dir = fixture();
+  try {
+    const locales = path.join(dir, 'resources', 'js', 'i18n', 'auto');
+    const data = { Messages: { text: { pending: 'Pending', unused: 'Unused' } } };
+    fs.writeFileSync(path.join(locales, 'en.json'), JSON.stringify(data));
+    fs.writeFileSync(path.join(dir, 'resources', 'js', 'app.js'), "const msg = t('Messages.text.' + status);");
+    const run = spawnSync(process.execPath, [path.join(__dirname,'..','packages','core','src','i18n','cleanup-i18n-unused.js'), '--apply'], {
+      env:{...process.env, AI_I18N_PROJECT_ROOT:dir},encoding:'utf8'
+    });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /dynamic translation calls/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(locales,'en.json'),'utf8')),data);
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });
