@@ -25,4 +25,12 @@ describe('#1 nested JSON array and object paths', () => {
         expect(index.getRecord('howItWorks.steps')).toBeUndefined();
         expect(index.hasJsonContainerKey('howItWorks.missing')).toBe(false);
     });
+
+    it('preserves nested and mixed id-based catalogs', () => {
+        const index = new I18nIndex();
+        const json = { catalog: [{ id: 'welcome', translation: 'Welcome' }, { title: 'Step title' }] };
+        (index as any).walkJson('', json, 'en', Uri.file('/project/src/locales/en.json'));
+        expect(index.getRecord('catalog.welcome')?.locales.get('en')).toBe('Welcome');
+        expect(index.getRecord('catalog.1.title')?.locales.get('en')).toBe('Step title');
+    });
 });

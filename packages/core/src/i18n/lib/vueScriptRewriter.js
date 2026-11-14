@@ -46,7 +46,8 @@ function rewriteVueScript(source, replacer, keyMap, namespace, canTranslate) {
 
   // A top-level imported t or a top-level useI18n binding is visible in the
   // top-level module statements; never infer one from comments or nested scope.
-  const importedT = program.body.some(stmt => stmt.type === 'ImportDeclaration' && stmt.specifiers.some(s => s.local?.name === 't'));
+  const importedT = program.body.some(stmt => stmt.type === 'ImportDeclaration' && stmt.importKind !== 'type' &&
+    stmt.specifiers.some(s => s.local?.name === 't' && s.importKind !== 'type'));
   let bindingReady = importedT;
   for (const stmt of program.body) {
     // For const/let bindings, do not insert a call before initialization.

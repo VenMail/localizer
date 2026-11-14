@@ -145,6 +145,12 @@ test('Vue setup does not use a translation binding before initialization', () =>
   assert.match(result, /titleAfter = t\("Pages.Form.text.save"\)/);
 });
 
+test('Vue type-only imports do not count as runtime translation bindings', () => {
+  const input = `<script setup lang="ts">import type { t } from './types'; const title = 'Save the file';</script>`;
+  const result = vueReplaced(input, [['text','Save the file','Pages.Form.text.save']]);
+  assert.equal(result.content, input);
+});
+
 test('Vue mustache comparison literals remain program values', () => {
   const input = `<template><p>{{ status === 'Pending' ? 'Pending' : 'Completed' }}</p></template>`;
   const result = vueReplaced(input, [['text','Pending','Commons.text.pending'], ['text','Completed','Commons.text.completed']]);
@@ -167,6 +173,35 @@ test('Vue replacement leaves comments and nested code examples intact', () => {
   assert.match(result, /<!-- <p>Save the file<\/p> -->/);
   assert.match(result, /<pre><span>Save the file<\/span><\/pre>/);
   assert.match(result, /<p>\{\{ \$t\('Pages.Form.text.save'\) \}\}<\/p>/);
+});
+
+test('Vue replacement does not treat attribute-like text as a tag attribute', () => {
+  const input = `<template><p>See title="Save the file" in the instructions</p><span title="Save the file">Help</span></template>`;
+  const result = vueReplaced(input, [['title', 'Save the file', 'Pages.Form.title.save']]).content;
+  assert.match(result, /See title="Save the file" in the instructions/);
+  assert.match(result, /<span :title="\$t\('Pages.Form.title.save'\)">/);
+});
+
+test('Vue replacement does not emit invalid parameters for mixed interpolation', () => {
+  const input = `<template><p>Welcome {{ user.name }}</p></template>`;
+  const result = vueReplaced(input, [['text', 'Welcome {{ user.name }}', 'Pages.Form.text.welcome']]);
+  assert.equal(result.content, input);
+});
+
+test('Vue replacement respects > characters in quoted attributes', () => {
+  const input = `<template><p title="Score > Save the file">Save the file</p></template>`;
+  const result = vueReplaced(input, [['text', 'Save the file', 'Pages.Form.text.save']]).content;
+  assert.match(result, /title="Score > Save the file"/);
+  assert.match(result, /">\{\{ \$t\('Pages.Form.text.save'\) \}\}<\/p>/);
+});
+
+test('Vue template replacement safely quotes translation keys in attributes', () => {
+  const key = `Pages.Form.text.s'ave"quoted`;
+  const input = `<template><p title="Save the file">Help</p></template>`;
+  const output = vueReplaced(input, [['title', 'Save the file', key]]).content;
+  const expression = output.match(/:title="([^"]+)"/)[1];
+  const ast = require('@babel/parser').parseExpression(expression, {plugins:['estree']});
+  assert.equal(ast.arguments[0].value, key);
 });
 
 test('#5 Blade extractor rejects pre/code content and inline fragments', () => {
@@ -265,5 +300,40 @@ test('cleanup refuses deletion when translation keys are computed dynamically', 
     assert.notEqual(run.status, 0);
     assert.match(run.stderr, /dynamic translation calls/);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(locales,'en.json'),'utf8')),data);
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('cleanup preserves children of referenced structured translation keys', () => {
+  const dir = fixture();
+  try {
+    const locales = path.join(dir, 'resources', 'js', 'i18n', 'auto');
+    const data = { menu: { first: 'First item', second: 'Second item' }, unused: 'Unused text' };
+    fs.writeFileSync(path.join(locales,'en.json'), JSON.stringify(data));
+    fs.writeFileSync(path.join(dir,'resources','js','app.js'), "const menu = t('menu', {returnObjects: true});");
+    runCoreScript(dir,'cleanup-i18n-unused.js',['--apply']);
+    const after = JSON.parse(fs.readFileSync(path.join(locales,'en.json'),'utf8'));
+    assert.deepEqual(after.menu, data.menu);
+    assert.equal(after.unused, undefined);
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('extract and replace work together on Vue slots and both script blocks', () => {
+  const dir = fixture();
+  try {
+    const sourceDir = path.join(dir, 'resources', 'js', 'Pages');
+    fs.mkdirSync(sourceDir, {recursive:true});
+    const file = path.join(sourceDir, 'Form.vue');
+    fs.writeFileSync(file, `<template><section><template #heading><h1>Order overview</h1></template><template #actions><button>{{ pending ? 'Required' : 'None' }}</button></template></section></template>\n<script setup>\nconst { t } = useI18n();\nconst titleMessage = 'Submit your request';\n</script>\n<script>\nexport default { data(){return {description:'Cannot perform this operation'}} };\n</script>`);
+    runCoreScript(dir, 'extract-i18n.js');
+    runCoreScript(dir, 'replace-i18n.js');
+    const result = fs.readFileSync(file, 'utf8');
+    assert.match(result, /\$t\([^)]*order_overview/);
+    assert.match(result, /\$t\([^)]*required/);
+    assert.match(result, /\$t\([^)]*none/);
+    assert.match(result, /titleMessage = t\(/);
+    assert.match(result, /description:this\.\$t\(/);
+    const first = result;
+    runCoreScript(dir, 'replace-i18n.js');
+    assert.equal(fs.readFileSync(file, 'utf8'), first);
   } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });

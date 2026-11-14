@@ -581,30 +581,15 @@ export class I18nIndex {
 
         if (Array.isArray(node)) {
             if (prefix) this.registerJsonContainer(uri, prefix);
-            // Preserve support for top-level go-i18n id-based catalogs.
-            // Nested arrays of ordinary objects must still be traversed.
-            const isCatalog = !prefix && node.length > 0 && node.every(element =>
-                element && typeof element === 'object' && !Array.isArray(element) &&
-                (typeof (element as Record<string, unknown>).id === 'string' ||
-                 typeof (element as Record<string, unknown>).key === 'string') &&
-                ['translation', 'message', 'text', 'other'].some(field =>
-                    typeof (element as Record<string, unknown>)[field] === 'string'));
-            if (!isCatalog) {
-                node.forEach((element, index) => {
-                    if (element && typeof element === 'object') {
-                        const childKey = prefix ? `${prefix}.${index}` : String(index);
-                        this.registerJsonContainer(uri, childKey);
-                        this.walkJson(childKey, element, locale, uri);
-                    } else if (typeof element === 'string') {
-                        this.registerTranslation(locale, uri, prefix ? `${prefix}.${index}` : String(index), element);
-                    }
-                });
-                return;
-            }
-            for (const element of node) {
-                if (!element || typeof element !== 'object' || Array.isArray(element)) {
-                    continue;
+            // Preserve id-based catalog entries, including nested and mixed
+            // catalogs, while indexing ordinary arrays by position.
+            node.forEach((element, index) => {
+                const childKey = prefix ? `${prefix}.${index}` : String(index);
+                if (typeof element === 'string') {
+                    this.registerTranslation(locale, uri, childKey, element);
+                    return;
                 }
+                if (!element || typeof element !== 'object') return;
                 const obj = element as Record<string, unknown>;
                 const idValue =
                     typeof obj.id === 'string'
@@ -612,20 +597,19 @@ export class I18nIndex {
                         : typeof obj.key === 'string'
                         ? obj.key
                         : null;
-                if (!idValue) {
-                    continue;
-                }
                 const rawValue =
                     (obj.translation as unknown) ??
                     (obj.message as unknown) ??
                     (obj.text as unknown) ??
                     (obj.other as unknown);
-                if (typeof rawValue !== 'string' || !rawValue.trim()) {
-                    continue;
+                if (idValue && typeof rawValue === 'string' && rawValue.trim()) {
+                    const key = prefix ? `${prefix}.${idValue}` : idValue;
+                    this.registerTranslation(locale, uri, key, rawValue);
+                } else {
+                    this.registerJsonContainer(uri, childKey);
+                    this.walkJson(childKey, element, locale, uri);
                 }
-                const key = prefix ? `${prefix}.${idValue}` : idValue;
-                this.registerTranslation(locale, uri, key, rawValue);
-            }
+            });
             return;
         }
 

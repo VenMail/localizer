@@ -170,6 +170,18 @@ async function buildUsageIndex(candidateKeys) {
   if (!srcRoots.length) return index;
 
   const keySet = candidateKeys instanceof Set ? candidateKeys : null;
+  // Calls may request a whole object (for example t('menu', {returnObjects:
+  // true})), in which case every descendant is in use as well.
+  const descendants = new Map();
+  if (keySet) for (const key of keySet) {
+    let dot = key.indexOf('.');
+    while (dot !== -1) {
+      const prefix = key.slice(0, dot);
+      if (!descendants.has(prefix)) descendants.set(prefix, []);
+      descendants.get(prefix).push(key);
+      dot = key.indexOf('.', dot + 1);
+    }
+  }
 
   const files = [];
   for (const root of srcRoots) {
@@ -194,7 +206,7 @@ async function buildUsageIndex(candidateKeys) {
     const code = await readFile(file, 'utf8');
     // A computed translation key cannot be resolved from text alone. Refuse
     // destructive cleanup when any such call is present instead of guessing.
-    const callStart = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans|@lang)\s*(?:<[^>]+>\s*)?\(\s*/g;
+    const callStart = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans_choice|trans|@lang|@choice)\s*(?:<[^>]+>\s*)?\(\s*/g;
     let call;
     while ((call = callStart.exec(code)) !== null) {
       const argument = code.slice(callStart.lastIndex);
@@ -202,18 +214,16 @@ async function buildUsageIndex(candidateKeys) {
       if (!literal || (literal[1] === '`' && literal[2].includes('${'))) dynamicUsageFiles.add(rel);
     }
     // Includes Vue/React t(), and Laravel Blade __(), trans(), @lang().
-    const tCallRegex = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans|@lang)\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.\-:]+)\1\s*(?:,|\))/g;
+    const tCallRegex = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans_choice|trans|@lang|@choice)\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.\-:]+)\1\s*(?:,|\))/g;
     let match;
     while ((match = tCallRegex.exec(code)) !== null) {
       const key = match[2];
-      if (keySet && !keySet.has(key)) {
-        continue;
-      }
-      if (!index[key]) {
-        index[key] = [];
-      }
       const line = getLineNumberFromIndex(code, match.index);
-      index[key].push({ file: rel, line });
+      const usedKeys = keySet ? [...(keySet.has(key) ? [key] : []), ...(descendants.get(key) || [])] : [key];
+      for (const usedKey of usedKeys) {
+        if (!index[usedKey]) index[usedKey] = [];
+        index[usedKey].push({ file: rel, line });
+      }
     }
     if (keySet) {
       const keyLiteralRegex = /(['"`])([A-Za-z0-9_.\-:]+)\1/g;

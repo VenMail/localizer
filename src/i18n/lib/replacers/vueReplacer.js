@@ -12,6 +12,37 @@ const { VueParser } = require('../parsers/vueParser');
 const { rewriteVueScript } = require('../vueScriptRewriter');
 const { displayLiterals } = require('../vueExpressions');
 
+// Locate tags without treating quoted > characters or mustache expressions as
+// tag boundaries. Attribute rewrites must never run over ordinary text.
+function tagRanges(source) {
+  const expressions = new VueParser().getMustacheRanges(source);
+  const ranges = [];
+  let expressionIndex = 0;
+  for (let i = 0; i < source.length; i++) {
+    while (expressionIndex < expressions.length && expressions[expressionIndex].end <= i) expressionIndex++;
+    if (expressions[expressionIndex] && i >= expressions[expressionIndex].start && i < expressions[expressionIndex].end) {
+      i = expressions[expressionIndex].end - 1;
+      continue;
+    }
+    if (source[i] !== '<' || !/^<\/?[A-Za-z][\w:.-]*(?:\s|\/?>)/.test(source.slice(i))) continue;
+    const start = i;
+    let quote = '';
+    for (i++; i < source.length; i++) {
+      const char = source[i];
+      if (quote) { if (char === quote) quote = ''; }
+      else if (char === '"' || char === "'") quote = char;
+      else if (char === '>') { ranges.push({ start, end: i + 1 }); break; }
+    }
+  }
+  return ranges;
+}
+
+function quoteKey(key) {
+  return `'${String(key).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    .replace(/"/g, '\\u0022').replace(/\r/g, '\\r').replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')}'`;
+}
+
 class VueReplacer extends BaseReplacer {
   static getExtensions() {
     return ['vue'];
@@ -86,36 +117,35 @@ class VueReplacer extends BaseReplacer {
     // 1. Plain text content between tags (including those with {{ }})
     // Matches text content within HTML elements, handling indentation and whitespace
     // Skip content that already has {{ $t(...) }} or {{ t(...) }} wrapper
-    const textBetweenTagsRegex = /(>)([^<]*)(?=<)/g;
-
-    modified = modified.replace(textBetweenTagsRegex, (match, open, text, offset, source) => {
+    const initialTagRanges = tagRanges(modified);
+    for (let i = initialTagRanges.length - 2; i >= 0; i--) {
+      const current = initialTagRanges[i];
+      const textStart = current.end;
+      const textEnd = initialTagRanges[i + 1].start;
+      const text = modified.slice(textStart, textEnd);
       const trimmed = text.trim();
       // Skip if already contains $t() or t() calls
-      if (/\{\{\s*\$?t\s*\(/.test(text)) return match;
-      if (!trimmed || !canTranslate(trimmed)) return match;
+      if (/\{\{\s*\$?t\s*\(/.test(text)) continue;
+      if (!trimmed || !canTranslate(trimmed)) continue;
 
-      // For text with mustache expressions, create a normalized version for key lookup
-      let lookupText = trimmed;
       const mustacheMatches = trimmed.match(/\{\{[^}]+\}\}/g);
       if (mustacheMatches) {
-        // Replace mustache expressions with placeholders for key lookup
-        lookupText = trimmed.replace(/\{\{[^}]+\}\}/g, '{placeholder}');
-        lookupText = lookupText.replace(/\s+/g, ' ').trim();
+        // Existing extracted messages contain Vue expressions, not necessarily
+        // valid vue-i18n placeholders. Leave mixed text intact until mapped.
+        continue;
       }
 
-      const preceding = source.slice(0, offset + 1);
-      const tag = preceding.match(/<([\w-]+)\b[^<>]*>$/);
+      const tag = modified.slice(current.start, current.end).match(/^<([\w-]+)\b/);
       const kind = this.inferKindFromTag(tag && tag[1]);
       const fullKey = this.lookupKey(keyMap, namespace, kind, trimmed);
-      if (!fullKey) return match;
+      if (!fullKey) continue;
 
       const leadingSpace = text.match(/^\s*/)[0];
       const trailingSpace = text.match(/\s*$/)[0];
       
-      // Preserve the original text with mustache expressions in the replacement
-      const args = mustacheMatches ? `, {${this.extractVariables(trimmed)}}` : '';
-      return `${open}${leadingSpace}{{ $t('${fullKey}'${args}) }}${trailingSpace}`;
-    });
+      const replacement = `${leadingSpace}{{ $t(${quoteKey(fullKey)}) }}${trailingSpace}`;
+      modified = modified.slice(0, textStart) + replacement + modified.slice(textEnd);
+    }
 
     // 2. Attribute values (non-bound)
     // Matches: placeholder="text", title="text", etc.
@@ -126,7 +156,7 @@ class VueReplacer extends BaseReplacer {
       'gi'
     );
 
-    modified = modified.replace(attrRegex, (match, space, attrName, eq, quote, text) => {
+    const replaceAttrs = tag => tag.replace(attrRegex, (match, space, attrName, eq, quote, text) => {
       // Skip if text looks like a translation key (idempotency guard)
       if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       
@@ -137,12 +167,17 @@ class VueReplacer extends BaseReplacer {
       if (!fullKey) return match;
 
       // Convert to bound attribute with $t
-      return `${space}:${attrName}="$t('${fullKey}')"`;
+      return `${space}:${attrName}="$t(${quoteKey(fullKey)})"`;
     });
+    for (const { start, end } of tagRanges(modified).reverse()) {
+      const tag = modified.slice(start, end);
+      modified = modified.slice(0, start) + replaceAttrs(tag) + modified.slice(end);
+    }
 
     // 3. Independently rewrite every literal in each mustache expression.
     // Processing in reverse preserves ranges, even with nested JS object braces.
-    const ranges = new VueParser().getMustacheRanges(modified);
+    const tags = tagRanges(modified);
+    const ranges = new VueParser().getMustacheRanges(modified).filter(({start}) => !tags.some(tag => start >= tag.start && start < tag.end));
     for (const { start, end } of ranges.reverse()) {
       const expression = modified.slice(start + 2, end - 2);
       let next = expression;
@@ -166,7 +201,7 @@ class VueReplacer extends BaseReplacer {
       'gi'
     );
 
-    modified = modified.replace(boundAttrRegex, (match, prefix, quote, text) => {
+    const replaceBoundAttr = tag => tag.replace(boundAttrRegex, (match, prefix, quote, text) => {
       // Skip if text looks like a translation key (idempotency guard)
       if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       
@@ -179,7 +214,7 @@ class VueReplacer extends BaseReplacer {
       const fullKey = this.lookupKey(keyMap, namespace, kind, text);
       if (!fullKey) return match;
 
-      return `${prefix}$t('${fullKey}')"`;
+      return `${prefix}$t(${quoteKey(fullKey)})"`;
     });
 
     // 5. v-text and v-html with string literals
@@ -187,7 +222,7 @@ class VueReplacer extends BaseReplacer {
     // Skip if already using $t()
     const vTextRegex = /(v-(?:text|html)\s*=\s*")(['"])([^'"]{2,200})\2"/g;
 
-    modified = modified.replace(vTextRegex, (match, prefix, quote, text) => {
+    const replaceVText = tag => tag.replace(vTextRegex, (match, prefix, quote, text) => {
       // Skip if text looks like a translation key (idempotency guard)
       if (/^[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$/.test(text)) return match;
       
@@ -196,8 +231,12 @@ class VueReplacer extends BaseReplacer {
       const fullKey = this.lookupKey(keyMap, namespace, 'text', text);
       if (!fullKey) return match;
 
-      return `${prefix}$t('${fullKey}')"`;
+      return `${prefix}$t(${quoteKey(fullKey)})"`;
     });
+    for (const { start, end } of tagRanges(modified).reverse()) {
+      const tag = replaceVText(replaceBoundAttr(modified.slice(start, end)));
+      modified = modified.slice(0, start) + tag + modified.slice(end);
+    }
 
     return modified;
   }
