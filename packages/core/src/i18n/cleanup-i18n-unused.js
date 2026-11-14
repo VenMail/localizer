@@ -152,7 +152,9 @@ async function collectSourceFiles(dir, out) {
       }
       await collectSourceFiles(entryPath, out);
     } else if (entry.isFile()) {
-      if (/\.(tsx|ts|jsx|js|vue|svelte|mjs|cjs|mts|cts)$/i.test(entry.name)) {
+      if (/\.(tsx|ts|jsx|js|vue|svelte|mjs|cjs|mts|cts)$/i.test(entry.name) ||
+          (/\.(?:blade\.php|php)$/i.test(entry.name) &&
+           entryPath.replace(/\\/g, '/').includes('/resources/views/'))) {
         out.push(entryPath);
       }
     }
@@ -161,12 +163,25 @@ async function collectSourceFiles(dir, out) {
 
 let cachedUsageIndex = null;
 let cachedUsageKeySet = null;
+const dynamicUsageFiles = new Set();
 
 async function buildUsageIndex(candidateKeys) {
   const index = Object.create(null);
   if (!srcRoots.length) return index;
 
   const keySet = candidateKeys instanceof Set ? candidateKeys : null;
+  // Calls may request a whole object (for example t('menu', {returnObjects:
+  // true})), in which case every descendant is in use as well.
+  const descendants = new Map();
+  if (keySet) for (const key of keySet) {
+    let dot = key.indexOf('.');
+    while (dot !== -1) {
+      const prefix = key.slice(0, dot);
+      if (!descendants.has(prefix)) descendants.set(prefix, []);
+      descendants.get(prefix).push(key);
+      dot = key.indexOf('.', dot + 1);
+    }
+  }
 
   const files = [];
   for (const root of srcRoots) {
@@ -189,18 +204,26 @@ async function buildUsageIndex(candidateKeys) {
   for (const file of uniqueFiles) {
     const rel = path.relative(projectRoot, file).replace(/\\/g, '/');
     const code = await readFile(file, 'utf8');
-    const tCallRegex = /(?:^|[^a-zA-Z0-9_$])\$?t\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.\-:]+)\1\s*(?:,|\))/g;
+    // A computed translation key cannot be resolved from text alone. Refuse
+    // destructive cleanup when any such call is present instead of guessing.
+    const callStart = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans_choice|trans|@lang|@choice)\s*(?:<[^>]+>\s*)?\(\s*/g;
+    let call;
+    while ((call = callStart.exec(code)) !== null) {
+      const argument = code.slice(callStart.lastIndex);
+      const literal = argument.match(/^(['"`])((?:\\.|(?!\1)[^\\])*)\1\s*(?:,|\))/);
+      if (!literal || (literal[1] === '`' && literal[2].includes('${'))) dynamicUsageFiles.add(rel);
+    }
+    // Includes Vue/React t(), and Laravel Blade __(), trans(), @lang().
+    const tCallRegex = /(?:^|[^a-zA-Z0-9_$])(?:\$?t|__|trans_choice|trans|@lang|@choice)\s*(?:<[^>]+>\s*)?\(\s*(['"`])([A-Za-z0-9_.\-:]+)\1\s*(?:,|\))/g;
     let match;
     while ((match = tCallRegex.exec(code)) !== null) {
       const key = match[2];
-      if (keySet && !keySet.has(key)) {
-        continue;
-      }
-      if (!index[key]) {
-        index[key] = [];
-      }
       const line = getLineNumberFromIndex(code, match.index);
-      index[key].push({ file: rel, line });
+      const usedKeys = keySet ? [...(keySet.has(key) ? [key] : []), ...(descendants.get(key) || [])] : [key];
+      for (const usedKey of usedKeys) {
+        if (!index[usedKey]) index[usedKey] = [];
+        index[usedKey].push({ file: rel, line });
+      }
     }
     if (keySet) {
       const keyLiteralRegex = /(['"`])([A-Za-z0-9_.\-:]+)\1/g;
@@ -252,8 +275,10 @@ async function applyDeletions(unusedKeys) {
       if (baseFileRel.startsWith(`${baseLocale}/`) || baseFileRel.startsWith(`${baseLocale}\\`)) {
         // Replace base locale with target locale
         rel = baseFileRel.replace(new RegExp(`^${baseLocale}[\\\\/]`), `${locale}/`);
+      } else if (baseFileRel === `${baseLocale}.json`) {
+        // Single-file locale layout: en.json maps to fr.json, not en.json.
+        rel = `${locale}.json`;
       } else {
-        // File is not locale-specific, use as-is
         rel = baseFileRel;
       }
       const abs = path.resolve(autoDir, rel);
@@ -384,6 +409,7 @@ async function main() {
     autoDir: path.relative(projectRoot, autoDir).replace(/\\/g, '/'),
     unused,
     orphaned: cleanOrphaned ? orphaned : undefined,
+    dynamicUsageFiles: [...dynamicUsageFiles],
   };
   await writeFile(reportPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
   
@@ -394,10 +420,17 @@ async function main() {
   console.log(`[cleanup-i18n-unused] Report written to`, path.relative(projectRoot, reportPath));
 
   if (!apply) {
+    if (dynamicUsageFiles.size) console.warn(`[cleanup-i18n-unused] Dynamic translation calls found in ${dynamicUsageFiles.size} file(s); the unused report may contain false positives.`);
     console.log('[cleanup-i18n-unused] Dry run only. Re-run with --apply to delete unused/orphaned keys from locale files.');
     if (cleanOrphaned) {
       console.log('[cleanup-i18n-unused] Use --clean-orphaned to also remove keys that exist in non-default locales but are missing from the default locale.');
     }
+    return;
+  }
+
+  if (dynamicUsageFiles.size) {
+    console.error(`[cleanup-i18n-unused] Refusing --apply: dynamic translation calls in ${[...dynamicUsageFiles].join(', ')} may reference reported keys.`);
+    process.exitCode = 1;
     return;
   }
 

@@ -16,6 +16,7 @@
 const { BaseParser } = require('./baseParser');
 const { shouldTranslate, isTranslatableAttribute, isNonTranslatableAttribute } = require('../validators');
 const { STRING_PATTERNS } = require('../stringPatterns');
+const { isShellCommand } = require('../bladeSafety');
 
 class BladeParser extends BaseParser {
   static getExtensions() {
@@ -49,8 +50,8 @@ class BladeParser extends BaseParser {
 
     results.stats.processed = 1;
 
-    // Remove Blade comments
-    let template = content.replace(/\{\{--[\s\S]*?--\}\}/g, ' ');
+    // Never inspect examples or comments, even if they contain nested tags.
+    let template = content.replace(/\{\{--[\s\S]*?--\}\}|<!--[\s\S]*?-->|<(pre|code|script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
 
     // Remove PHP blocks
     template = template.replace(/<\?php[\s\S]*?\?>/g, ' ');
@@ -59,8 +60,10 @@ class BladeParser extends BaseParser {
     // Parse HTML-like content
     this.parseHtmlContent(template, results);
 
-    // Parse plain text content that may contain Blade expressions
-    this.parsePlainTextContent(template, results);
+    // Avoid extracting isolated fragments from inline markup: they cannot
+    // be rewritten in context. Leaf HTML text is handled by parseHtmlContent.
+    const outsideElements = template.replace(/<([A-Za-z][A-Za-z0-9-_]*)\b[^>]*>[\s\S]*?<\/\1>/g, ' ');
+    this.parsePlainTextContent(outsideElements, results);
 
     // Parse Blade-specific patterns
     this.parseBladePatterns(template, results);
@@ -103,7 +106,7 @@ class BladeParser extends BaseParser {
       const cleanText = text.replace(/\s+/g, ' ').trim();
       if (!cleanText) continue;
 
-      if (shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
+      if (!isShellCommand(validationText) && shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
         results.items.push({
           type: 'text',
           text: cleanText,
@@ -120,13 +123,14 @@ class BladeParser extends BaseParser {
    */
   parseHtmlContent(template, results) {
     // Match text content between tags (including multi-line)
-    const tagRegex = /<([A-Za-z][A-Za-z0-9-_]*)\b([^>]*)>([\s\S]*?)<\/\1>/g;
+    const tagRegex = /<([A-Za-z][A-Za-z0-9-_]*)\b([^>]*)>([^<]*)<\/\1>/g;
     let match;
 
     while ((match = tagRegex.exec(template)) !== null) {
       const tagName = match[1];
       const attributes = match[2];
       const rawText = match[3];
+      if (/^(pre|code|script|style)$/i.test(tagName) || rawText.includes('<')) continue;
 
       // Skip if already translated
       if (this.isAlreadyTranslated(rawText)) continue;
@@ -152,7 +156,7 @@ class BladeParser extends BaseParser {
       const text = processedText.replace(/\s+/g, ' ').trim();
       if (!text) continue;
 
-      if (shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
+      if (!isShellCommand(validationText) && shouldTranslate(validationText, { ignorePatterns: this.ignorePatterns })) {
         const kind = this.inferKindFromTag(tagName);
         results.items.push({
           type: 'text',
@@ -209,7 +213,7 @@ class BladeParser extends BaseParser {
       const text = attrValue.replace(/\s+/g, ' ').trim();
       if (!text) continue;
 
-      if (shouldTranslate(text, { ignorePatterns: this.ignorePatterns })) {
+      if (!isShellCommand(text) && shouldTranslate(text, { ignorePatterns: this.ignorePatterns })) {
         const kind = this.inferKindFromAttr(attrName);
         results.items.push({
           type: 'attribute',
@@ -247,7 +251,7 @@ class BladeParser extends BaseParser {
         // Skip if it looks like a variable or identifier
         if (/^[a-z_$][a-zA-Z0-9_$]*$/.test(candidate)) return;
         
-        if (shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
+        if (!isShellCommand(candidate) && shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
           results.items.push({
             type: 'text',
             text: candidate,
@@ -268,7 +272,7 @@ class BladeParser extends BaseParser {
       // Skip if it looks like a variable or identifier
       if (/^[a-z_$][a-zA-Z0-9_$]*$/.test(candidate)) continue;
 
-      if (!shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
+      if (isShellCommand(candidate) || !shouldTranslate(candidate, { ignorePatterns: this.ignorePatterns })) {
         continue;
       }
 
@@ -301,7 +305,7 @@ class BladeParser extends BaseParser {
         // Skip if already translated
         if (this.isAlreadyTranslated(defaultValue)) continue;
 
-        if (shouldTranslate(defaultValue, { ignorePatterns: this.ignorePatterns })) {
+        if (!isShellCommand(defaultValue) && shouldTranslate(defaultValue, { ignorePatterns: this.ignorePatterns })) {
           results.items.push({
             type: 'string',
             text: defaultValue,

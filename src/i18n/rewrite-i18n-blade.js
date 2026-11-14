@@ -6,10 +6,13 @@ const process = require('node:process');
 
 // Import shared utilities
 const { getIgnorePatterns, shouldIgnoreText } = require('./lib/ignorePatterns');
+const { validateText } = require('./lib/validators');
+const { isShellCommand } = require('./lib/bladeSafety');
+const { detectSrcRoot, detectLocalesDir, getSourceLocale } = require('./lib/projectConfig');
 
 const projectRoot = process.env.AI_I18N_PROJECT_ROOT ? path.resolve(process.env.AI_I18N_PROJECT_ROOT) : path.resolve(__dirname, '..');
-const autoDir = path.resolve(projectRoot, 'resources', 'js', 'i18n', 'auto');
-const baseLocale = 'en';
+const autoDir = detectLocalesDir(projectRoot, detectSrcRoot(projectRoot));
+const baseLocale = getSourceLocale(projectRoot);
 const MAX_FILE_SIZE_BYTES = Number(process.env.AI_I18N_MAX_FILE_SIZE || 2 * 1024 * 1024);
 const CONCURRENCY = Number(process.env.AI_I18N_CONCURRENCY || 8);
 
@@ -22,7 +25,7 @@ function normalizeText(text) {
 
 function shouldTranslateText(text) {
   const trimmed = normalizeText(text);
-  return trimmed && !shouldIgnoreText(trimmed);
+  return !!trimmed && !isShellCommand(trimmed) && !shouldIgnoreText(trimmed) && validateText(trimmed).valid;
 }
 
 function buildKeyMapFromTranslations(translations) {
@@ -141,12 +144,25 @@ async function processBladeFile(filePath, keyMap) {
   let code = await readFile(filePath, 'utf8');
   const namespace = getNamespaceFromBladeFile(filePath);
 
-  let template = code.replace(/{{--[\s\S]*?--}}/g, ' ');
-
+  // Preserve original comments, including Blade comments. Previously stripping
+  // comments from the entire file destroyed unrelated source on any rewrite.
+  const protectedRanges = [];
+  const protectedRegex = /{{--[\s\S]*?--}}|<!--[\s\S]*?-->|<(pre|code|script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
+  let protectedMatch;
+  while ((protectedMatch = protectedRegex.exec(code)) !== null) {
+    protectedRanges.push([protectedMatch.index, protectedRegex.lastIndex]);
+  }
   const tagRegex = /<([A-Za-z][A-Za-z0-9-_]*)\b([^>]*)>([^<]+)<\/\1>/g;
+  const lookup = (kind, text) =>
+    keyMap.get(`${namespace}|${kind}|${text}`) ||
+    keyMap.get(`${namespace}|text|${text}`) ||
+    keyMap.get(`Commons|${kind}|${text}`) ||
+    keyMap.get(`Commons|text|${text}`);
   let changed = false;
 
-  template = template.replace(tagRegex, (whole, tagName, attrs, rawText) => {
+  const template = code.replace(tagRegex, (whole, tagName, attrs, rawText, offset) => {
+    if (protectedRanges.some(([a, b]) => offset >= a && offset < b)) return whole;
+    if (/^(pre|code|script|style)$/i.test(tagName)) return whole;
     if (!rawText || typeof rawText !== 'string') return whole;
     if (rawText.includes("__('") || rawText.includes('__("') || rawText.includes('@lang') || rawText.includes('trans(')) {
       return whole;
@@ -158,8 +174,7 @@ async function processBladeFile(filePath, keyMap) {
     if (!shouldTranslateText(normalized)) return whole;
 
     const kind = inferKindFromTagName(tagName);
-    const keyId = `${namespace}|${kind}|${normalized}`;
-    const fullKey = keyMap.get(keyId);
+    const fullKey = lookup(kind, normalized);
     if (!fullKey) return whole;
 
     changed = true;
@@ -180,8 +195,6 @@ async function processBladeFile(filePath, keyMap) {
 
   const viewsRoot = path.resolve(projectRoot, 'resources', 'views');
   const rel = path.relative(viewsRoot, filePath);
-  // We operate on the full file content (with Blade comments stripped), so
-  // simply write the transformed template back.
   code = template;
   await writeFile(filePath, code, 'utf8');
   console.log(`[i18n-rewrite-blade] Updated ${rel}`);

@@ -20,7 +20,7 @@ export class FileSystemService {
     ];
 
     // oxc-based dependencies for i18n scripts
-    private static readonly OXC_DEPS = ['oxc-parser', 'magic-string'];
+    private static readonly OXC_DEPS = ['oxc-parser', 'magic-string', '@babel/parser'];
 
     /**
      * Calculate checksum for a file
@@ -314,10 +314,15 @@ export class FileSystemService {
         const libFiles = [
             'projectConfig.js',
             'stringUtils.js',
+            'stringPatterns.js',
             'ignorePatterns.js',
             'translationStore.js',
             'textValidation.js',
             'vueTemplateParser.js',
+            'sfcBlocks.js',
+            'vueScriptRewriter.js',
+            'vueExpressions.js',
+            'bladeSafety.js',
             'localeUtils.js',
         ];
 

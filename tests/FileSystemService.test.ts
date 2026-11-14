@@ -133,10 +133,15 @@ describe('FileSystemService Script Copying', () => {
             const expectedLibFiles = [
                 'projectConfig.js',
                 'stringUtils.js',
+                'stringPatterns.js',
                 'ignorePatterns.js',
                 'translationStore.js',
                 'textValidation.js',
                 'vueTemplateParser.js',
+                'sfcBlocks.js',
+                'vueScriptRewriter.js',
+                'vueExpressions.js',
+                'bladeSafety.js',
                 'localeUtils.js',
             ];
 
@@ -311,7 +316,7 @@ describe('FileSystemService Script Copying', () => {
             const { installPackages } = await import('../src/core/workspace');
             expect(installPackages).toHaveBeenCalledWith(
                 expect.anything(),
-                ['oxc-parser', 'magic-string'],
+                ['oxc-parser', 'magic-string', '@babel/parser'],
                 true
             );
         });

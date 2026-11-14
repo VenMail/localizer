@@ -122,6 +122,10 @@ function getAiI18nConfig(projectRoot) {
   return cfg && typeof cfg === 'object' ? cfg : {};
 }
 
+function getVueSetupTranslation(projectRoot) {
+  return getAiI18nConfig(projectRoot).vueSetupTranslation;
+}
+
 /**
  * Get project locales from package.json
  */
@@ -263,8 +267,10 @@ function getSortKeys(projectRoot) {
  */
 function getLocaleLayout(projectRoot) {
   const cfg = getAiI18nConfig(projectRoot);
-  if (cfg.layout === 'single' || cfg.layout === 'grouped') {
-    return cfg.layout;
+  const configured = (cfg.layout === 'single' || cfg.layout === 'grouped')
+    ? cfg.layout : cfg.localeLayout;
+  if (configured === 'single' || configured === 'grouped') {
+    return configured;
   }
   const kind = detectFrameworkKind(projectRoot);
   const pkg = readPackageJson(projectRoot);
@@ -284,4 +290,5 @@ module.exports = {
   getTsExtractKeys,
   getSortKeys,
   getLocaleLayout,
+  getVueSetupTranslation,
 };

@@ -90,6 +90,32 @@ When you are preparing a new release:
    - Extension activates without errors.
    - i18n commands and IntelliSense behave as expected.
 
+## GitHub Actions packaging and publishing
+
+The **Extension package and release** workflow builds and tests each pull
+request and push to `main`. Download the `localizer-vsix` artifact from the
+workflow run; it contains the VSIX and its SHA-256 checksum.
+
+To publish, first merge the release changes and increment `package.json`'s
+version for every new release. In GitHub, open **Actions → Extension package and
+release → Run workflow**, select `main`, and choose `open-vsx`,
+`vscode-marketplace`, or `both`. Choose `artifact` to build without publishing.
+The workflow publishes the exact VSIX produced by its tested package job.
+
+Configure repository Actions secrets before publishing:
+
+- `OVSX_PAT`: an Open VSX token belonging to a publisher authorized for the
+  `venmail` namespace. Complete any required namespace ownership and publisher
+  agreement steps on Open VSX.
+- `VSCE_PAT`: an Azure DevOps personal access token authorized to publish under
+  the `venmail` Visual Studio Marketplace publisher.
+
+Both credentials are checked before either publication when `both` is chosen.
+The registries publish independently: if the second publication fails, the
+first may already be live. Resolve the error and rerun only the failed target.
+Publishing is manual and restricted to `main`; ordinary PR and branch builds do
+not publish. A marketplace will reject a version already published there.
+
 ---
 
 ## Project Structure (High Level)

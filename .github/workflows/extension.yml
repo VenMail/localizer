@@ -1,0 +1,96 @@
+name: Extension package and release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      destination:
+        description: Publishing destination (artifact only does not publish)
+        required: true
+        type: choice
+        default: artifact
+        options:
+          - artifact
+          - open-vsx
+          - vscode-marketplace
+          - both
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compile, lint and test
+        run: npm test
+      - name: Package extension
+        run: |
+          mkdir -p dist
+          npx --no-install vsce package --out dist/ai-localizer.vsix
+          sha256sum dist/ai-localizer.vsix > dist/ai-localizer.vsix.sha256
+          echo "Packaged venmail.ai-localizer $(node -p 'require("./package.json").version')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: localizer-vsix
+          path: |
+            dist/ai-localizer.vsix
+            dist/ai-localizer.vsix.sha256
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.destination != 'artifact'
+    needs: package
+    runs-on: ubuntu-latest
+    concurrency:
+      group: extension-publish
+      cancel-in-progress: false
+    steps:
+      - name: Require the main branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo 'Publication is allowed only from main.' >&2
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: localizer-vsix
+          path: dist
+      - name: Verify packaged artifact
+        run: sha256sum --check dist/ai-localizer.vsix.sha256
+      - name: Check publishing credentials
+        env:
+          DESTINATION: ${{ inputs.destination }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [[ "$DESTINATION" == 'open-vsx' || "$DESTINATION" == 'both' ]]; then
+            [[ -n "$OVSX_PAT" ]] || { echo 'Missing OVSX_PAT secret.' >&2; exit 1; }
+          fi
+          if [[ "$DESTINATION" == 'vscode-marketplace' || "$DESTINATION" == 'both' ]]; then
+            [[ -n "$VSCE_PAT" ]] || { echo 'Missing VSCE_PAT secret.' >&2; exit 1; }
+          fi
+      - name: Publish to Open VSX
+        if: inputs.destination == 'open-vsx' || inputs.destination == 'both'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --yes ovsx@1.4.0 publish dist/ai-localizer.vsix
+      - name: Publish to Visual Studio Marketplace
+        if: inputs.destination == 'vscode-marketplace' || inputs.destination == 'both'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --no-install vsce publish --packagePath dist/ai-localizer.vsix

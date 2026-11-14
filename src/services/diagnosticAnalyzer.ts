@@ -1788,6 +1788,14 @@ export class DiagnosticAnalyzer {
                     }
                 }
                 
+                // A JSON array/object may be a legitimate structured i18n value
+                // even though it has no scalar TranslationRecord. Do not report it
+                // as missing (only for JSON-backed JavaScript/Vue sources).
+                if (!validKeysSet.has(key) &&
+                    !isLaravelSource && !isDotNetSource && !isPythonSource &&
+                    this.i18nIndex.hasJsonContainerKey?.(key)) {
+                    continue;
+                }
                 if (!validKeysSet.has(key)) {
                     missingKeys++;
                     this.safeLog(`[DiagnosticAnalyzer] Key "${key}" is MISSING from validKeysSet`);

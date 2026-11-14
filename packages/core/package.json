@@ -48,14 +48,20 @@
     "node": ">=18"
   },
   "dependencies": {
-    "oxc-parser": "^0.89.0",
-    "magic-string": "^0.30.21"
+    "@babel/parser": "^7.29.14",
+    "magic-string": "^0.30.21",
+    "oxc-parser": "^0.89.0"
   },
   "peerDependenciesMeta": {
-    "@babel/parser": { "optional": true },
-    "@babel/generator": { "optional": true },
-    "@babel/traverse": { "optional": true },
-    "@babel/types": { "optional": true }
+    "@babel/generator": {
+      "optional": true
+    },
+    "@babel/traverse": {
+      "optional": true
+    },
+    "@babel/types": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"
